@@ -90,12 +90,12 @@ Primeira passada ancorada no grafo (`graphify`) + `docs/architecture/`. A doutri
 - Flywheel de auto-aprimoramento com gate humano; `createFollowupTurnHandler` (follow-up conduzido pelo agente).
 - 7 gates before-send com veto instrutivo de volta ao modelo (continuidade IA→modelo).
 
-**Candidatos a ilha — a verificar em código (backlog de desilhamento):**
-1. **Follow-up como invariante de lead** — existe follow-up *do agente*, mas há garantia de "nenhuma demanda aberta sem próximo passo" **na tela**, agregando todas as demandas em risco de morrer? (invariante 4)
-2. **Timeline de `crm_lead_activities` renderizada** — a tabela existe; a linha do tempo unificada aparece no detalhe do lead como feed vivo de tudo (IA, humano, sistema)? (invariante 3)
-3. **Payload de continuidade IA→humano** — no handoff, o humano recebe um **resumo contextual** (o que a IA fez, onde parou, próximo passo sugerido), ou só o roteamento da conversa crua? (invariante 2)
+**Verificado em código (2026-07-24):**
+1. ✅ **Timeline de `crm_lead_activities` renderizada** — VIVO. `components/inbox/CRMSidePanel.tsx` busca `crm_lead_activities` e renderiza como feed no inbox (API `app/api/v1/contacts/[id]/timeline/route.ts`). *Nuance:* o feed vive no inbox, não no card do pipeline — desilhar o card seria o próximo passo se o operador trabalhar direto do Kanban. (invariante 3)
+2. ✅ **Payload de continuidade IA→humano** — VIVO. `buildHandoffSummary()` (`lib/agent-engine/agent/human-handoff.ts:252`) monta resumo contextual (rolling summary + compromissos + objeções + próxima ação) e vai ao inbox do humano, nunca a log. (invariante 2)
+3. ⚠️ **Follow-up como invariante de lead — ILHA PARCIAL (gap confirmado).** O mecanismo anti-morte é forte no *engine* (`schedule-followup.ts`, `followup-turn.ts`, `cron/scheduler.ts`, `edge/crm/session-watchdog.ts`, re-entrada determinística), mas **todo o domínio vive só em `lib/agent-engine/**` e `workers/**` — zero UI.** Não há tela agregada onde o humano veja leads com follow-up pendente / em risco de morrer. Invariante 4 satisfeito para a IA, **invisível para o humano.** É o desilhamento prioritário: um painel/insight de "demandas em voo e em risco" fecha a alça de saída do engine de follow-up para o olho humano. (invariantes 4 + 5)
 
-> Esta seção é um snapshot do grafo, não uma auditoria linha-a-linha. Cada candidato vira uma verificação de código antes de virar tarefa. Atualize aqui quando um candidato for confirmado como vivo ou desilhado.
+> Auditoria linha-a-linha via `graphify` + leitura de fontes. C1 é o backlog de desilhamento real; C2/C3 confirmados vivos.
 
 ---
 
