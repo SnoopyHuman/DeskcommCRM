@@ -1,8 +1,12 @@
 "use client";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
 import { useAtRiskLeads, type AtRiskLead } from "@/hooks/leads/useAtRiskLeads";
 import type { RiskBucket } from "@/lib/leads/risk-radar";
 import {
@@ -87,19 +91,40 @@ function RadarRow({ lead }: { lead: AtRiskLead }) {
     ? `/app/inbox?id=${lead.conversation_id}`
     : `/app/pipelines/${lead.pipeline_id}`;
 
+  const claim = useClaimConversation();
+  const qc = useQueryClient();
+
+  const owned = Boolean(lead.owner_user_id) || lead.assignee_kind === "user";
   const assignee =
     lead.assignee_kind === "ai"
       ? { icon: <Robot size={13} aria-hidden />, text: "Assistente" }
-      : lead.owner_user_id || lead.assignee_kind === "user"
+      : owned
         ? { icon: null, text: "Com atendente" }
         : { icon: null, text: "Sem dono" };
 
+  // Só é possível assumir demandas que têm conversa e ainda não têm dono humano.
+  const canClaim = Boolean(lead.conversation_id) && !owned;
+
+  function handleClaim() {
+    if (!lead.conversation_id) return;
+    claim.mutate(
+      { conversation_id: lead.conversation_id },
+      {
+        onSuccess: () => {
+          qc.invalidateQueries({ queryKey: ["leads-at-risk"] });
+          toast.success("Você assumiu a demanda");
+        },
+      },
+    );
+  }
+
   return (
-    <li data-testid="radar-item" data-risk={lead.risk}>
-      <Link
-        href={href}
-        className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-accent/50"
-      >
+    <li
+      data-testid="radar-item"
+      data-risk={lead.risk}
+      className="flex items-start gap-2 pr-3 transition-colors hover:bg-accent/50"
+    >
+      <Link href={href} className="flex min-w-0 flex-1 items-start gap-3 px-4 py-3">
         <Badge variant={meta.variant} className="mt-0.5 shrink-0">
           {meta.label}
         </Badge>
@@ -111,7 +136,7 @@ function RadarRow({ lead }: { lead: AtRiskLead }) {
               <ClockCountdown size={13} aria-hidden />
               {coldFor(lead.hours_since_activity)}
             </span>
-            <span className="inline-flex items-center gap-1">
+            <span className="inline-flex items-center gap-1" data-testid="radar-assignee">
               {assignee.icon}
               {assignee.text}
             </span>
@@ -128,8 +153,21 @@ function RadarRow({ lead }: { lead: AtRiskLead }) {
             </p>
           )}
         </div>
-        <ArrowRight size={16} className="mt-1 shrink-0 text-muted-foreground" aria-hidden />
       </Link>
+      <div className="flex shrink-0 items-center gap-2 self-center">
+        {canClaim ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={claim.isPending}
+            onClick={handleClaim}
+            data-testid="radar-claim"
+          >
+            Assumir
+          </Button>
+        ) : null}
+        <ArrowRight size={16} className="text-muted-foreground" aria-hidden />
+      </div>
     </li>
   );
 }

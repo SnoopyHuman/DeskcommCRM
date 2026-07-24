@@ -1,10 +1,13 @@
 /**
- * Seed E2E do Radar de Risco (C1): um lead ABERTO cuja última atividade foi há 5
- * dias e SEM follow-up agendado — o caso "crítico / sem próximo passo" que o radar
- * existe para tornar visível. Alimenta tests/e2e/risk-radar.spec.ts.
+ * Seed E2E do Radar de Risco (C1) e sua alça de ação. Cria:
+ *   - 1 contato + 1 channel_session + 1 conversa ABERTA e SEM dono (claimável);
+ *   - 1 lead ABERTO vinculado a esse contato, com última atividade há 5 dias e
+ *     sem follow-up agendado → aparece no radar como "crítico / sem próximo passo",
+ *     com o botão "Assumir" (porque tem conversa).
  *
- * Idempotente: upsert por (organization_id, title). Depende de .e2e-creds.json
- * (rode scripts/seed-e2e-credentials.ts antes). Grava o bloco `radar` em .e2e-creds.json.
+ * Idempotente E auto-reset: devolve a conversa ao estado sem dono a cada run (o
+ * teste de "assumir" pode rodar de novo). Depende de .e2e-creds.json
+ * (rode scripts/seed-e2e-credentials.ts antes). Grava o bloco `radar`.
  *
  * Run: npx tsx scripts/seed-e2e-radar.ts
  */
@@ -31,10 +34,81 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
 
 const CREDS_PATH = path.join(process.cwd(), ".e2e-creds.json");
 const AT_RISK_TITLE = "Demanda E2E em risco (radar)";
+const CONTACT_NAME = "Cliente Radar E2E";
+const SESSION_NAME = "e2e-radar-session";
 
 interface Creds {
   org_id: string;
   radar?: unknown;
+}
+
+async function ensureSession(orgId: string): Promise<string> {
+  const { data: existing } = await admin
+    .from("channel_sessions")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("waha_session_name", SESSION_NAME)
+    .maybeSingle();
+  if (existing) return (existing as { id: string }).id;
+  const { data, error } = await admin
+    .from("channel_sessions")
+    .insert({
+      organization_id: orgId,
+      waha_session_name: SESSION_NAME,
+      display_name: "Número Radar E2E",
+      webhook_secret_encrypted: "\\x00",
+    } as never)
+    .select("id")
+    .single();
+  if (error || !data) throw new Error(`insert channel_session: ${error?.message}`);
+  return (data as { id: string }).id;
+}
+
+async function ensureContact(orgId: string): Promise<string> {
+  const { data: existing } = await admin
+    .from("contacts")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("display_name", CONTACT_NAME)
+    .maybeSingle();
+  if (existing) return (existing as { id: string }).id;
+  const { data, error } = await admin
+    .from("contacts")
+    .insert({ organization_id: orgId, display_name: CONTACT_NAME } as never)
+    .select("id")
+    .single();
+  if (error || !data) throw new Error(`insert contact: ${error?.message}`);
+  return (data as { id: string }).id;
+}
+
+async function ensureConversation(orgId: string, contactId: string, sessionId: string): Promise<string> {
+  // Estado claimável: aberta, sem dono.
+  const state = {
+    assigned_to_user_id: null,
+    assignee_kind: null,
+    assigned_at: null,
+    status: "open",
+    last_message_preview: "Oi, ainda dá pra resolver meu caso?",
+  };
+  const { data: existing } = await admin
+    .from("conversations")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("contact_id", contactId)
+    .eq("channel_session_id", sessionId)
+    .maybeSingle();
+  if (existing) {
+    const id = (existing as { id: string }).id;
+    await admin.from("conversations").update(state as never).eq("id", id);
+    return id;
+  }
+  const { data, error } = await admin
+    .from("conversations")
+    .insert({ organization_id: orgId, contact_id: contactId, channel_session_id: sessionId, ...state } as never)
+    .select("id")
+    .single();
+  if (error || !data) throw new Error(`insert conversation: ${error?.message}`);
+  return (data as { id: string }).id;
 }
 
 async function main(): Promise<void> {
@@ -61,8 +135,18 @@ async function main(): Promise<void> {
   if (sErr || !stage) throw new Error(`stage not found: ${sErr?.message}`);
   const stageId = (stage as { id: string }).id;
 
-  // 5 dias sem atividade → crítico; sem contato/follow-up → "sem próximo passo".
+  const sessionId = await ensureSession(orgId);
+  const contactId = await ensureContact(orgId);
+  const conversationId = await ensureConversation(orgId, contactId, sessionId);
+
+  // 5 dias sem atividade → crítico; sem follow-up → "sem próximo passo".
   const coldAt = new Date(Date.now() - 5 * 24 * 3_600_000).toISOString();
+  const leadFields = {
+    stage_id: stageId,
+    contact_id: contactId,
+    owner_user_id: null,
+    last_activity_at: coldAt,
+  };
 
   const { data: existing } = await admin
     .from("crm_leads")
@@ -74,34 +158,35 @@ async function main(): Promise<void> {
   let leadId: string;
   if (existing) {
     leadId = (existing as { id: string }).id;
-    await admin
-      .from("crm_leads")
-      .update({ stage_id: stageId, owner_user_id: null, last_activity_at: coldAt } as never)
-      .eq("id", leadId);
-    console.log(`[seed] radar lead existing: ${leadId}`);
+    await admin.from("crm_leads").update(leadFields as never).eq("id", leadId);
+    console.info(`[seed] radar lead existing: ${leadId}`);
   } else {
     const { data, error } = await admin
       .from("crm_leads")
       .insert({
         organization_id: orgId,
         pipeline_id: pipelineId,
-        stage_id: stageId,
         title: AT_RISK_TITLE,
-        owner_user_id: null,
         position_in_stage: 3000,
         source: "manual",
-        last_activity_at: coldAt,
+        ...leadFields,
       } as never)
       .select("id")
       .single();
     if (error || !data) throw new Error(`insert radar lead: ${error?.message}`);
     leadId = (data as { id: string }).id;
-    console.log(`[seed] radar lead created: ${leadId}`);
+    console.info(`[seed] radar lead created: ${leadId}`);
   }
 
-  creds.radar = { pipeline_id: pipelineId, at_risk_lead_id: leadId, at_risk_title: AT_RISK_TITLE };
+  creds.radar = {
+    pipeline_id: pipelineId,
+    at_risk_lead_id: leadId,
+    at_risk_title: AT_RISK_TITLE,
+    contact_id: contactId,
+    conversation_id: conversationId,
+  };
   fs.writeFileSync(CREDS_PATH, JSON.stringify(creds, null, 2));
-  console.log(`\n✅ Radar seed completo. lead=${leadId} (frio desde ${coldAt})`);
+  console.info(`\n✅ Radar seed completo. lead=${leadId} conv=${conversationId} (frio desde ${coldAt})`);
 }
 
 main().catch((err) => {

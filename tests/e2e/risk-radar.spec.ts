@@ -1,10 +1,12 @@
 /**
  * Radar de Risco (C1 — desilhamento da doutrina do sistema vivo). Prova, na
- * perspectiva do usuário real: o atendente entra no Radar e VÊ a demanda aberta
- * que esfriou (5 dias sem atividade, sem próximo passo) — o que antes morria
- * invisível no engine. Login como manager (sem MFA; vê todos os leads da org).
+ * perspectiva do usuário real: (1) o atendente entra no Radar e VÊ a demanda
+ * aberta que esfriou (5 dias sem atividade, sem próximo passo) — o que antes
+ * morria invisível no engine; (2) ele ASSUME a demanda direto da linha e a
+ * responsabilidade passa a ser dele. Login como manager (sem MFA).
  *
- * Pré-requisito: seed de credenciais + seed do radar (rodados aqui se faltarem).
+ * O seed do radar roda a cada execução (reseta a conversa para "sem dono"), então
+ * o teste de assumir é repetível.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -29,12 +31,9 @@ function loadCreds(): Creds {
   if (needsBase()) {
     execFileSync("npx", ["tsx", "scripts/seed-e2e-credentials.ts"], { stdio: "inherit" });
   }
-  let c = JSON.parse(fs.readFileSync(CREDS_PATH, "utf8")) as Creds;
-  if (!c.radar?.at_risk_title) {
-    execFileSync("npx", ["tsx", "scripts/seed-e2e-radar.ts"], { stdio: "inherit" });
-    c = JSON.parse(fs.readFileSync(CREDS_PATH, "utf8")) as Creds;
-  }
-  return c;
+  // Sempre reseta o fixture do radar (conversa volta a ficar sem dono).
+  execFileSync("npx", ["tsx", "scripts/seed-e2e-radar.ts"], { stdio: "inherit" });
+  return JSON.parse(fs.readFileSync(CREDS_PATH, "utf8")) as Creds;
 }
 
 const creds = loadCreds();
@@ -47,22 +46,38 @@ async function login(page: Page, email: string): Promise<void> {
   await page.waitForURL(/\/app\//);
 }
 
-test("o atendente vê no Radar a demanda aberta que esfriou sem próximo passo", async ({ page }) => {
-  await login(page, creds.users.manager!.email);
-
-  // Navega pelo menu lateral — como um usuário real, não por deep-link.
+async function gotoRadar(page: Page): Promise<void> {
   await page.getByRole("link", { name: "Radar" }).click();
   await page.waitForURL(/\/app\/radar/);
   await expect(page.getByRole("heading", { name: "Radar de risco" })).toBeVisible();
+}
 
-  // A demanda em risco seedada aparece como um item do radar.
-  const item = page.locator('[data-testid="radar-item"]', {
-    hasText: creds.radar!.at_risk_title,
-  });
+function radarItem(page: Page) {
+  return page.locator('[data-testid="radar-item"]', { hasText: creds.radar!.at_risk_title });
+}
+
+test("o atendente vê no Radar a demanda aberta que esfriou sem próximo passo", async ({ page }) => {
+  await login(page, creds.users.manager!.email);
+  await gotoRadar(page);
+
+  const item = radarItem(page);
   await expect(item).toBeVisible();
-
-  // ...classificada como crítica e sinalizada como sem próximo passo agendado.
   await expect(item).toHaveAttribute("data-risk", "critico");
   await expect(item.getByText("Crítico")).toBeVisible();
   await expect(item.getByText(/Sem próximo passo/)).toBeVisible();
+});
+
+test("o atendente assume a demanda direto do Radar e vira o responsável", async ({ page }) => {
+  await login(page, creds.users.manager!.email);
+  await gotoRadar(page);
+
+  const item = radarItem(page);
+  await expect(item).toBeVisible();
+  await expect(item.getByTestId("radar-assignee")).toHaveText("Sem dono");
+
+  await item.getByTestId("radar-claim").click();
+
+  // Após assumir, o radar recarrega: a demanda passa a ter atendente e o botão some.
+  await expect(radarItem(page).getByTestId("radar-assignee")).toHaveText("Com atendente");
+  await expect(radarItem(page).getByTestId("radar-claim")).toHaveCount(0);
 });
