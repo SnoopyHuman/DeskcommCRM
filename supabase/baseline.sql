@@ -6860,3 +6860,34 @@ begin
     execute format('revoke all on public.%I from anon', t);
   end loop;
 end $$;
+
+
+-- ---- ai_pricing backfill (migration 0068) ----
+-- BUG: ai_pricing nascia VAZIA em toda instalação nova. Os seeds existem só na
+-- migration 0010, mas a cadeia fresh não sobe (as 10 primeiras são stubs
+-- `SELECT 1;`) e quem instala aplica este baseline, que semeia ai_models mas
+-- não ai_pricing. Com a tabela vazia, computeCost() devolve 0 sem log e o teto
+-- de ai_budgets nunca dispara. Derivado de ai_models: idempotente e
+-- auto-curativo, cobre qualquer modelo futuro do catálogo.
+insert into public.ai_pricing (model, prompt_cents_per_million_tokens, completion_cents_per_million_tokens, notes)
+select
+  m.model_id,
+  m.input_price_per_million_cents,
+  m.output_price_per_million_cents,
+  'backfill 0068 a partir de ai_models'
+from public.ai_models m
+where m.deprecated_at is null
+  and m.input_price_per_million_cents is not null
+  and m.output_price_per_million_cents is not null
+  and not exists (
+    select 1 from public.ai_pricing p
+    where p.model = m.model_id and p.superseded_at is null
+  );
+
+-- Embedding do RAG — não vive em ai_models.
+insert into public.ai_pricing (model, embedding_cents_per_million_tokens, notes)
+select 'openai/text-embedding-3-small', 20, 'backfill 0068 (seed original da 0010)'
+where not exists (
+  select 1 from public.ai_pricing p
+  where p.model = 'openai/text-embedding-3-small' and p.superseded_at is null
+);
