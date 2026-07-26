@@ -34,6 +34,10 @@ export const resetPasswordSchema = z
   .object({
     password: z.string().min(8, "Senha deve ter pelo menos 8 caracteres"),
     password_confirm: z.string(),
+    // Código TOTP: só exigido quando a conta tem MFA (a sessão de recovery é
+    // AAL1 e o GoTrue pede AAL2 para trocar a senha). Opcional no schema; a
+    // action decide se é obrigatório.
+    mfa_code: z.string().optional(),
   })
   .refine((v) => v.password === v.password_confirm, {
     path: ["password_confirm"],
