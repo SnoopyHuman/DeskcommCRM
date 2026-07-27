@@ -30,7 +30,7 @@ const faqItemSchema = z.object({
 const patchSourceSchema = z.object({
   name: z.string().min(2).max(120).optional(),
   items: z.array(faqItemSchema).optional(),
-  source_metadata: z.record(z.unknown()).optional(),
+  source_metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 // ---------------------------------------------------------------------------

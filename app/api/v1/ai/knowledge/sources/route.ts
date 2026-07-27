@@ -44,7 +44,7 @@ const createSourceSchema = z.object({
   name: z.string().min(2).max(120),
   items: z.array(faqItemSchema).optional(),
   markdown_blob: z.string().optional(),
-  source_metadata: z.record(z.unknown()).optional().default({}),
+  source_metadata: z.record(z.string(), z.unknown()).optional().default({}),
 });
 
 // ---------------------------------------------------------------------------

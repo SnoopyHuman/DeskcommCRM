@@ -10,7 +10,6 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { ok, fail } from "@/lib/api/wrappers";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
@@ -28,7 +27,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
   const tools = allTools.map((t) => ({
     id: t.name,
     description: t.description,
-    input_schema: zodToJsonSchema(z.object(t.inputSchema), { target: "openApi3" }),
+    input_schema: z.toJSONSchema(z.object(t.inputSchema), { target: "openapi-3.0" }),
     category: t.category,
     requires_role: t.requiresRole,
     requires_scope: t.requiresScope,

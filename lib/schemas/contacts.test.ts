@@ -118,7 +118,7 @@ describe("lgpdAnonymizeSchema", () => {
 
   it("accepts well-formed payload", () => {
     const r = lgpdAnonymizeSchema.safeParse({
-      contact_id: "11111111-1111-1111-1111-111111111111",
+      contact_id: "11111111-1111-4111-8111-111111111111",
       justification: "Solicitação formal LGPD do titular do dado.",
     });
     expect(r.success).toBe(true);

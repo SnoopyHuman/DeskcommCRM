@@ -66,7 +66,7 @@ const llmSettingsSchema = z
   .object({
     provider: z.string().min(1).catch('anthropic'),
     default_model: z.string().min(1).nullable().catch(null),
-    params: z.record(z.unknown()).catch({}),
+    params: z.record(z.string(), z.unknown()).catch({}),
     enabled_models: z.array(z.string()).catch([]),
     monthly_budget_cents: z.number().finite().nullable().catch(null),
   })

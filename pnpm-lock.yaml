@@ -13,13 +13,13 @@ importers:
     dependencies:
       '@ai-sdk/anthropic':
         specifier: ^4.0.16
-        version: 4.0.16(zod@3.25.76)
+        version: 4.0.16(zod@4.4.3)
       '@ai-sdk/google':
         specifier: ^4.0.18
-        version: 4.0.18(zod@3.25.76)
+        version: 4.0.18(zod@4.4.3)
       '@ai-sdk/openai':
         specifier: ^4.0.20
-        version: 4.0.20(zod@3.25.76)
+        version: 4.0.20(zod@4.4.3)
       '@emoji-mart/data':
         specifier: ^1.2.1
         version: 1.2.1
@@ -30,11 +30,11 @@ importers:
         specifier: ^18.0.1
         version: 18.0.1(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@hookform/resolvers':
-        specifier: ^3.9.0
-        version: 3.10.0(react-hook-form@7.83.0(react@19.2.8))
+        specifier: ^5.5.7
+        version: 5.5.7(@sinclair/typebox@0.27.12)(@standard-schema/spec@1.1.0)(ajv-formats@2.1.1(ajv@8.20.0))(ajv@8.20.0)(react-hook-form@7.83.0(react@19.2.8))(zod@4.4.3)
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
-        version: 1.29.0(zod@3.25.76)
+        version: 1.29.0(zod@4.4.3)
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -106,7 +106,7 @@ importers:
         version: 12.11.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(immer@11.1.15)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       ai:
         specifier: ^7.0.37
-        version: 7.0.37(zod@3.25.76)
+        version: 7.0.37(zod@4.4.3)
       class-variance-authority:
         specifier: ^0.7.0
         version: 0.7.1
@@ -168,14 +168,11 @@ importers:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       tailwind-merge:
-        specifier: ^2.5.4
-        version: 2.6.1
+        specifier: ^3.6.0
+        version: 3.6.0
       zod:
-        specifier: ^3.23.8
-        version: 3.25.76
-      zod-to-json-schema:
-        specifier: ^3.25.2
-        version: 3.25.2(zod@3.25.76)
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@axe-core/playwright':
         specifier: ^4.12.1
@@ -184,8 +181,8 @@ importers:
         specifier: ^1.62.0
         version: 1.62.0
       '@testing-library/jest-dom':
-        specifier: ^6.9.1
-        version: 6.9.1
+        specifier: ^7.0.0
+        version: 7.0.0(@testing-library/dom@10.4.1)
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -720,10 +717,83 @@ packages:
     peerDependencies:
       hono: ^4
 
-  '@hookform/resolvers@3.10.0':
-    resolution: {integrity: sha512-79Dv+3mDF7i+2ajj7SkypSKHhl1cbln1OGavqrsF7p6mbUv11xpqpacPsGDCTRvCSjEEIez2ef1NveSVL3b0Ag==}
+  '@hookform/resolvers@5.5.7':
+    resolution: {integrity: sha512-CyPCYV8/KlXfEXLWj8HHHhVsR/IZ6Ckm3b/a4fWtO/lRnRK1huqncb8LlAWrmpPRsse5glF5aVuDRMHEr3UGag==}
     peerDependencies:
-      react-hook-form: ^7.0.0
+      '@sinclair/typebox': '>=0.25.24'
+      '@standard-schema/spec': ^1.0.0
+      '@typeschema/main': '>=0.13.7'
+      '@vinejs/vine': ^2.0.0 || ^3.0.0
+      ajv: ^8.12.0
+      ajv-errors: ^3.0.0
+      ajv-formats: ^2.1.1
+      arktype: ^2.0.0
+      ata-validator: ^0.7.0
+      class-transformer: '>=0.4.0'
+      class-validator: '>=0.12.0'
+      computed-types: ^1.0.0
+      effect: ^3.10.3
+      fluentvalidation-ts: ^3.0.0
+      fp-ts: ^2.7.0
+      io-ts: ^2.0.0
+      joi: ^17.0.0
+      nope-validator: '>=0.12.0'
+      react-hook-form: ^7.55.0
+      superstruct: '>=0.12.0'
+      typanion: ^3.3.2
+      valibot: '>=0.31.0 || ^1.0.0-beta.4 || ^1.0.0-rc'
+      vest: '>=3.0.0'
+      yup: ^1.0.0
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@sinclair/typebox':
+        optional: true
+      '@standard-schema/spec':
+        optional: true
+      '@typeschema/main':
+        optional: true
+      '@vinejs/vine':
+        optional: true
+      ajv:
+        optional: true
+      ajv-errors:
+        optional: true
+      ajv-formats:
+        optional: true
+      arktype:
+        optional: true
+      ata-validator:
+        optional: true
+      class-transformer:
+        optional: true
+      class-validator:
+        optional: true
+      computed-types:
+        optional: true
+      effect:
+        optional: true
+      fluentvalidation-ts:
+        optional: true
+      fp-ts:
+        optional: true
+      io-ts:
+        optional: true
+      joi:
+        optional: true
+      nope-validator:
+        optional: true
+      superstruct:
+        optional: true
+      typanion:
+        optional: true
+      valibot:
+        optional: true
+      vest:
+        optional: true
+      yup:
+        optional: true
+      zod:
+        optional: true
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -2099,9 +2169,11 @@ packages:
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
     engines: {node: '>=18'}
 
-  '@testing-library/jest-dom@6.9.1':
-    resolution: {integrity: sha512-zIcONa+hVtVSSep9UT3jZ5rizo2BsxgyDYU7WFD5eICBE7no3881HGeb/QkGfsJs6JTkY1aQhT7rIPC7e+0nnA==}
-    engines: {node: '>=14', npm: '>=6', yarn: '>=1'}
+  '@testing-library/jest-dom@7.0.0':
+    resolution: {integrity: sha512-HKAH9C6mBo5yBG6yRO5i43L2iisencAo5z+o5P/saHUoY+miC5ivXRxHBJcFyB5ypPNxHJdK3BoF/3O4DIptMg==}
+    engines: {node: '>=22', npm: '>=6', yarn: '>=1'}
+    peerDependencies:
+      '@testing-library/dom': '>=10 <11'
 
   '@testing-library/react@16.3.2':
     resolution: {integrity: sha512-XU5/SytQM+ykqMnAnvB2umaJNIOsLF3PVv//1Ew4CTcpz0/BRyy/af40qqrt7SjKpDdT1saBMc42CUok5gaw+g==}
@@ -5010,8 +5082,8 @@ packages:
   symbol-tree@3.2.4:
     resolution: {integrity: sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw==}
 
-  tailwind-merge@2.6.1:
-    resolution: {integrity: sha512-Oo6tHdpZsGpkKG88HJ8RR1rg/RdnEkQEfMoEk2x1XRI3F1AxeU+ijRXpiVUF4UbLfcxxRGw6TbUINKYdWVsQTQ==}
+  tailwind-merge@3.6.0:
+    resolution: {integrity: sha512-uxL7qAVQriqRQPAyK3pj66VqskWqoZ37PW94jwOTwNfq/z9oyu1V+eqrZqtR2+fCiXdYOZe/Modt8GtvqNzu+w==}
 
   tailwindcss@3.4.19:
     resolution: {integrity: sha512-3ofp+LL8E+pK/JuPLPggVAIaEuhvIz4qNcf3nA1Xn2o/7fb7s/TYpHhwGDv1ZU3PkBluUVaF8PyCHcm48cKLWQ==}
@@ -5430,6 +5502,9 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
   zustand@4.5.7:
     resolution: {integrity: sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw==}
     engines: {node: '>=12.7.0'}
@@ -5449,46 +5524,46 @@ snapshots:
 
   '@adobe/css-tools@4.5.0': {}
 
-  '@ai-sdk/anthropic@4.0.16(zod@3.25.76)':
+  '@ai-sdk/anthropic@4.0.16(zod@4.4.3)':
     dependencies:
       '@ai-sdk/provider': 4.0.3
-      '@ai-sdk/provider-utils': 5.0.11(zod@3.25.76)
-      zod: 3.25.76
+      '@ai-sdk/provider-utils': 5.0.11(zod@4.4.3)
+      zod: 4.4.3
 
-  '@ai-sdk/gateway@4.0.28(zod@3.25.76)':
+  '@ai-sdk/gateway@4.0.28(zod@4.4.3)':
     dependencies:
       '@ai-sdk/provider': 4.0.3
-      '@ai-sdk/provider-utils': 5.0.12(zod@3.25.76)
+      '@ai-sdk/provider-utils': 5.0.12(zod@4.4.3)
       '@vercel/oidc': 3.2.0
-      zod: 3.25.76
+      zod: 4.4.3
 
-  '@ai-sdk/google@4.0.18(zod@3.25.76)':
+  '@ai-sdk/google@4.0.18(zod@4.4.3)':
     dependencies:
       '@ai-sdk/provider': 4.0.3
-      '@ai-sdk/provider-utils': 5.0.11(zod@3.25.76)
-      zod: 3.25.76
+      '@ai-sdk/provider-utils': 5.0.11(zod@4.4.3)
+      zod: 4.4.3
 
-  '@ai-sdk/openai@4.0.20(zod@3.25.76)':
+  '@ai-sdk/openai@4.0.20(zod@4.4.3)':
     dependencies:
       '@ai-sdk/provider': 4.0.3
-      '@ai-sdk/provider-utils': 5.0.12(zod@3.25.76)
-      zod: 3.25.76
+      '@ai-sdk/provider-utils': 5.0.12(zod@4.4.3)
+      zod: 4.4.3
 
-  '@ai-sdk/provider-utils@5.0.11(zod@3.25.76)':
-    dependencies:
-      '@ai-sdk/provider': 4.0.3
-      '@standard-schema/spec': 1.1.0
-      '@workflow/serde': 4.1.0
-      eventsource-parser: 3.1.0
-      zod: 3.25.76
-
-  '@ai-sdk/provider-utils@5.0.12(zod@3.25.76)':
+  '@ai-sdk/provider-utils@5.0.11(zod@4.4.3)':
     dependencies:
       '@ai-sdk/provider': 4.0.3
       '@standard-schema/spec': 1.1.0
       '@workflow/serde': 4.1.0
       eventsource-parser: 3.1.0
-      zod: 3.25.76
+      zod: 4.4.3
+
+  '@ai-sdk/provider-utils@5.0.12(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.3
+      '@standard-schema/spec': 1.1.0
+      '@workflow/serde': 4.1.0
+      eventsource-parser: 3.1.0
+      zod: 4.4.3
 
   '@ai-sdk/provider@4.0.3':
     dependencies:
@@ -5887,9 +5962,16 @@ snapshots:
     dependencies:
       hono: 4.12.31
 
-  '@hookform/resolvers@3.10.0(react-hook-form@7.83.0(react@19.2.8))':
+  '@hookform/resolvers@5.5.7(@sinclair/typebox@0.27.12)(@standard-schema/spec@1.1.0)(ajv-formats@2.1.1(ajv@8.20.0))(ajv@8.20.0)(react-hook-form@7.83.0(react@19.2.8))(zod@4.4.3)':
     dependencies:
+      '@standard-schema/utils': 0.3.0
       react-hook-form: 7.83.0(react@19.2.8)
+    optionalDependencies:
+      '@sinclair/typebox': 0.27.12
+      '@standard-schema/spec': 1.1.0
+      ajv: 8.20.0
+      ajv-formats: 2.1.1(ajv@8.20.0)
+      zod: 4.4.3
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -6045,7 +6127,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
+  '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.31)
       ajv: 8.20.0
@@ -6062,8 +6144,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 3.25.76
-      zod-to-json-schema: 3.25.2(zod@3.25.76)
+      zod: 4.4.3
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
 
@@ -7231,9 +7313,10 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@6.9.1':
+  '@testing-library/jest-dom@7.0.0(@testing-library/dom@10.4.1)':
     dependencies:
       '@adobe/css-tools': 4.5.0
+      '@testing-library/dom': 10.4.1
       aria-query: 5.3.2
       css.escape: 1.5.1
       dom-accessibility-api: 0.6.3
@@ -7729,12 +7812,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  ai@7.0.37(zod@3.25.76):
+  ai@7.0.37(zod@4.4.3):
     dependencies:
-      '@ai-sdk/gateway': 4.0.28(zod@3.25.76)
+      '@ai-sdk/gateway': 4.0.28(zod@4.4.3)
       '@ai-sdk/provider': 4.0.3
-      '@ai-sdk/provider-utils': 5.0.12(zod@3.25.76)
-      zod: 3.25.76
+      '@ai-sdk/provider-utils': 5.0.12(zod@4.4.3)
+      zod: 4.4.3
 
   ajv-formats@2.1.1(ajv@8.20.0):
     optionalDependencies:
@@ -8533,8 +8616,8 @@ snapshots:
       '@babel/parser': 7.29.7
       eslint: 9.39.5(jiti@1.21.7)
       hermes-parser: 0.25.1
-      zod: 3.25.76
-      zod-validation-error: 4.0.2(zod@3.25.76)
+      zod: 4.4.3
+      zod-validation-error: 4.0.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
 
@@ -10352,7 +10435,7 @@ snapshots:
 
   symbol-tree@3.2.4: {}
 
-  tailwind-merge@2.6.1: {}
+  tailwind-merge@3.6.0: {}
 
   tailwindcss@3.4.19(tsx@4.23.1):
     dependencies:
@@ -10838,15 +10921,17 @@ snapshots:
 
   yoga-layout@3.2.1: {}
 
-  zod-to-json-schema@3.25.2(zod@3.25.76):
+  zod-to-json-schema@3.25.2(zod@4.4.3):
     dependencies:
-      zod: 3.25.76
+      zod: 4.4.3
 
-  zod-validation-error@4.0.2(zod@3.25.76):
+  zod-validation-error@4.0.2(zod@4.4.3):
     dependencies:
-      zod: 3.25.76
+      zod: 4.4.3
 
   zod@3.25.76: {}
+
+  zod@4.4.3: {}
 
   zustand@4.5.7(@types/react@19.2.17)(immer@11.1.15)(react@19.2.8):
     dependencies:

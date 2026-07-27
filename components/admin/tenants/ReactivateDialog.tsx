@@ -46,7 +46,7 @@ export function ReactivateDialog({ open, onClose, organizationId }: ReactivateDi
   function handleConfirm() {
     const parsed = reasonSchema.safeParse(reason);
     if (!parsed.success) {
-      setError(parsed.error.errors[0]?.message ?? "Razão inválida");
+      setError(parsed.error.issues[0]?.message ?? "Razão inválida");
       return;
     }
     reactivate.mutate(
