@@ -361,7 +361,9 @@ begin
     name = v_anon_label,
     display_name = v_anon_label,
     email = null,
-    email_normalized = null,
+    -- email_normalized NÃO entra: é GENERATED ALWAYS AS (lower(trim(email)))
+    -- e o Postgres recusa escrita nela — a linha acima já a zera por derivação.
+    -- Com a atribuição, o cascade INTEIRO abortava e nada era anonimizado.
     phone_number = null,
     cpf_encrypted = null,
     cpf_hash = null,
@@ -402,10 +404,14 @@ begin
   get diagnostics v_count = row_count;
   v_counts := v_counts || jsonb_build_object('messages', v_count);
 
-  -- 4. crm_lead_activities — strip both payload and metadata (jsonb may contain message bodies / contact info)
+  -- 4. crm_lead_activities — strip payload, metadata E reason (migration 0071).
+  --    `reason` é texto livre escrito por LLM sobre a conversa do lead: supor que
+  --    nunca conterá um nome é a suposição que falha. `evidence` NÃO é limpa —
+  --    guarda só ids, e as linhas apontadas são redigidas por conta própria.
   update crm_lead_activities set
     payload = '{}'::jsonb,
-    metadata = '{}'::jsonb
+    metadata = '{}'::jsonb,
+    reason = null
   where organization_id = p_organization_id
     and (
       contact_id = p_contact_id
@@ -4055,7 +4061,10 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['messages','conversations','crm_leads','ai_agents','ai_agent_runs','ai_knowledge_sources']
+  -- crm_lead_activities (migration 0071): o dossiê assina a timeline filtrada
+  -- por lead_id (§3.5). O board não assina esta tabela — ele escuta crm_leads
+  -- por pipeline_id, e toda atividade toca o lead via fn_update_last_activity_at.
+  foreach t in array array['messages','conversations','crm_leads','ai_agents','ai_agent_runs','ai_knowledge_sources','crm_lead_activities']
   loop
     if not exists (
       select 1 from pg_publication_tables
@@ -6891,3 +6900,1042 @@ where not exists (
   select 1 from public.ai_pricing p
   where p.model = 'openai/text-embedding-3-small' and p.superseded_at is null
 );
+-- ---- crm_leads owner_kind/owner_agent_id (migration 0070) ----
+-- CRM Vivo · Wave 1 (CORE 1): a IA é dona do NEGÓCIO, não só da conversa.
+-- Mesmo padrão da 0032 (conversations.assignee_kind): backfill ANTES da
+-- constraint, CHECK de coerência em forma de implicação, drop+add re-aplicável.
+-- owner_agent_id aponta para ai_agents (identidade), NUNCA ai_agent_versions —
+-- o tooltip "Nome · vN" resolve a versão publicada por join na hora de exibir.
+alter table public.crm_leads
+  add column if not exists owner_kind text
+  check (owner_kind in ('user','ai'));
+
+alter table public.crm_leads
+  add column if not exists owner_agent_id uuid
+  references public.ai_agents(id) on delete set null;
+
+update public.crm_leads
+   set owner_kind = 'user'
+ where owner_user_id is not null
+   and owner_kind is distinct from 'user';
+
+update public.crm_leads
+   set owner_kind = null
+ where owner_user_id is null
+   and owner_agent_id is null
+   and owner_kind = 'user';
+
+update public.crm_leads
+   set owner_kind = 'ai'
+ where owner_agent_id is not null
+   and owner_kind is distinct from 'ai';
+
+alter table public.crm_leads
+  drop constraint if exists crm_leads_owner_kind_coherence;
+alter table public.crm_leads
+  add constraint crm_leads_owner_kind_coherence check (
+    (owner_kind = 'user' and owner_user_id is not null and owner_agent_id is null) or
+    (owner_kind = 'ai'   and owner_agent_id is not null and owner_user_id is null) or
+    (owner_kind is null)
+  );
+
+create index if not exists idx_crm_leads_owner_agent
+  on public.crm_leads (organization_id, owner_agent_id)
+  where owner_agent_id is not null;
+
+-- lead.assigned passa a cobrir o dono agente (corpo da 0043 + ramo do agente).
+create or replace function public.fn_emit_event_on_lead_change() returns trigger
+    language plpgsql
+    set search_path to 'public', 'pg_temp'
+    as $$
+begin
+  if tg_op = 'INSERT' then
+    return new;
+  end if;
+
+  if new.status is distinct from old.status then
+    if new.status = 'won' then
+      perform public.fn_log_event(new.organization_id, 'lead.won',
+        jsonb_build_object('lead_id', new.id, 'value_cents', new.value_cents));
+    elsif new.status = 'lost' then
+      perform public.fn_log_event(new.organization_id, 'lead.lost',
+        jsonb_build_object('lead_id', new.id, 'lost_reason', new.lost_reason));
+    elsif new.status = 'open' then
+      perform public.fn_log_event(new.organization_id, 'lead.reopened',
+        jsonb_build_object('lead_id', new.id));
+    end if;
+  end if;
+
+  if new.owner_user_id is distinct from old.owner_user_id
+     or new.owner_agent_id is distinct from old.owner_agent_id then
+    perform public.fn_log_event(new.organization_id, 'lead.assigned',
+      jsonb_build_object(
+        'lead_id', new.id,
+        'from_user_id', old.owner_user_id, 'to_user_id', new.owner_user_id,
+        'from_agent_id', old.owner_agent_id, 'to_agent_id', new.owner_agent_id,
+        'owner_kind', new.owner_kind));
+  end if;
+
+  return new;
+end$$;
+
+
+-- ---- crm_lead_activities: barramento único da vida do lead (migration 0071) ----
+-- Wave 3, bloco 1 do CRM Vivo. actor_kind/actor_agent_id/reason/evidence +
+-- stage_changed_at em crm_leads. Realtime desta tabela entra pelo array do loop
+-- de publicação, acima.
+--
+-- FRONTEIRA DIRC: source_module/source_id = O QUE ORIGINOU (um ponteiro);
+-- evidence = O QUE SUSTENTA (N referências). evidence nunca repete o source_id.
+--
+-- Idempotente e AUTO-CURATIVO: o backfill lê actor_kind/reason de metadata (onde
+-- o orquestrador de handoff já os grava hoje) ANTES de a constraint existir, e
+-- degrada para 'system' a linha marcada como 'ai' sem lastro nenhum — senão o
+-- update.sh de um clone quebraria ao criar a constraint.
+
+-- ---------------------------------------------------------------------------
+-- A. Colunas do barramento
+-- ---------------------------------------------------------------------------
+
+-- 'contact' é a PESSOA do outro lado — não 'lead': deste lado da casa lead é o
+-- NEGÓCIO (crm_leads), então 'lead' diria "o negócio falou". Também não
+-- adotamos 'agent'/'human' de agent_case_events: aqui 'agent' já é papel humano
+-- de RBAC (viewer < agent < manager < admin) e colidiria.
+alter table public.crm_lead_activities
+  add column if not exists actor_kind text
+  check (actor_kind in ('user','ai','system','rule','contact'));
+
+alter table public.crm_lead_activities
+  add column if not exists actor_agent_id uuid
+  references public.ai_agents(id) on delete set null;
+
+-- O PORQUÊ em texto legível por humano — é o que a timeline mostra embaixo da
+-- linha, e o que torna a decisão da IA discutível em vez de mágica.
+alter table public.crm_lead_activities
+  add column if not exists reason text;
+
+-- O LASTRO: {"run_ids": [...], "trace_ids": [...]} — mesmo formato de
+-- flywheel_distiller_proposals.evidence.
+alter table public.crm_lead_activities
+  add column if not exists evidence jsonb;
+
+comment on column public.crm_lead_activities.actor_kind is
+  'Quem agiu: user (humano do time) | ai (agente) | system (o produto) | rule (automação) | contact (a pessoa atendida). NUNCA "lead": lead aqui é o negócio.';
+comment on column public.crm_lead_activities.evidence is
+  'O que SUSTENTA a atividade: {"run_ids":[],"trace_ids":[]} (N referências). Não confundir com source_module/source_id, que é O QUE ORIGINOU (um ponteiro). evidence nunca repete o source_id — origem não é prova.';
+comment on column public.crm_lead_activities.reason is
+  'Por que esta atividade existe, em texto legível. Sem PII: é exibido na timeline e exportado no LGPD.';
+
+-- ---------------------------------------------------------------------------
+-- B. Backfill A PARTIR DO JSONB — antes de qualquer default e antes da
+--    constraint (doutrina de migrations §8).
+--
+--    actor_kind e reason JÁ são gravados hoje dentro de metadata
+--    (lib/ai/handoff/orchestrator.ts). Backfillar tudo como 'system' apagaria
+--    informação que já existe — seria perda de dado disfarçada de migration.
+-- ---------------------------------------------------------------------------
+
+-- ORDEM IMPORTA: o lastro sobe ANTES do ator. Promover para 'ai' e degradar
+-- depois funciona na primeira aplicação (a constraint ainda não existe) e
+-- QUEBRA no update.sh de um clone, onde ela já existe e recusa a linha no ato.
+-- Aqui nenhum estado intermediário inválido chega a existir.
+
+-- 1. Lastro que já existe em metadata sobe para a coluna (nunca inventado).
+update public.crm_lead_activities
+   set evidence = jsonb_strip_nulls(
+         jsonb_build_object(
+           'run_ids',   metadata->'run_ids',
+           'trace_ids', metadata->'trace_ids'
+         ))
+ where evidence is null
+   and (jsonb_typeof(metadata->'run_ids') = 'array'
+     or jsonb_typeof(metadata->'trace_ids') = 'array');
+
+-- 2. Atores que não são a IA: promoção direta.
+update public.crm_lead_activities
+   set actor_kind = metadata->>'actor_kind'
+ where actor_kind is null
+   and metadata->>'actor_kind' in ('user','system','rule','contact');
+
+-- 3. 'ai' só quando há execução que sustente a afirmação.
+update public.crm_lead_activities
+   set actor_kind = 'ai'
+ where actor_kind is null
+   and metadata->>'actor_kind' = 'ai'
+   and (coalesce(jsonb_array_length(evidence->'run_ids'), 0) > 0
+     or coalesce(jsonb_array_length(evidence->'trace_ids'), 0) > 0);
+
+-- 4. 'ai' sem lastro nenhum vira 'system': o registro continua inteiro (o
+--    reason é preservado); o que se recusa a afirmar é a AUTORIA da IA, porque
+--    não há execução que a sustente.
+update public.crm_lead_activities
+   set actor_kind = 'system'
+ where actor_kind is null
+   and metadata->>'actor_kind' = 'ai';
+
+update public.crm_lead_activities
+   set reason = metadata->>'reason'
+ where reason is null
+   and nullif(metadata->>'reason', '') is not null;
+
+-- 5. Quem tem autor humano registrado é 'user' — o dado está na coluna, só não
+--    estava nomeado.
+update public.crm_lead_activities
+   set actor_kind = 'user'
+ where actor_kind is null
+   and performed_by_user_id is not null;
+
+-- 6. Cura de banco onde a constraint ainda não existia e uma linha 'ai' entrou
+--    sem lastro (não alcançável depois que a constraint existe — por isso vem
+--    por último e é no-op no caminho feliz).
+update public.crm_lead_activities
+   set actor_kind = 'system'
+ where actor_kind = 'ai'
+   and coalesce(jsonb_array_length(evidence->'run_ids'), 0) = 0
+   and coalesce(jsonb_array_length(evidence->'trace_ids'), 0) = 0;
+
+-- ---------------------------------------------------------------------------
+-- C. Constraint de lastro (drop+add — re-aplicável)
+--
+--    A doutrina do CORE 3 ("número sem porquê não é gravado") aplicada uma wave
+--    antes: se a IA afirma algo na timeline, existe run_id ou trace_id que
+--    sustente. `jsonb_array_length(...) > 0`, NÃO `evidence ? 'run_ids'` — a
+--    segunda passa com array VAZIO, e lastro vazio não sustenta nada.
+-- ---------------------------------------------------------------------------
+
+alter table public.crm_lead_activities
+  drop constraint if exists crm_lead_activities_ai_needs_evidence;
+alter table public.crm_lead_activities
+  add constraint crm_lead_activities_ai_needs_evidence check (
+    actor_kind <> 'ai'
+    or coalesce(jsonb_array_length(evidence->'run_ids'), 0) > 0
+    or coalesce(jsonb_array_length(evidence->'trace_ids'), 0) > 0
+  );
+
+-- Timeline por ator (o dossiê filtra "só o que a IA fez"), parcial porque a
+-- maioria das linhas não é de agente.
+create index if not exists idx_lead_activities_org_actor_agent
+  on public.crm_lead_activities (organization_id, actor_agent_id, performed_at desc)
+  where actor_agent_id is not null;
+
+-- ---------------------------------------------------------------------------
+-- D. stage_changed_at — de carona, porque esta wave passa a emitir atividade na
+--    mudança de estágio. Sem a coluna, "3d em Negociação" no card continua
+--    medindo tempo SEM RESPOSTA (last_activity_at) e mente sobre o estágio.
+--    Trigger puro: carimba a coluna, sem HTTP (doutrina — trigger nunca faz rede).
+-- ---------------------------------------------------------------------------
+
+alter table public.crm_leads
+  add column if not exists stage_changed_at timestamptz;
+
+-- Bancos existentes: o melhor palito honesto é a criação do lead — nunca
+-- inventar uma data de entrada no estágio que ninguém registrou.
+update public.crm_leads
+   set stage_changed_at = created_at
+ where stage_changed_at is null;
+
+alter table public.crm_leads
+  alter column stage_changed_at set default now();
+
+create or replace function public.fn_stamp_stage_changed_at() returns trigger
+    language plpgsql
+    set search_path to 'public', 'pg_temp'
+    as $$
+begin
+  if tg_op = 'INSERT' then
+    new.stage_changed_at := coalesce(new.stage_changed_at, now());
+  elsif new.stage_id is distinct from old.stage_id then
+    new.stage_changed_at := now();
+  end if;
+  return new;
+end$$;
+
+drop trigger if exists trg_stamp_stage_changed_at on public.crm_leads;
+create trigger trg_stamp_stage_changed_at
+  before insert or update on public.crm_leads
+  for each row execute function public.fn_stamp_stage_changed_at();
+
+comment on column public.crm_leads.stage_changed_at is
+  'Quando o lead entrou no estágio atual. Carimbado por trigger. É o relógio de "tempo no estágio" do card — distinto de last_activity_at, que é "tempo sem resposta".';
+
+-- ---- evidence: lastro pode apontar para llm_calls (migration 0072) ----
+-- Só AFROUXA a constraint (acrescenta uma terceira forma de lastro), então
+-- nenhuma linha existente passa a violá-la e o update.sh de clone não quebra.
+-- Idempotente por drop+add.
+alter table public.crm_lead_activities
+  drop constraint if exists crm_lead_activities_ai_needs_evidence;
+
+alter table public.crm_lead_activities
+  add constraint crm_lead_activities_ai_needs_evidence check (
+    actor_kind <> 'ai'
+    or coalesce(jsonb_array_length(evidence->'run_ids'), 0) > 0
+    or coalesce(jsonb_array_length(evidence->'trace_ids'), 0) > 0
+    or coalesce(jsonb_array_length(evidence->'llm_call_ids'), 0) > 0
+  );
+
+comment on column public.crm_lead_activities.evidence is
+  'O que SUSTENTA a atividade (N referências), cada chave apontando para UMA tabela: run_ids→ai_agent_runs, trace_ids→o trace do turno, llm_call_ids→llm_calls. Não confundir com source_module/source_id, que é O QUE ORIGINOU (um ponteiro). evidence nunca repete o source_id — origem não é prova.';
+
+-- ---- identidade da próxima ação + caixa para o caso ambíguo (migration 0073) ----
+-- Duas mudanças independentes, ambas idempotentes e auto-curativas.
+--
+-- `next_action_seq` distingue "a mesma proposta" de "a mesma frase": o agente
+-- pode reescrever o mesmo texto significando outra coisa, e a autorização
+-- humana precisa saber QUAL proposta foi lida. Default 0 para as linhas que já
+-- existem — o primeiro reescrever leva a 1, que é o correto: a proposta que
+-- estava lá antes desta coluna nunca foi autorizada por ninguém.
+alter table public.lead_state
+  add column if not exists next_action_seq bigint not null default 0;
+
+comment on column public.lead_state.next_action_seq is
+  'Identidade da proposta corrente. Incrementa a CADA escrita de next_action, inclusive quando o texto novo é idêntico ao anterior — é o que distingue "a mesma proposta" de "a mesma frase". A autorização humana carrega este número; a execução o compara. Nunca usar updated_at no lugar: ele se move por outras escritas do estado.';
+
+-- Só ACRESCENTA um kind, então nenhuma linha existente passa a violar a
+-- constraint e o update.sh de um clone não quebra. Idempotente por drop+add.
+-- `followup_dead` está aqui porque a lista é a do BASELINE, não a do banco de
+-- dev: os dois divergiram, e o dev está com uma versão ANTERIOR da constraint
+-- (sem esse valor) enquanto lib/followup/engine.ts insere exatamente esse kind.
+-- Reconstruir a partir do banco apagaria o valor e mataria, em silêncio, o
+-- aviso de enrollment morto. A fonte de verdade é o arquivo versionado.
+alter table public.agent_inbox_items
+  drop constraint if exists agent_inbox_items_kind_check;
+
+alter table public.agent_inbox_items
+  add constraint agent_inbox_items_kind_check check (
+    kind = any (
+      array[
+        'qr_rescan',
+        'job_dead',
+        'event_dead',
+        'budget_exceeded',
+        'handoff',
+        'promotion_review',
+        'judge_unaligned',
+        'followup_dead',
+        'snooze_expired',
+        'next_action_ambiguous',
+        'other'
+      ]::text[]
+    )
+  );
+
+-- ---- score de probabilidade com evidência, em tabela própria (migrations 0074+0075) ----
+-- O baseline salta o passo intermediário de propósito: quem instala do zero não
+-- deve ganhar as colunas em `crm_leads` para perdê-las na linha seguinte. Para
+-- quem ATUALIZA (update.sh) o bloco continua correto — o `drop column if exists`
+-- e a migração de dados abaixo cuidam de um clone que já aplicou a 0074.
+create table if not exists public.crm_lead_scores (
+  lead_id uuid primary key references public.crm_leads(id) on delete cascade,
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  ai_probability numeric(5, 2),
+  ai_probability_reason text,
+  ai_probability_evidence jsonb not null default '{}'::jsonb,
+  ai_probability_at timestamptz,
+  ai_probability_band text,
+  ai_probability_band_since timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+-- `primary key (lead_id)` já garante o 1:1 — um lead tem no máximo uma linha de
+-- score. FK com `on delete cascade`: score é sobre o negócio, e sem o negócio
+-- não significa nada (não é histórico, é estado corrente).
+
+comment on table public.crm_lead_scores is
+  'Score de probabilidade por lead, FORA de crm_leads de propósito. Ver o cabeçalho da migration 0075: trazer estes campos de volta reintroduz o pulso que mente (board assina crm_leads) e o 409 fantasma (trava otimista do move + trigger de updated_at). Fica FORA da publicação supabase_realtime — recálculo é telemetria e não deve pintar card; quem pinta é a atividade emitida na travessia de faixa.';
+
+-- ---- migra o que existir (clones que já aplicaram a 0074) ----
+-- SQL DINÂMICO de propósito: numa instalação NOVA as colunas nunca existiram em
+-- `crm_leads`, e o Postgres faz o parse do comando ANTES de avaliar qualquer
+-- guarda — `where exists (select from information_schema...)` não salva, porque
+-- o erro é de parse, não de execução. Só `execute` adia a resolução do nome.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'crm_leads'
+       and column_name = 'ai_probability'
+  ) then
+    execute $mig$
+      insert into public.crm_lead_scores (
+        lead_id, organization_id, ai_probability, ai_probability_reason,
+        ai_probability_evidence, ai_probability_at, ai_probability_band,
+        ai_probability_band_since
+      )
+      select l.id, l.organization_id, l.ai_probability, l.ai_probability_reason,
+             coalesce(l.ai_probability_evidence, '{}'::jsonb), l.ai_probability_at,
+             l.ai_probability_band, l.ai_probability_band_since
+        from public.crm_leads l
+       where l.ai_probability is not null
+      on conflict (lead_id) do nothing
+    $mig$;
+  end if;
+end $$;
+
+alter table public.crm_leads
+  drop constraint if exists crm_leads_score_needs_reason,
+  drop constraint if exists crm_leads_score_range,
+  drop constraint if exists crm_leads_score_band_check,
+  drop constraint if exists crm_leads_score_band_coherence;
+
+alter table public.crm_leads
+  drop column if exists ai_probability,
+  drop column if exists ai_probability_reason,
+  drop column if exists ai_probability_evidence,
+  drop column if exists ai_probability_at,
+  drop column if exists ai_probability_band,
+  drop column if exists ai_probability_band_since;
+
+-- ---- as mesmas garantias, agora na tabela certa ----
+alter table public.crm_lead_scores
+  drop constraint if exists crm_lead_scores_needs_reason;
+
+-- ---- evidência do score: FONTE ÚNICA (migrations 0076+0077) ----
+-- ---- limpeza ANTES da constraint ----
+-- Hoje são 0 linhas de 2, mas o CHECK nunca exigiu âncora DENTRO do fator: um
+-- clone pode ter `factors` sem âncora nenhuma, e essa linha passa hoje e
+-- reprovaria depois. Apaga o SCORE — não inventa âncora, porque âncora
+-- fabricada aponta para um registro que não sustenta nada e é indistinguível
+-- da verdadeira.
+update public.crm_lead_scores
+   set ai_probability = null,
+       ai_probability_reason = null,
+       ai_probability_at = null,
+       ai_probability_band = null,
+       ai_probability_band_since = null,
+       updated_at = now()
+ where ai_probability is not null
+   and (
+     coalesce(jsonb_array_length(ai_probability_evidence -> 'factors'), 0) = 0
+     or not (ai_probability_evidence @? '$.factors[*].ancora')
+   );
+
+alter table public.crm_lead_scores
+  drop constraint if exists crm_lead_scores_needs_reason;
+
+alter table public.crm_lead_scores
+  add constraint crm_lead_scores_needs_reason check (
+    ai_probability is null
+    or (
+      ai_probability_reason is not null
+      and btrim(ai_probability_reason) <> ''
+      -- LEGÍVEL: o que o hover revela.
+      and coalesce(jsonb_array_length(ai_probability_evidence -> 'factors'), 0) > 0
+      -- RASTREÁVEL: para onde o clique leva. `@?` com jsonpath em vez de
+      -- subconsulta, que CHECK não aceita — e é o que permite exigir a âncora
+      -- DENTRO do fator, mantendo a fonte única.
+      and ai_probability_evidence @? '$.factors[*].ancora'
+    )
+  );
+
+comment on column public.crm_lead_scores.ai_probability_evidence is
+  'O QUE SUSTENTA o score, em FONTE ÚNICA: `factors` — cada parcela com `pontos` (com sinal), `frase` legível e, quando há ponto no tempo, `ancora` {kind,id}. A constraint exige factors não-vazio E pelo menos um fator com âncora: legível sem rastreável é adjetivo, rastreável sem legível é um id que ninguém entende. NÃO unificar com o formato de crm_lead_activities.evidence (arrays de ids por tabela): a diferença é deliberada e está explicada na migration 0077 — atividade cita FATOS de N tabelas, score cita PARCELAS de um cálculo. Unificar reintroduz as duas listas que já divergiram uma vez (0076), com o banco cobrando uma chave e a tela lendo outra.';
+
+alter table public.crm_lead_scores
+  drop constraint if exists crm_lead_scores_range;
+
+alter table public.crm_lead_scores
+  add constraint crm_lead_scores_range check (
+    ai_probability is null or (ai_probability >= 0 and ai_probability <= 100)
+  );
+
+alter table public.crm_lead_scores
+  drop constraint if exists crm_lead_scores_band_check;
+
+alter table public.crm_lead_scores
+  add constraint crm_lead_scores_band_check check (
+    ai_probability_band is null
+    or ai_probability_band = any (array['frio', 'morno', 'quente']::text[])
+  );
+
+alter table public.crm_lead_scores
+  drop constraint if exists crm_lead_scores_band_coherence;
+
+alter table public.crm_lead_scores
+  add constraint crm_lead_scores_band_coherence check (
+    ai_probability_band is null
+    or ai_probability is null
+    or (ai_probability_band = 'quente' and ai_probability >= 65)
+    or (ai_probability_band = 'morno' and ai_probability >= 35 and ai_probability <= 75)
+    or (ai_probability_band = 'frio' and ai_probability <= 45)
+  );
+
+comment on column public.crm_lead_scores.ai_probability is
+  'Probabilidade 0-100 por FÓRMULA determinística sobre sinais que já existem — nunca chamada de modelo. Com fórmula, o reason é DERIVADO do cálculo e "número sem porquê" é impossível por construção; com modelo, a frase é gerada ao lado do número e a lei só pareceria cumprida. null = sinal insuficiente, e é estado legítimo: nunca zero.';
+
+comment on column public.crm_lead_scores.ai_probability_reason is
+  'O PORQUÊ em português, obrigatório por constraint quando há score. Existe para o humano poder DISCORDAR: sem razão citável o número é opinião sem apelação.';
+
+comment on column public.crm_lead_scores.ai_probability_evidence is
+  'O QUE SUSTENTA (N referências): activity_ids→crm_lead_activities, message_ids→messages, checkpoint_ids→lead_checkpoints. A constraint exige pelo menos uma — razão sem referência é adjetivo.';
+
+comment on column public.crm_lead_scores.ai_probability_band is
+  'Faixa exibida. Persistida porque histerese precisa da faixa anterior; o CHECK de coerência torna divergir do score IMPOSSÍVEL de gravar, não só improvável. Cortes em FAIXA_LIMITES (lib/kanban/score-band.ts), fonte única do CHECK, do emissor e da UI.';
+
+-- ---- tenancy ----
+alter table public.crm_lead_scores enable row level security;
+
+drop policy if exists tenant_isolation_crm_lead_scores_all on public.crm_lead_scores;
+create policy tenant_isolation_crm_lead_scores_all on public.crm_lead_scores
+  for all
+  using (organization_id in (select fn_user_org_ids()))
+  with check (organization_id in (select fn_user_org_ids()));
+
+create index if not exists idx_crm_lead_scores_org_band
+  on public.crm_lead_scores (organization_id, ai_probability_band);
+
+-- FORA da publicação de realtime — é o ponto inteiro desta migration. Remover
+-- é defensivo: se um clone tiver a tabela publicada por engano, isto corrige.
+do $$
+begin
+  if exists (
+    select 1 from pg_publication_tables
+     where pubname = 'supabase_realtime'
+       and schemaname = 'public'
+       and tablename = 'crm_lead_scores'
+  ) then
+    execute 'alter publication supabase_realtime drop table public.crm_lead_scores';
+  end if;
+end $$;
+
+-- ---- estado de risco do negócio (migration 0078) ----
+-- 0078 — "esfriando" deixa de ser adjetivo calculado e vira ESTADO do negócio
+--
+-- O QUE ESTAVA ERRADO: `classifyRisk` é função pura recalculada a cada leitura,
+-- e os únicos chamadores são rotas de LEITURA. Nenhum worker, nenhum emissor.
+-- Consequência medida: "esfriando" não existia até alguém abrir a tela, não
+-- tinha tipo de atividade (o vocabulário não sabia dizer "esfriou" nem
+-- "voltou"), e — o pior — não era RETIDO: não havia como responder "há quanto
+-- tempo está esfriando" nem "quantas vezes já esfriou e voltou".
+--
+-- A ironia que motivou a wave: o cabeçalho de `lib/leads/risk-radar.ts` declara
+-- ser o desilhamento C1 da doutrina do sistema vivo — "uma demanda que esfriou
+-- e não tem próximo passo garantido está morrendo sem ninguém ver; o radar a
+-- torna visível". Mas tornar visível numa tela que ninguém é obrigado a abrir
+-- não é mecanismo anti-morte: é a mesma morte, com testemunha opcional.
+--
+-- ⚠️ POR QUE FORA DE `crm_leads` — os dois motivos são os MESMOS da 0075 e
+-- valem palavra por palavra aqui; leia aquele cabeçalho antes de "simplificar"
+-- isto para dentro do lead:
+--   1. o PULSO QUE MENTE — o board assina `crm_leads`; uma varredura de risco
+--      em lote faria dezenas de cards piscarem sem novidade nenhuma;
+--   2. o 409 FANTASMA — `trg_crm_leads_updated_at` invalida a trava otimista do
+--      arrasto em voo, e o usuário recebe "alguém editou este lead" quando
+--      ninguém editou.
+--
+-- ⚠️ MAS ESTA TABELA FICA **DENTRO** DA PUBLICAÇÃO DE REALTIME, ao contrário da
+-- `crm_lead_scores`. Isso NÃO contradiz a 0075 — é a mesma regra aplicada:
+-- "silêncio para telemetria, pulso para mudança de estado". Score é telemetria
+-- (número que se move sozinho o tempo todo); risco é transição discreta e rara
+-- que EXIGE ação humana. É por aqui que a borda de aviso aparece sem reload,
+-- sem tocar o lead — e é justamente não tocar o lead que preserva 1 e 2.
+--
+-- A CONTRAPARTIDA, que vive no escritor e não dá para o banco garantir: só
+-- escreva quando o BUCKET MUDAR. Um `update` que só refresca `detected_at`
+-- publicaria evento de realtime sem mudança de estado, e o board voltaria a
+-- piscar à toa — o defeito que esta separação toda existe para impedir.
+
+create table if not exists public.crm_lead_risk_states (
+  lead_id uuid primary key references public.crm_leads(id) on delete cascade,
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  bucket text not null,
+  -- QUANDO O NEGÓCIO ENTROU NESTE ESTADO, que não é quando o sistema percebeu.
+  -- A distinção é o que torna o acervo honesto: os 48 negócios já frios no dia
+  -- da estreia entram com `since` no passado (o instante em que de fato
+  -- esfriaram) e `detected_at` em now. Sem os dois campos, o histórico diria
+  -- que todos esfriaram no mesmo minuto — e diria isso para sempre.
+  since timestamptz not null,
+  detected_at timestamptz not null default now(),
+  -- A janela do estágio usada na decisão, gravada JUNTO. Sem ela, mudar
+  -- `expected_duration_hours` reescreve retroativamente o significado de todo
+  -- estado já gravado, e ninguém consegue explicar por que aquele negócio
+  -- esfriou "às 24h" se hoje o estágio diz 72h.
+  cold_hours numeric not null,
+  updated_at timestamptz not null default now()
+);
+
+comment on table public.crm_lead_risk_states is
+  'Estado de risco por negócio (wave 7 — o ciclo). FORA de crm_leads pelos motivos da 0075 (pulso que mente, 409 fantasma), mas DENTRO da publicação supabase_realtime, ao contrário de crm_lead_scores: risco é mudança de estado, não telemetria. O escritor só grava quando o bucket muda.';
+
+alter table public.crm_lead_risk_states
+  drop constraint if exists crm_lead_risk_states_bucket_check;
+alter table public.crm_lead_risk_states
+  add constraint crm_lead_risk_states_bucket_check check (
+    bucket = any (array['em_dia', 'em_voo', 'em_risco', 'critico']::text[])
+  );
+
+-- Estado não começa no futuro. Trava o erro de gravar `since = now + janela`
+-- (o instante em que VAI esfriar) em vez de `last_activity_at + janela`.
+alter table public.crm_lead_risk_states
+  drop constraint if exists crm_lead_risk_states_since_no_passado;
+alter table public.crm_lead_risk_states
+  add constraint crm_lead_risk_states_since_no_passado check (since <= detected_at);
+
+alter table public.crm_lead_risk_states
+  drop constraint if exists crm_lead_risk_states_cold_hours_positivo;
+alter table public.crm_lead_risk_states
+  add constraint crm_lead_risk_states_cold_hours_positivo check (cold_hours > 0);
+
+alter table public.crm_lead_risk_states enable row level security;
+
+drop policy if exists tenant_isolation_crm_lead_risk_states_all on public.crm_lead_risk_states;
+create policy tenant_isolation_crm_lead_risk_states_all on public.crm_lead_risk_states
+  for all
+  using (organization_id in (select fn_user_org_ids()))
+  with check (organization_id in (select fn_user_org_ids()));
+
+-- O radar lê "quem está em risco nesta org", nesta ordem.
+create index if not exists idx_crm_lead_risk_states_org_bucket
+  on public.crm_lead_risk_states (organization_id, bucket, since);
+
+-- DENTRO da publicação — ver o cabeçalho. Idempotente: só adiciona se faltar.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+     where pubname = 'supabase_realtime'
+       and schemaname = 'public'
+       and tablename = 'crm_lead_risk_states'
+  ) then
+    execute 'alter publication supabase_realtime add table public.crm_lead_risk_states';
+  end if;
+end $$;
+
+-- ---- relógio do silêncio só conta interação (migration 0079) ----
+-- 0079 — o relógio do silêncio para de ser zerado pela constatação do silêncio
+--
+-- O DEFEITO, medido antes de escrever: `fn_update_last_activity_at` carimba
+-- `crm_leads.last_activity_at` para QUALQUER atividade, sem filtro de tipo. E
+-- `last_activity_at` é exatamente o relógio que decide o esfriamento. Então o
+-- produtor do estado apagaria o próprio estado ao registrá-lo: o negócio esfria,
+-- o sistema registra "esfriou", o trigger zera o relógio, e o negócio volta a
+-- "em dia" no mesmo instante. Vinte e quatro horas depois, de novo — uma linha
+-- de timeline por janela, para sempre, sem ninguém ter feito nada.
+--
+-- Provado em transação revertida (lead 08b70b48, o mais frio com relógio
+-- não-nulo): 484h de silêncio, bucket CRÍTICO → insere uma atividade → 0h,
+-- bucket "em dia".
+--
+-- A regra geral: CONSTATAR O SILÊNCIO NÃO É QUEBRAR O SILÊNCIO. Toda métrica do
+-- tipo "tempo desde o último X" é aniquilada por registrar observação sobre ela,
+-- se o registro contar como X.
+--
+-- ⚠️ POR QUE LISTA POSITIVA E NÃO LISTA DE EXCEÇÕES — a assimetria é o ponto
+-- inteiro, e inverter parece inofensivo:
+--
+--   com lista de exceções ("ignore lead_cooled"), um tipo NOVO de observação de
+--   sistema, daqui a seis meses, volta a carimbar o relógio. O negócio parece
+--   vivo estando morto: morte silenciosa, que é a doença que esta wave existe
+--   para curar;
+--
+--   com lista positiva, um tipo novo de interação REAL fica de fora e o negócio
+--   parece frio estando quente: alarme falso, visível, alguém reclama e conserta.
+--
+-- O default para o que ainda não existe tem de ser o erro BARULHENTO.
+--
+-- AS ESCOLHAS DE FORA, cada uma com sua razão — revisáveis, mas não por
+-- distração:
+--   send_vetoed        o envio não chegou ao cliente. Se contasse, um negócio em
+--                      que a IA tenta e é barrada em looping pareceria vivo
+--                      estando travado;
+--   handoff_triggered  passar para humano é PROMESSA de atendimento, não
+--                      atendimento. Se contasse, o negócio transferido e nunca
+--                      atendido ficaria mascarado justamente na janela em que
+--                      alguém deveria notar;
+--   next_action_dismissed  o humano decidiu NÃO agir. O negócio fica sem próximo
+--                      passo, que é a definição de risco na doutrina — deveria
+--                      esfriar mais rápido, não menos.
+
+create or replace function public.fn_update_last_activity_at()
+  returns trigger
+  language plpgsql
+  set search_path to 'public', 'pg_temp'
+as $function$
+begin
+  -- LISTA POSITIVA: só isto conta como "alguém tocou este negócio". Tipo que
+  -- não está aqui NÃO quebra o silêncio — inclusive tipo que ainda não existe.
+  -- Ver o cabeçalho da 0079 antes de acrescentar linha nesta lista.
+  if new.type not in (
+    'ai_turn',              -- a IA falou com o cliente
+    'note',                 -- alguém registrou trabalho no negócio
+    'lead_edited',          -- humano mexeu nos dados
+    'stage_changed',        -- humano moveu o negócio
+    'next_action_approved'  -- humano decidiu agir
+  ) then
+    return new;
+  end if;
+
+  update public.crm_leads
+     set last_activity_at = greatest(coalesce(last_activity_at, '-infinity'::timestamptz), new.performed_at)
+   where id = new.lead_id;
+
+  if new.contact_id is not null then
+    update public.contacts
+       set last_activity_at = greatest(coalesce(last_activity_at, '-infinity'::timestamptz), new.performed_at)
+     where id = new.contact_id;
+  end if;
+  return new;
+end$function$;
+
+comment on function public.fn_update_last_activity_at() is
+  'Carimba last_activity_at SÓ para tipos que contam como interação (lista positiva — ver migration 0079). Constatar o silêncio não é quebrar o silêncio: sem este filtro, a atividade que registra "este negócio esfriou" zera o próprio relógio que produziu o estado.';
+
+-- ---- kind de caixa para o acervo de risco (migration 0080) ----
+-- 0080 — o acervo de negócios já frios ganha UM item de caixa, com ação nomeada
+--
+-- POR QUE ISTO EXISTE: quando o estado de risco (0078) começa a ser gravado, os
+-- negócios que JÁ estavam frios entram todos de uma vez. Medido no banco de
+-- desenvolvimento: 48 críticos e 2 em risco, de 66 abertos.
+--
+-- Eles NÃO podem emitir atividade de timeline ("esfriou agora" seria falso: eles
+-- esfriaram há dias) e não podem entrar em silêncio, porque aí ficariam
+-- absolvidos por decreto de migração — cinquenta demandas abertas que ninguém
+-- decidiu abandonar e ninguém vai revisar. O `event_log` sozinho não resolve:
+-- é rastro de máquina, e não coloca ninguém para agir.
+--
+-- Daí UM item agregado (não cinquenta) com dono e AÇÃO NOMEADA. Item de caixa
+-- sem ação nomeada é o ruído que a própria doutrina proíbe: "revise os 48 e
+-- decida quais encerrar" é trabalho; "48 negócios em risco" é um número.
+--
+-- ⚠️ O `InboxKind` em `lib/agent-engine/db/repository.ts` é a outra ponta deste
+-- CHECK e JÁ FICOU TRÊS VALORES ATRÁS DO BANCO sem nada falhar. Kind novo aqui
+-- = kind novo lá, na mesma mudança. Está sendo feito neste commit.
+
+alter table public.agent_inbox_items
+  drop constraint if exists agent_inbox_items_kind_check;
+
+alter table public.agent_inbox_items
+  add constraint agent_inbox_items_kind_check check (
+    kind = any (array[
+      'qr_rescan',
+      'job_dead',
+      'event_dead',
+      'budget_exceeded',
+      'handoff',
+      'promotion_review',
+      'judge_unaligned',
+      'followup_dead',
+      'snooze_expired',
+      'next_action_ambiguous',
+      'risk_backlog_seeded',
+      'other'
+    ]::text[])
+  );
+
+-- ---- detected_at é carimbo do banco (migration 0081) ----
+-- 0081 — `detected_at` deixa de ser dado do cliente e vira CARIMBO do banco
+--
+-- O DEFEITO, encontrado rodando o observador de travessia (peça 5) e não por
+-- inspeção: `since` deriva de `last_activity_at`, que o trigger carimba com o
+-- `now()` do BANCO. `detected_at` vinha do processo Node. Medido nesta máquina:
+-- **o banco está 2 segundos à frente**. Um negócio tocado no instante anterior à
+-- passada do worker produzia `since > detected_at`, violava
+-- `crm_lead_risk_states_since_no_passado`, e o worker INTEIRO abortava.
+--
+-- Omitir a coluna no `upsert` NÃO resolve, e é o detalhe que engana: o default
+-- só se aplica no INSERT. No UPDATE — que é o caminho de toda travessia depois
+-- da primeira — a coluna mantém o valor ANTIGO, e aí o `since` novo fica maior
+-- que um `detected_at` de dias atrás. Pior que o caso do relógio: acontece
+-- SEMPRE, não só na janela de dois segundos.
+--
+-- A constraint estava certa e pegou o que eu não teria visto. O conserto não é
+-- afrouxá-la: é tirar do cliente a chance de errar. `detected_at` passa a ser
+-- carimbado pelo banco em TODA escrita, como `updated_at` — quem escreve não
+-- decide quando percebeu, o banco decide.
+--
+-- ⚠️ A LIÇÃO É MAIOR QUE A COLUNA: `since` e `detected_at` são comparados por um
+-- CHECK, então TÊM de vir do mesmo relógio. O relógio do processo continua
+-- classificando (`classifyRisk` compara janelas de HORAS, onde segundos não
+-- mudam bucket); o CHECK compara INSTANTES, onde mudam. Grandezas diferentes
+-- toleram precisões diferentes, e confundir as duas foi exatamente o defeito.
+
+create or replace function public.fn_carimba_detected_at()
+  returns trigger
+  language plpgsql
+  set search_path to 'public', 'pg_temp'
+as $function$
+begin
+  new.detected_at := now();
+  new.updated_at := now();
+  return new;
+end$function$;
+
+comment on function public.fn_carimba_detected_at() is
+  'detected_at é quando o BANCO percebeu, nunca quando o processo achou que percebeu. Ver migration 0081: com o valor vindo do cliente, a deriva de relógio violava o CHECK since <= detected_at e derrubava o worker inteiro.';
+
+drop trigger if exists trg_crm_lead_risk_states_detected_at on public.crm_lead_risk_states;
+create trigger trg_crm_lead_risk_states_detected_at
+  before insert or update on public.crm_lead_risk_states
+  for each row
+  execute function public.fn_carimba_detected_at();
+
+-- ---- proposta de reativação com prazo (migration 0082) ----
+-- 0082 — a proposta de reativação, com PRAZO e destino
+--
+-- O cenário 23 fecha o ciclo da wave 7: o negócio esfria (0078-0081), alguém
+-- decide reativá-lo, o agente envia, a atividade fica registrada e o estado
+-- volta ao normal.
+--
+-- ⚠️ O BLOCO OBRIGATÓRIO, e ele é RECURSIVO: a wave existe para "esfriando"
+-- virar DEMANDA, e a demanda que ela cria TAMBÉM PODE MORRER. Proposta de
+-- reativação que ninguém decide fica pendente para sempre, e o negócio volta a
+-- ser card parado AGORA COM UM BOTÃO EM CIMA — que é pior que antes: card
+-- parado sem nada se lê como abandono; com proposta pendente SIMULA ATENÇÃO, e
+-- simulação de atendimento ADIA a intervenção humana em vez de provocá-la.
+--
+-- Daí `expires_at` ser NOT NULL: não existe proposta sem prazo nesta tabela, e
+-- é o banco que garante. No vencimento ela sai do card e vira item de caixa —
+-- demanda sem dono não mora no Kanban.
+--
+-- ⚠️ POR QUE NÃO REUSAR `lead_state.next_action`: ela é por CONTATO (unique
+-- organization_id, contact_id) e o risco é por NEGÓCIO — um contato com dois
+-- negócios, um esfriando e outro quente, teria uma proposta só para os dois. E
+-- é texto livre, sem estado nem prazo. Caberia à força, distorcendo as duas
+-- coisas; a decisão é registrada aqui para ninguém "simplificar" depois.
+--
+-- ⚠️ O ENVIO NÃO NASCE AQUI. Aceitar a proposta dispara o caminho que já existe
+-- (`cron_jobs` + o motor de follow-up). Esta tabela guarda a DECISÃO, não a
+-- mensagem — criar um segundo caminho de envio seria o mesmo erro de ter duas
+-- definições de "esfriando".
+
+create table if not exists public.crm_lead_reactivations (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid not null references public.crm_leads(id) on delete cascade,
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  status text not null default 'pending',
+  -- Carimbados pelo BANCO, nunca pelo processo: a 0081 custou um worker
+  -- abortando inteiro porque `since` vinha do banco e `detected_at` do Node,
+  -- com 2 segundos de deriva entre eles. Instantes comparados entre si vêm do
+  -- mesmo relógio.
+  proposed_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  -- O texto que o agente enviaria. É proposta do AGENTE — texto de máquina —,
+  -- não campo do negócio: vale a mesma regra do `reason` da timeline, e nenhum
+  -- dado do lead entra aqui por cópia.
+  draft text,
+  decided_at timestamptz,
+  decided_by_user_id uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+comment on table public.crm_lead_reactivations is
+  'Proposta de reativação de negócio esfriado (wave 7, cenário 23). SEMPRE com prazo: proposta que ninguém decide vira card parado com botão em cima, que simula atenção e adia a intervenção humana. No vencimento sai do card e vira item de caixa.';
+
+alter table public.crm_lead_reactivations
+  drop constraint if exists crm_lead_reactivations_status_check;
+alter table public.crm_lead_reactivations
+  add constraint crm_lead_reactivations_status_check check (
+    status = any (array['pending', 'accepted', 'dismissed', 'expired']::text[])
+  );
+
+-- Prazo no futuro em relação à proposta. Trava o erro de nascer vencida — que
+-- criaria um item de caixa no primeiro tick e ninguém entenderia de onde veio.
+alter table public.crm_lead_reactivations
+  drop constraint if exists crm_lead_reactivations_prazo_no_futuro;
+alter table public.crm_lead_reactivations
+  add constraint crm_lead_reactivations_prazo_no_futuro check (expires_at > proposed_at);
+
+-- Decisão e decisor andam juntos: status decidido SEM `decided_at` é registro
+-- que não sabe dizer quando aconteceu, e a timeline depende dessa resposta.
+alter table public.crm_lead_reactivations
+  drop constraint if exists crm_lead_reactivations_decisao_datada;
+alter table public.crm_lead_reactivations
+  add constraint crm_lead_reactivations_decisao_datada check (
+    (status = 'pending' and decided_at is null)
+    or (status <> 'pending' and decided_at is not null)
+  );
+
+-- UMA proposta viva por negócio. Índice parcial: propostas já decididas ficam
+-- como histórico e não bloqueiam a próxima — o negócio pode esfriar de novo, e
+-- impedir isso deixaria o segundo esfriamento sem proposta nenhuma.
+create unique index if not exists uq_crm_lead_reactivations_uma_viva
+  on public.crm_lead_reactivations (lead_id)
+  where status = 'pending';
+
+-- O worker de vencimento varre por aqui.
+create index if not exists idx_crm_lead_reactivations_vencendo
+  on public.crm_lead_reactivations (organization_id, expires_at)
+  where status = 'pending';
+
+alter table public.crm_lead_reactivations enable row level security;
+
+drop policy if exists tenant_isolation_crm_lead_reactivations_all on public.crm_lead_reactivations;
+create policy tenant_isolation_crm_lead_reactivations_all on public.crm_lead_reactivations
+  for all
+  using (organization_id in (select fn_user_org_ids()))
+  with check (organization_id in (select fn_user_org_ids()));
+
+-- `proposed_at` e `updated_at` são do banco, como na 0081.
+create or replace function public.fn_carimba_reativacao()
+  returns trigger
+  language plpgsql
+  set search_path to 'public', 'pg_temp'
+as $function$
+begin
+  if tg_op = 'INSERT' then
+    new.proposed_at := now();
+  end if;
+  new.updated_at := now();
+  return new;
+end$function$;
+
+drop trigger if exists trg_crm_lead_reactivations_carimbo on public.crm_lead_reactivations;
+create trigger trg_crm_lead_reactivations_carimbo
+  before insert or update on public.crm_lead_reactivations
+  for each row
+  execute function public.fn_carimba_reativacao();
+
+-- DENTRO da publicação de realtime, pela mesma regra da 0078: proposta nascendo
+-- ou vencendo é MUDANÇA DE ESTADO que o card precisa mostrar sem reload —
+-- não é telemetria.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+     where pubname = 'supabase_realtime'
+       and schemaname = 'public'
+       and tablename = 'crm_lead_reactivations'
+  ) then
+    execute 'alter publication supabase_realtime add table public.crm_lead_reactivations';
+  end if;
+end $$;
+
+-- ---- kind de caixa para reativação vencida (migration 0083) ----
+-- 0083 — a proposta de reativação vencida tem PARA ONDE IR
+--
+-- Sem este kind, o vencimento seria uma linha de banco e nada mais: a proposta
+-- sai do card e desaparece. "Some do card" resolve a simulação de atenção e
+-- cria o problema anterior de volta — o negócio parado sem ninguém sabendo.
+--
+-- A demanda que a wave criou não pode morrer por silêncio, e é EXATAMENTE a
+-- mesma forma da promessa cujo prazo depende de terceiro: sem fallback
+-- declarado, ela não é quebrada por decisão — ELA EXPIRA SOZINHA E NINGUÉM
+-- PERCEBE QUE DECIDIU. O item de caixa é o fallback, e ele tem dono e ação
+-- nomeada porque item sem ação é o ruído que a doutrina proíbe.
+--
+-- ⚠️ O `InboxKind` em `lib/agent-engine/db/repository.ts` e o
+-- `Record<InboxKind, string>` em `lib/ai/agent-inbox-copy.ts` são as outras
+-- pontas deste CHECK. Kind novo aqui = kind novo nos dois, no mesmo commit —
+-- e agora o invariante `vocabulario-banco-x-typescript` LÊ o arquivo de
+-- verdade, então esquecer não passa mais em silêncio.
+
+alter table public.agent_inbox_items
+  drop constraint if exists agent_inbox_items_kind_check;
+
+alter table public.agent_inbox_items
+  add constraint agent_inbox_items_kind_check check (
+    kind = any (array[
+      'qr_rescan',
+      'job_dead',
+      'event_dead',
+      'budget_exceeded',
+      'handoff',
+      'promotion_review',
+      'judge_unaligned',
+      'followup_dead',
+      'snooze_expired',
+      'next_action_ambiguous',
+      'risk_backlog_seeded',
+      'reactivation_expired',
+      'other'
+    ]::text[])
+  );
+
+-- ---- agent_stage_hint (migration 0084) ----
+-- 0084 — o funil do AGENTE aprende a falar o vocabulário do TENANT
+--
+-- Dois vocabulários que hoje não se conhecem:
+--
+--   AGENTE    `lead_state.stage` — SETE valores fixos: new, contacted,
+--             qualifying, qualified, negotiating, won, lost;
+--   PIPELINE  `crm_stages` — arbitrários por tenant. Medidos neste banco:
+--             clínica  → Primeiro contato, Avaliação, Proposta enviada,
+--                        Negociação, Tratamento fechado, Perdido
+--             e-commerce → Carrinho abandonado, Aguardando pagamento, Pago,
+--                        Em separação, Enviado, Entregue, Pós-venda, Cancelado
+--
+-- Sem ponte, o agente que avança o próprio funil não move o card — e o board
+-- mostra um negócio parado num estágio que já não é verdade.
+--
+-- ⚠️ E A PONTE JÁ EXISTE PELA METADE: `crm_stages` tem `is_won` e `is_lost`.
+-- Dois dos sete já estão mapeados, por colunas booleanas. Esta migration NÃO
+-- cria um mecanismo novo — GENERALIZA um que existe incompleto. A consequência
+-- é o CHECK de coerência abaixo: sem ele, `is_won` e `agent_stage_hint`
+-- passariam a ser DUAS FONTES capazes de dizer coisas diferentes sobre o mesmo
+-- estágio, que é a família de defeito que esta entrega inteira encontrou seis
+-- vezes ("um lado mudou e o outro não acompanhou").
+--
+-- `null` é estado LEGÍTIMO e comum: "Em separação", "Pós-venda" e "Carrinho
+-- abandonado" não têm equivalente no funil do agente, e forçar um mapeamento
+-- seria inventar semântica que o tenant não declarou.
+
+alter table public.crm_stages
+  add column if not exists agent_stage_hint text;
+
+comment on column public.crm_stages.agent_stage_hint is
+  'A que passo do funil do AGENTE este estágio corresponde (lead_state.stage). NULL = não corresponde a nenhum, que é legítimo. Coerente com is_won/is_lost por CHECK — ver migration 0084.';
+
+alter table public.crm_stages
+  drop constraint if exists crm_stages_agent_stage_hint_check;
+alter table public.crm_stages
+  add constraint crm_stages_agent_stage_hint_check check (
+    agent_stage_hint is null
+    or agent_stage_hint = any (array[
+      'new', 'contacted', 'qualifying', 'qualified', 'negotiating', 'won', 'lost'
+    ]::text[])
+  );
+
+-- ⚠️ A COERÊNCIA COM O QUE JÁ EXISTIA. Um estágio marcado `is_won` que se
+-- anuncia como 'qualifying' faria o agente e o board discordarem sobre o mesmo
+-- lugar — e cada um estaria "certo" pela sua própria fonte. O CHECK torna a
+-- divergência IMPOSSÍVEL em vez de improvável.
+--
+-- Nos dois sentidos, de propósito: `is_won` sem hint é o estado de hoje (válido,
+-- e é como todos os clones começam), mas hint='won' num estágio que não é de
+-- ganho seria mentira na direção oposta.
+alter table public.crm_stages
+  drop constraint if exists crm_stages_hint_coerente_com_won_lost;
+alter table public.crm_stages
+  add constraint crm_stages_hint_coerente_com_won_lost check (
+    (agent_stage_hint <> 'won' or is_won)
+    and (agent_stage_hint <> 'lost' or is_lost)
+    and (not is_won or agent_stage_hint is null or agent_stage_hint = 'won')
+    and (not is_lost or agent_stage_hint is null or agent_stage_hint = 'lost')
+  );
+
+-- ⚠️ UM ESTÁGIO POR HINT, POR PIPELINE — e este índice é UNIQUE de propósito.
+--
+-- Eu ia tratar a ambiguidade no resolvedor ("dois estágios com o mesmo hint →
+-- recuse mover"). O schema já respondeu melhor: `uniq_crm_stages_pipeline_won` e
+-- `uniq_crm_stages_pipeline_lost` JÁ EXISTEM, com o mesmo desenho — parcial, e
+-- excluindo arquivados. O produto já decidiu que "dois lugares de ganho no mesmo
+-- funil" é impossível, não improvável; não havia razão para os outros cinco
+-- passos serem tratados com menos rigor que os dois.
+--
+-- E a diferença é grande: com o UNIQUE, o tenant DESCOBRE o erro ao configurar
+-- — o banco recusa na hora, com o estágio na frente dele. Com tratamento no
+-- resolvedor, ele descobriria meses depois, quando um negócio não se movesse e
+-- ninguém soubesse dizer por quê.
+--
+-- `is_archived = false` acompanha o precedente: estágio arquivado é histórico e
+-- não disputa o mapeamento com o que está em uso.
+create unique index if not exists uniq_crm_stages_pipeline_hint
+  on public.crm_stages (pipeline_id, agent_stage_hint)
+  where agent_stage_hint is not null and is_archived = false;
+
+-- ---- backfill do que JÁ ESTÁ DECIDIDO, e só dele ----
+-- `is_won`/`is_lost` são declaração explícita do tenant sobre aquele estágio;
+-- copiá-los para o hint não inventa nada. NENHUM outro estágio é adivinhado:
+-- inferir 'qualifying' de um nome como "Avaliação" seria o sistema decidindo
+-- semântica por semelhança de palavra, e erraria em português de outro nicho.
+update public.crm_stages
+   set agent_stage_hint = 'won'
+ where is_won and agent_stage_hint is null;
+
+update public.crm_stages
+   set agent_stage_hint = 'lost'
+ where is_lost and agent_stage_hint is null;
+
+-- ANALYZE: `ALTER TABLE` deixa o planner sem estatística e ele passa a errar a
+-- escolha de índice em consultas de crm_leads (medido no G4-04). Custa
+-- milissegundos numa tabela vazia.
+analyze public.crm_leads;

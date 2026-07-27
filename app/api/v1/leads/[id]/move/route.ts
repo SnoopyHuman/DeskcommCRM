@@ -16,6 +16,8 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { moveLeadSchema, validateRequest } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
+import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
+import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +64,7 @@ export async function POST(
   // Fetch target stage to validate same pipeline (P-01).
   const { data: stage, error: stageErr } = await supabase
     .from("crm_stages")
-    .select("id, pipeline_id")
+    .select("id, pipeline_id, name")
     .eq("id", input.stage_id)
     .maybeSingle();
 
@@ -124,6 +126,44 @@ export async function POST(
     .maybeSingle();
 
   const finalLead = fresh ?? lead;
+
+  // Wave 3 (CORE 2): esta é a rota que o BOARD usa — arrastar o card passa por
+  // aqui, não pelo moveLeadHandler. O emissor é o mesmo dos outros escritores
+  // (lib/leads/activity-emitter), para os quatro caminhos escreverem a mesma
+  // linha na timeline.
+  const { data: fromStage } = await supabase
+    .from("crm_stages")
+    .select("name")
+    .eq("id", lead.stage_id)
+    .maybeSingle();
+
+  const atividade = await emitLeadActivity(supabase, {
+    organizationId: lead.organization_id,
+    leadId,
+    contactId: (lead as { contact_id?: string | null }).contact_id ?? null,
+    type: "stage_changed",
+    sourceModule: "crm",
+    sourceId: leadId,
+    actor: { type: "user", id: user.id },
+    reason: stageChangeReason(fromStage?.name ?? null, stage.name),
+    payload: {
+      from_stage_id: lead.stage_id,
+      to_stage_id: input.stage_id,
+      pipeline_id: lead.pipeline_id,
+    },
+  });
+  if (!atividade.ok) {
+    // Mesma política do handler: mutação já ocorrida não bloqueia, mas o rastro
+    // perdido é contado em vez de sumir num log de processo.
+    await registraFalhaDeAtividade(supabase, {
+      organizationId: lead.organization_id,
+      leadId,
+      tipo: "stage_changed",
+      origem: "leads/[id]/move",
+      erro: atividade.error,
+      requestId,
+    });
+  }
 
   // Emit domain event (fire-and-forget; trigger NEVER does HTTP — workers do).
   await supabase

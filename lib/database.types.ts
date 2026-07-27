@@ -2007,48 +2007,67 @@ export type Database = {
       }
       crm_lead_activities: {
         Row: {
+          actor_agent_id: string | null
+          actor_kind: string | null
           contact_id: string | null
           created_at: string
           id: string
           lead_id: string
+          evidence: Json | null
           metadata: Json
           organization_id: string
           payload: Json
           performed_at: string
           performed_by_user_id: string | null
+          reason: string | null
           source_id: string | null
           source_module: string
           type: string
         }
         Insert: {
+          actor_agent_id?: string | null
+          actor_kind?: string | null
           contact_id?: string | null
           created_at?: string
           id?: string
           lead_id: string
+          evidence?: Json | null
           metadata?: Json
           organization_id: string
           payload?: Json
           performed_at?: string
           performed_by_user_id?: string | null
+          reason?: string | null
           source_id?: string | null
           source_module: string
           type: string
         }
         Update: {
+          actor_agent_id?: string | null
+          actor_kind?: string | null
           contact_id?: string | null
           created_at?: string
           id?: string
           lead_id?: string
+          evidence?: Json | null
           metadata?: Json
           organization_id?: string
           payload?: Json
           performed_at?: string
           performed_by_user_id?: string | null
+          reason?: string | null
           source_id?: string | null
           source_module?: string
           type?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "crm_lead_activities_actor_agent_id_fkey"
+            columns: ["actor_agent_id"]
+            isOneToOne: false
+            referencedRelation: "ai_agents"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "crm_lead_activities_contact_id_fkey"
             columns: ["contact_id"]
@@ -2139,11 +2158,14 @@ export type Database = {
           last_activity_at: string | null
           lost_reason: string | null
           organization_id: string
+          owner_agent_id: string | null
+          owner_kind: string | null
           owner_user_id: string | null
           pipeline_id: string
           position_in_stage: number
           source: string
           source_metadata: Json
+          stage_changed_at: string | null
           stage_id: string
           status: string
           tags: string[]
@@ -2166,11 +2188,14 @@ export type Database = {
           last_activity_at?: string | null
           lost_reason?: string | null
           organization_id: string
+          owner_agent_id?: string | null
+          owner_kind?: string | null
           owner_user_id?: string | null
           pipeline_id: string
           position_in_stage?: number
           source?: string
           source_metadata?: Json
+          stage_changed_at?: string | null
           stage_id: string
           status?: string
           tags?: string[]
@@ -2193,11 +2218,14 @@ export type Database = {
           last_activity_at?: string | null
           lost_reason?: string | null
           organization_id?: string
+          owner_agent_id?: string | null
+          owner_kind?: string | null
           owner_user_id?: string | null
           pipeline_id?: string
           position_in_stage?: number
           source?: string
           source_metadata?: Json
+          stage_changed_at?: string | null
           stage_id?: string
           status?: string
           tags?: string[]
@@ -2206,6 +2234,13 @@ export type Database = {
           value_cents?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "crm_leads_owner_agent_id_fkey"
+            columns: ["owner_agent_id"]
+            isOneToOne: false
+            referencedRelation: "ai_agents"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "crm_leads_contact_id_fkey"
             columns: ["contact_id"]

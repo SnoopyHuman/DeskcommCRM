@@ -3,8 +3,8 @@
  *
  * Daily cron (09:00 BRT / 12:00 UTC) — scans active lgpd_requests and fires
  * SLA alarms when requests are approaching / past their threshold:
- *   - customer_data_request  → alarm if received_at <= now - 5 days  (D+5)
- *   - customer_redact / store_redact → alarm if received_at <= now - 10 days (D+10)
+ *   - data_request  → alarm if received_at <= now - 5 days  (D+5)
+ *   - redact / store_redact → alarm if received_at <= now - 10 days (D+10)
  *
  * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET|INTERNAL_SECRET>` (fail-closed).
  * Audit: emits lgpd.sla_watcher_run after processing.
@@ -77,10 +77,10 @@ export async function GET(req: NextRequest): Promise<Response> {
     .not("status", "in", '("completed","failed")')
     .or(
       [
-        "and(request_type.eq.customer_data_request,received_at.lte." +
+        "and(request_type.eq.data_request,received_at.lte." +
           new Date(Date.now() - 5 * 86_400_000).toISOString() +
           ")",
-        "and(request_type.in.(customer_redact,store_redact),received_at.lte." +
+        "and(request_type.in.(redact,store_redact),received_at.lte." +
           new Date(Date.now() - 10 * 86_400_000).toISOString() +
           ")",
       ].join(","),
@@ -103,7 +103,7 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   for (const row of requests) {
     const threshold: AlarmThreshold =
-      row.request_type === "customer_data_request" ? "data_request_d5" : "redact_d10";
+      row.request_type === "data_request" ? "data_request_d5" : "redact_d10";
 
     // Extract org columns from the joined relation
     const orgData = (row as unknown as { organizations: OrgRow }).organizations;

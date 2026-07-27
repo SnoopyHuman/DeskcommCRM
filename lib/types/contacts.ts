@@ -33,6 +33,12 @@ export interface Contact {
  */
 export interface TimelineItem {
   id: string;
+  /**
+   * Declarado porque a rota SEMPRE pediu esta coluna. O tipo é que omitia — e
+   * omissão em contrato de borda não é neutra: some do portão de exaustividade
+   * e vira campo que ninguém sabe que existe.
+   */
+  organization_id: string;
   lead_id: string;
   contact_id: string | null;
   source_module: string;
@@ -42,4 +48,22 @@ export interface TimelineItem {
   metadata: Record<string, unknown>;
   performed_at: string;
   performed_by_user_id: string | null;
+  /** 0071 — quem agiu, por quê e com base em quê. */
+  actor_kind?: string | null;
+  actor_agent_id?: string | null;
+  reason?: string | null;
+  evidence?: Record<string, unknown> | null;
+}
+
+/**
+ * A linha COM o ator resolvido para exibição.
+ *
+ * Tipo separado de propósito: `actor_agent_name` e `actor_user_name` NÃO são
+ * colunas — são join feito na rota. Se morassem em `TimelineItem`, o portão de
+ * exaustividade (TIMELINE_COL_LIST) exigiria pedi-los no SELECT e reprovaria
+ * com razão. Coluna e derivado são coisas diferentes e o tipo diz qual é qual.
+ */
+export interface TimelineItemView extends TimelineItem {
+  actor_agent_name?: string | null;
+  actor_user_name?: string | null;
 }

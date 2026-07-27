@@ -50,8 +50,8 @@ function countdownLabel(dueAt: string | null, status: AdminLgpdStatus): string {
 }
 
 const TYPE_LABELS: Record<AdminLgpdRequestType, string> = {
-  customer_redact: "Anonimização cliente",
-  customer_data_request: "Solicitação de dados",
+  redact: "Anonimização cliente",
+  data_request: "Solicitação de dados",
   store_redact: "Anonimização tenant",
 };
 

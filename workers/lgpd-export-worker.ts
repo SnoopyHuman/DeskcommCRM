@@ -99,7 +99,7 @@ export async function processLgpdExport(event: EventRow): Promise<HandlerResult>
     };
   }
 
-  if (req.request_type !== "customer_data_request") {
+  if (req.request_type !== "data_request") {
     return {
       consumer_key: "lgpd-export-worker.v1",
       status: "skipped",

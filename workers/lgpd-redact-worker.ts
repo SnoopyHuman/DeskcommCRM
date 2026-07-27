@@ -127,7 +127,7 @@ export async function processLgpdRedact(event: EventRow): Promise<HandlerResult>
   }
 
   const wrongType = !(
-    req.request_type === "customer_redact" || req.request_type === "store_redact"
+    req.request_type === "redact" || req.request_type === "store_redact"
   );
   if (wrongType) {
     return {

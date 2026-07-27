@@ -1,7 +1,24 @@
 import type { Lead } from "@/lib/types/leads";
 
+/**
+ * Prefixo que marca um dono AGENTE no filtro (0070). O param de URL continua
+ * sendo `owner=` — humano é o uuid puro, agente é `agent:<uuid>`, e o board
+ * não precisa de dois seletores para a mesma pergunta ("de quem é isto?").
+ */
+export const AGENT_OWNER_PREFIX = "agent:";
+
+export function agentOwnerFilter(agentId: string): string {
+  return `${AGENT_OWNER_PREFIX}${agentId}`;
+}
+
+export function parseAgentOwnerFilter(value: string | undefined): string | null {
+  if (!value?.startsWith(AGENT_OWNER_PREFIX)) return null;
+  return value.slice(AGENT_OWNER_PREFIX.length) || null;
+}
+
 export interface LeadFilters {
-  ownerUserId?: string | "any" | "unassigned";
+  /** userId | `agent:<uuid>` | "any" | "unassigned" */
+  owner?: string | "any" | "unassigned";
   status?: "all" | "open" | "won" | "lost";
   tag?: string;
   search?: string;
@@ -22,7 +39,7 @@ export function filtersFromParams(
   const tag = sp.get("tag");
   const search = sp.get("q");
   return {
-    ownerUserId: owner ?? undefined,
+    owner: owner ?? undefined,
     status:
       status === "open" || status === "won" || status === "lost" || status === "all"
         ? status
@@ -35,7 +52,7 @@ export function filtersFromParams(
 
 export function filtersToParams(f: LeadFilters): string {
   const p = new URLSearchParams();
-  if (f.ownerUserId && f.ownerUserId !== "any") p.set("owner", f.ownerUserId);
+  if (f.owner && f.owner !== "any") p.set("owner", f.owner);
   if (f.status && f.status !== "all") p.set("status", f.status);
   if (f.tag) p.set("tag", f.tag);
   if (f.search?.trim()) p.set("q", f.search.trim());
@@ -48,14 +65,20 @@ export function applyFilters(leads: Lead[], f: LeadFilters): Lead[] {
   const search = f.search?.trim().toLowerCase() ?? "";
 
   return leads.filter((l) => {
-    if (f.ownerUserId === "unassigned" && l.owner_user_id !== null) return false;
+    // "Sem responsável" é sem dono NENHUM — lead de dono agente tem dono.
     if (
-      f.ownerUserId &&
-      f.ownerUserId !== "any" &&
-      f.ownerUserId !== "unassigned" &&
-      l.owner_user_id !== f.ownerUserId
+      f.owner === "unassigned" &&
+      (l.owner_user_id !== null || l.owner_agent_id !== null)
     )
       return false;
+    if (f.owner && f.owner !== "any" && f.owner !== "unassigned") {
+      const agentId = parseAgentOwnerFilter(f.owner);
+      if (agentId) {
+        if (l.owner_agent_id !== agentId) return false;
+      } else if (l.owner_user_id !== f.owner) {
+        return false;
+      }
+    }
     if (f.status && f.status !== "all" && l.status !== f.status) return false;
     if (f.tag && !l.tags.includes(f.tag)) return false;
     if (

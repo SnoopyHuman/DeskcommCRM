@@ -1,8 +1,8 @@
 "use client";
-import { useEffect } from "react";
+import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { createClient } from "@/lib/supabase/browser";
+import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
 import type { AlertKind } from "@/app/api/v1/admin/dashboard/kpis/route";
 
 const KIND_LABELS: Record<AlertKind, string> = {
@@ -20,23 +20,21 @@ interface AlertBroadcast {
 export function useAlertsRealtime() {
   const qc = useQueryClient();
 
-  useEffect(() => {
-    const supabase = createClient();
-    const channel = supabase
-      .channel("alerts-platform")
-      .on("broadcast", { event: "*" }, (payload: { payload?: AlertBroadcast }) => {
-        const data = payload?.payload;
-        const kind = data?.kind;
-        const label = kind ? (KIND_LABELS[kind] ?? kind) : "alerta";
-        toast.warning(`Novo ${label}`, {
-          description: data?.message,
-        });
-        qc.invalidateQueries({ queryKey: ["admin", "dashboard", "kpis"] });
-      })
-      .subscribe();
+  const onChange = useCallback(
+    (payload: unknown) => {
+      const data = (payload as { payload?: AlertBroadcast } | null)?.payload;
+      const kind = data?.kind;
+      const label = kind ? (KIND_LABELS[kind] ?? kind) : "alerta";
+      toast.warning(`Novo ${label}`, { description: data?.message });
+      qc.invalidateQueries({ queryKey: ["admin", "dashboard", "kpis"] });
+    },
+    [qc],
+  );
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [qc]);
+  // Pelo hook compartilhado, e não por `.channel()` cru: o cookie de sessão é
+  // httpOnly, então o supabase-js do browser não enxerga a sessão e assina como
+  // ANÔNIMO — canal que recebe "ok", loga "subscribed" e nunca entrega evento.
+  // A correção (24b9ec2) mora em `useRealtimeChannel`, que chama `setAuth` antes
+  // do `subscribe`; quem abre canal direto ficou de fora dela.
+  useRealtimeChannel({ name: "alerts-platform", broadcast: { event: "*" }, onChange });
 }

@@ -62,6 +62,7 @@ function contextResult(overrides: Partial<LeadContextResult & { ok: true }> = {}
       lead_id: input.leadId,
       contact: { name: "Rafael", phone: "+551199", email: null, tags: [], is_blocked: false },
       conversation_id: input.conversationId,
+      last_human_decision: null,
       messages: [
         { direction: "inbound", body: "Oi, quero saber o preço do produto X.", sent_at: "2026-07-22T10:00:00Z" },
       ],
@@ -119,6 +120,7 @@ describe("generateDraftReply", () => {
           lead_id: input.leadId,
           contact: { name: "Rafael", phone: null, email: null, tags: [], is_blocked: true },
           conversation_id: input.conversationId,
+          last_human_decision: null,
           messages: [],
         },
       }),
@@ -166,6 +168,7 @@ describe("generateDraftReply", () => {
           lead_id: input.leadId,
           contact: { name: "Rafael", phone: null, email: null, tags: [], is_blocked: false },
           conversation_id: input.conversationId,
+          last_human_decision: null,
           messages: [],
         },
       }),
@@ -193,5 +196,63 @@ describe("generateDraftReply", () => {
     const result = await generateDraftReply(db, llmCfg, crmCfg, input);
 
     expect(result).toEqual({ ok: false, reason: "empty" });
+  });
+});
+
+describe("o rascunho conhece a decisão do vendedor", () => {
+  /** O `system` que efetivamente foi ao modelo — é o que está sob nosso controle. */
+  async function systemGerado(
+    decisao: { action: string; decision: "approved" | "dismissed"; at: string } | null,
+  ): Promise<string> {
+    mockLoadAgent.mockResolvedValue(AGENT);
+    const base = contextResult() as Extract<LeadContextResult, { ok: true }>;
+    mockGetLeadContext.mockResolvedValue({
+      ...base,
+      context: { ...base.context, last_human_decision: decisao },
+    });
+    mockRunModelCall.mockResolvedValue({
+      result: { text: "Claro! Segue o valor." },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      costCents: 1,
+      latencyMs: 1,
+    } as never);
+
+    await generateDraftReply(db, llmCfg, crmCfg, input);
+    const chamada = mockRunModelCall.mock.calls[0]?.[2] as { system: string };
+    return chamada.system;
+  }
+
+  it("proposta DESCARTADA entra como instrução de NÃO repropor", async () => {
+    // O caso que fecha a promessa da Wave 4: sem isto, o vendedor recusa uma
+    // proposta, pede um rascunho, e o rascunho sugere o que ele acabou de negar
+    // — escrito COMO ELE, sem disclosure. O botão "Ignorar" viraria mentira.
+    const system = await systemGerado({
+      action: "ligar para o Carlos amanhã",
+      decision: "dismissed",
+      at: "2026-07-25T10:00:00Z",
+    });
+    expect(system).toContain("DESCARTOU");
+    expect(system).toContain("ligar para o Carlos amanhã");
+    expect(system).toMatch(/NÃO sugira/i);
+  });
+
+  it("proposta APROVADA entra como instrução de APOIAR, não de substituir", async () => {
+    const system = await systemGerado({
+      action: "enviar a proposta revisada",
+      decision: "approved",
+      at: "2026-07-25T10:00:00Z",
+    });
+    expect(system).toContain("APROVOU");
+    expect(system).toContain("enviar a proposta revisada");
+  });
+
+  it("sem decisão nenhuma o prompt NÃO ganha bloco vazio", async () => {
+    // Um "[DECISÃO DO VENDEDOR]" sem conteúdo gastaria contexto e ensinaria o
+    // modelo a preencher lacuna — pior que não dizer nada.
+    const system = await systemGerado(null);
+    expect(system).not.toContain("DECISÃO DO VENDEDOR");
+    expect(system).toContain("[MODO RASCUNHO]");
   });
 });

@@ -53,12 +53,25 @@ async function upsertLead(
     .eq("organization_id", orgId)
     .eq("title", title)
     .maybeSingle();
+  // 0070: `crm_leads_owner_kind_coherence` exige o trio coerente. Zerar só
+  // `owner_user_id` é rejeitado com 23514 — e um UPDATE sem checagem de erro
+  // falharia EM SILÊNCIO, deixando o fixture contaminado e o e2e vermelho sem
+  // causa aparente. Foi exatamente o que aconteceu na linha de base da Wave 0.
+  const owner = {
+    owner_user_id: ownerUserId,
+    owner_agent_id: null,
+    owner_kind: ownerUserId === null ? null : "user",
+  };
+
   if (existing) {
     const id = (existing as { id: string }).id;
-    await admin
+    const { error: updateError } = await admin
       .from("crm_leads")
-      .update({ owner_user_id: ownerUserId, stage_id: stageId } as never)
+      .update({ ...owner, stage_id: stageId } as never)
       .eq("id", id);
+    if (updateError) {
+      throw new Error(`update lead "${title}": ${updateError.code} — ${updateError.message}`);
+    }
     console.log(`[seed] lead existing "${title}": ${id}`);
     return id;
   }
@@ -69,7 +82,7 @@ async function upsertLead(
       pipeline_id: pipelineId,
       stage_id: stageId,
       title,
-      owner_user_id: ownerUserId,
+      ...owner,
       position_in_stage: position,
       source: "manual",
     } as never)

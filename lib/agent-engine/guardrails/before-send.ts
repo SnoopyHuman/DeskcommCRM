@@ -32,6 +32,7 @@ import type pg from 'pg';
 import type { ChannelSendResult } from '../channel-adapter';
 
 import type { Logger } from '../obs/logger';
+import { emitVetoActivity } from '@/lib/leads/veto-activity';
 import type { Queryable } from '../queue/queue';
 import { decidePacing } from '../pacing/engine';
 import type { PacingState } from '../pacing/engine';
@@ -404,6 +405,13 @@ export interface RunBeforeSendArgs {
   /** `contacts.is_blocked` lido no get_lead_context deste turno; OR com a leitura direta da fonte no gate stop. */
   optedOutThisTurn: boolean;
   /**
+   * Agente do turno (`ai_agents.id`), quando o chamador o conhece. Sem ele a
+   * atividade de veto entra como 'system' — com o lastro do trace, mas sem
+   * afirmar QUAL agente decidiu calar. Opcional de propósito: nem todo caminho
+   * de envio nasce de um agente identificado.
+   */
+  agentId?: string | null;
+  /**
    * channel_sessions.daily_message_limit do CRM (fonte única do cap absoluto). null =
    * ainda não lido do CRM no runtime → os degraus de warm-up (conservadores) seguram
    * o cap. Ponto de injeção: quando o drain expuser o limite da sessão, passar aqui.
@@ -546,7 +554,36 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
     // serializada) — o trace do VETO tem de sobreviver ao rollback abaixo. Nunca bloqueia
     // o message-plane: falha aqui vira log.error (o trace do logger já é o backup), não
     // exceção. ponytail: 1 insert por tentativa; se virar gargalo, batelar por run.
-    await persistTrace(args, trace, veto);
+    const traceId = await persistTrace(args, trace, veto);
+
+    // Wave 3 (CORE 2), cenário 11: o agente decidir NÃO falar é evento. Silêncio
+    // com motivo é informação; silêncio sem registro é abandono. Só o VETO entra
+    // — gate que passou é telemetria e fica na tabela de origem.
+    if (veto && traceId) {
+      try {
+        const r = await emitVetoActivity({
+          pool: args.pool,
+          organizationId: args.tenantId,
+          contactId: args.leadId,
+          traceId,
+          gate: veto.gate,
+          code: veto.code,
+          agentId: args.agentId ?? null,
+        });
+        if (!r.routed) {
+          args.log.info('veto sem negócio para pendurar: registrado no event_log', {
+            channel_session_id: args.channelSessionId,
+            reason: r.reason,
+          });
+        }
+      } catch (err) {
+        // A timeline do veto não pode derrubar o veto.
+        args.log.error('falha ao registrar atividade de veto (segue)', {
+          channel_session_id: args.channelSessionId,
+          error: err instanceof Error ? err.name : 'unknown',
+        });
+      }
+    }
 
     // Veto de LGPD (F4-09): escala à inbox do runtime (regra dura nº 13) para o DPO/comercial
     // regularizar. Escrita autônoma no pool (fora da tx serializada), como o trace — sobrevive
@@ -620,13 +657,14 @@ async function persistTrace(
   args: RunBeforeSendArgs,
   trace: GateTraceEntry[],
   veto: { gate: string; code: string } | null,
-): Promise<void> {
-  if (args.jobId === undefined) return;
+): Promise<string | null> {
+  if (args.jobId === undefined) return null;
   try {
-    await args.pool.query(
+    const { rows } = await args.pool.query<{ id: string }>(
       `insert into before_send_traces
          (organization_id, job_id, contact_id, channel_session_id, trace, vetoed_gate, vetoed_code)
-       values ($1, $2, $3, $4, $5, $6, $7)`,
+       values ($1, $2, $3, $4, $5, $6, $7)
+       returning id`,
       [
         args.tenantId,
         args.jobId,
@@ -637,11 +675,13 @@ async function persistTrace(
         veto?.code ?? null,
       ],
     );
+    return rows[0]?.id ?? null;
   } catch (err) {
     args.log.error('falha ao persistir trace de auditoria before_send (segue: logger é backup)', {
       channel_session_id: args.channelSessionId,
       error: err instanceof Error ? err.name : 'unknown',
     });
+    return null;
   }
 }
 

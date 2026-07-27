@@ -125,7 +125,7 @@ export async function POST(
 
   // Determine event type based on request_type
   const eventType =
-    request.request_type === "customer_data_request"
+    request.request_type === "data_request"
       ? "lgpd.data_request_received"
       : "lgpd.redact_received";
 

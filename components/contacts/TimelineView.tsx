@@ -7,8 +7,10 @@ import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import { useTimeline } from "@/hooks/contacts/useTimeline";
-import type { TimelineItem } from "@/lib/types/contacts";
+import type { TimelineItemView as TimelineItem } from "@/lib/types/contacts";
+import { activityLabel, actorName, actorShape } from "@/lib/leads/activity-vocabulary";
 
 interface Props {
   contactId: string;
@@ -23,39 +25,26 @@ const ICON_MAP: Record<string, PhosphorIcon> = {
   system: Gear,
 };
 
-const TYPE_LABELS: Record<string, string> = {
-  "message.inbound": "Mensagem recebida",
-  "message.outbound": "Mensagem enviada",
-  "lead.created": "Lead criado",
-  "lead.stage_changed": "Estágio alterado",
-  "lead.won": "Lead ganho",
-  "lead.lost": "Lead perdido",
-  "order.created": "Pedido criado",
-  "order.paid": "Pedido pago",
-  "order.cancelled": "Pedido cancelado",
-  "ai.responded": "IA respondeu",
-  "handoff.triggered": "Handoff ativado",
-  "system.contact_blocked_by_stop": "Contato bloqueou (STOP)",
-  "contact.anonymized": "Contato anonimizado",
-};
-
 function dayHeader(d: Date): string {
   if (isToday(d)) return "Hoje";
   if (isYesterday(d)) return "Ontem";
   return format(d, "dd/MM/yyyy", { locale: ptBR });
 }
 
+/**
+ * Fallback de corpo quando a linha não tem `reason` (histórico anterior ao
+ * barramento). Só devolve texto que uma PESSOA escreveu ou leria — nunca
+ * `JSON.stringify` do payload: era isso que colocava três uuids na tela onde
+ * devia estar "Movido de Avaliação para Proposta enviada". Sem texto legível,
+ * a linha fica só com o rótulo.
+ */
 function summarizePayload(p: Record<string, unknown>): string {
   if (!p) return "";
-  if (typeof p.body === "string") return String(p.body).slice(0, 200);
-  if (typeof p.text === "string") return String(p.text).slice(0, 200);
-  if (typeof p.summary === "string") return String(p.summary).slice(0, 200);
-  try {
-    const s = JSON.stringify(p);
-    return s.length > 200 ? s.slice(0, 200) + "…" : s;
-  } catch {
-    return "";
+  for (const campo of ["body", "text", "summary", "reason", "note"]) {
+    const v = p[campo];
+    if (typeof v === "string" && v.trim() !== "") return v.slice(0, 200);
   }
+  return "";
 }
 
 export function TimelineView({ contactId, types }: Props) {
@@ -115,24 +104,52 @@ export function TimelineView({ contactId, types }: Props) {
             <ul className="space-y-2">
               {items.map((it) => {
                 const Icon = ICON_MAP[it.source_module] ?? Gear;
-                const label = TYPE_LABELS[it.type] ?? it.type;
+                const label = activityLabel(it.type);
+                const corpo = (it.reason ?? "").trim() || summarizePayload(it.payload);
+                const forma = actorShape(it.actor_kind ?? null);
+                const quem = actorName(it.actor_kind ?? null, {
+                  agente: it.actor_agent_name,
+                  usuario: it.actor_user_name,
+                });
                 const time = format(new Date(it.performed_at), "HH:mm", { locale: ptBR });
                 return (
                   <li
                     key={it.id}
                     className="flex items-start gap-3 rounded-md border border-border bg-card p-3"
                   >
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+                    {/* Marcador por ator (BRIEFING §5): preenchido = humano,
+                        anel = agente, quadrado = sistema. Mesma geometria do
+                        OwnerBadge no card — forma, nunca cor. */}
+                    <div
+                      className={cn(
+                        "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center text-accent",
+                        forma === "filled" && "rounded-full bg-accent-soft",
+                        forma === "ring" && "rounded-full border border-accent bg-surface ring-1 ring-inset ring-accent/40",
+                        // Sistema, automação ou autor não registrado: o mesmo
+                        // tracejado do "Sem responsável" no card. Três formas nas
+                        // duas telas — quem distingue "automação" de "não sei
+                        // quem" é o texto ao lado, não um quarto desenho.
+                        forma === "dashed" && "rounded-full border border-dashed border-border-strong",
+                      )}
+                      aria-hidden
+                    >
                       <Icon size={16} weight="duotone" aria-hidden />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium">{label}</span>
+                        <span className="text-sm font-medium">
+                          {label}
+                          {quem && (
+                            <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                              · {quem}
+                            </span>
+                          )}
+                        </span>
                         <span className="text-xs text-muted-foreground">{time}</span>
                       </div>
-                      <p className="mt-1 truncate text-sm text-muted-foreground">
-                        {summarizePayload(it.payload)}
-                      </p>
+                      {corpo && (
+                        <p className="mt-1 truncate text-sm text-muted-foreground">{corpo}</p>
+                      )}
                     </div>
                   </li>
                 );

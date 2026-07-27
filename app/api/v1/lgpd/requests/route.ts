@@ -20,7 +20,7 @@ const querySchema = z.object({
     .enum(["received", "processing", "completed", "failed", "pending_review"])
     .optional(),
   type: z
-    .enum(["customer_redact", "customer_data_request", "store_redact"])
+    .enum(["redact", "data_request", "store_redact"])
     .optional(),
   sla_bucket: z.enum(["overdue", "critical", "warning", "ok"]).optional(),
   page: z.coerce.number().int().min(1).default(1),

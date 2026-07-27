@@ -19,14 +19,14 @@ function getMilestones(
   receivedAt: Date,
   requestType: string,
 ): { label: string; day: number }[] {
-  if (requestType === "customer_data_request") {
+  if (requestType === "data_request") {
     return [
       { label: "Recebido", day: 0 },
       { label: "Revisão intermediária", day: 5 },
       { label: "Entrega ao titular", day: 7 },
     ];
   }
-  // customer_redact / store_redact
+  // redact / store_redact
   return [
     { label: "Recebido", day: 0 },
     { label: "Processamento", day: 10 },

@@ -162,6 +162,8 @@ const createInputShape = {
   value_cents: z.number().int().nonnegative().optional(),
   currency: z.string().length(3).optional(),
   owner_user_id: z.string().uuid().optional(),
+  /** 0070: o agente pode nascer dono do negócio que ele mesmo abriu. */
+  owner_agent_id: z.string().uuid().optional(),
   expected_close_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -188,6 +190,7 @@ export const crmCreateLead: McpToolDefinition<typeof createInputShape> = {
       value_cents: input.value_cents ?? null,
       currency: input.currency ?? "BRL",
       owner_user_id: input.owner_user_id ?? null,
+      owner_agent_id: input.owner_agent_id ?? null,
       expected_close_date: input.expected_close_date ?? null,
       tags: input.tags ?? [],
       source: input.source ?? "ai_agent",
@@ -217,6 +220,8 @@ const updateInputShape = {
   value_cents: z.number().int().nonnegative().optional(),
   currency: z.string().length(3).optional(),
   owner_user_id: z.string().uuid().optional(),
+  /** 0070: transferir o negócio para (ou de) um agente — passa pelo mesmo helper. */
+  owner_agent_id: z.string().uuid().optional(),
   expected_close_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)

@@ -316,3 +316,49 @@
     border: 2px solid transparent;
   }
 }
+
+/* ---- Pulso de chegada no card do Kanban (CRM Vivo, Wave 3) --------------
+   Vivo é o que RESPONDE, não o que se agita: um pulso, uma vez, e cessa.
+   A animação não repete (sem `infinite`) — ficar animando é rejeição de review.
+
+   `prefers-reduced-motion: reduce` NÃO é o caminho degradado: o mesmo anel
+   aparece, só que parado. O card continua dizendo "acabei de mudar" para quem
+   desligou animação — e continua LEGÍVEL, que é o ponto (ver o media query).
+
+   BORDA, e não `box-shadow`: este overlay ocupa o card inteiro e o card é
+   `overflow-hidden`, então uma sombra externa (`0 0 0 2px`) seria recortada
+   justamente na faixa onde ela desenha. Borda com `box-sizing: border-box`
+   desenha para dentro da própria caixa e não depende do overflow do pai.
+   Provado na tela nos três cenários (claro, escuro, reduce) —
+   `evidence/wave3-pulso/`. */
+@keyframes deskcomm-card-pulse {
+  from {
+    border-color: var(--color-accent);
+  }
+  to {
+    border-color: transparent;
+  }
+}
+
+/* Overlay próprio, e não uma classe no card: o elemento é REMONTADO a cada
+   evento (key = contador de pulsos), e é a remontagem que faz a animação
+   recomeçar. Alternar classe no mesmo nó não reinicia animação em CSS. */
+.card-pulse {
+  animation: deskcomm-card-pulse var(--duration-slow) var(--ease-out) 1;
+  border: 2px solid transparent;
+  border-radius: inherit;
+  box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-pulse {
+    animation: none;
+    /* Anel ESTÁTICO, não fundo: no tema claro `--color-accent-soft` é cor
+       sólida (#e4ebe0), e um overlay sólido sobre o card inteiro deixaria quem
+       usa movimento reduzido 1,2s SEM LER o card. O caminho de acessibilidade
+       é para ser igual, não pior — então o aviso é o mesmo anel, só que parado.
+       Ele dura os PULSE_MS inteiros (useBoard.ts), NÃO os 320ms da animação:
+       a diferença entre os dois números é deliberada e está explicada lá. */
+    border-color: var(--color-accent);
+  }
+}

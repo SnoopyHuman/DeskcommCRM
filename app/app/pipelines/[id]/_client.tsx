@@ -35,7 +35,7 @@ export function PipelinePageClient({
   pipelineId: string;
   initialName: string;
 }) {
-  const { data, isLoading, error } = useBoard(pipelineId);
+  const { data, isLoading, error, pulses, realtimeStatus, seguranca } = useBoard(pipelineId);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -53,7 +53,27 @@ export function PipelinePageClient({
   const filteredLeads = data ? applyFilters(data.leads, filters) : [];
 
   return (
-    <div className="flex h-full flex-col gap-4">
+    <div
+      className="flex h-full flex-col gap-4"
+      // OBSERVÁVEL de propósito, e é a razão de existir desta linha: "a
+      // assinatura morreu" e "nada aconteceu" produzem o MESMO silêncio na
+      // tela, e sem este valor nem o produto nem o teste conseguem separar as
+      // duas famílias de causa. Com ele, quem investiga olha DURANTE a rodada
+      // que falha: `subscribed` manda procurar a montante (entrega, filtro, ou
+      // o evento nunca saiu); `channel_error`/`timed_out`/`closed` já é a
+      // resposta.
+      //
+      // Ainda NÃO religa — religar é desenho e merece bloco próprio. Isto aqui
+      // é só parar de descartar o que já era calculado.
+      data-realtime-status={realtimeStatus.toLowerCase()}
+      // A rede de segurança fica OBSERVÁVEL pelo mesmo motivo do status do
+      // canal: "a entrega morreu" e "nada aconteceu" têm a mesma aparência, que
+      // é silêncio. Aqui o número de divergências é a diferença entre os dois —
+      // e é o sinal que faltava para uma verificação poder APROVAR, e não só
+      // reprovar.
+      data-refetch-divergencias={seguranca.divergencias}
+      data-refetch-em={seguranca.ultimaVerificacao ?? ""}
+    >
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">
           {data?.pipeline.name ?? initialName}
@@ -85,6 +105,7 @@ export function PipelinePageClient({
           pipelineId={pipelineId}
           stages={data.stages}
           leads={filteredLeads}
+          pulses={pulses}
           pipeline={data.pipeline}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}

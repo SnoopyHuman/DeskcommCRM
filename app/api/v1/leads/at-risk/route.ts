@@ -17,6 +17,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import {
   classifyRisk,
   compareRisk,
+  resolveStageWindow,
   RISK_COLD_HOURS,
   type RiskBucket,
 } from "@/lib/leads/risk-radar";
@@ -40,6 +41,12 @@ export interface AtRiskLead {
   contact_id: string | null;
   contact_name: string | null;
   owner_user_id: string | null;
+  /** Dono do NEGÓCIO (0070) — humano, agente ou ninguém. */
+  owner_kind: "user" | "ai" | null;
+  owner_agent_id: string | null;
+  /** Nome do agente dono, resolvido mesmo se ele estiver desativado. */
+  owner_agent_name: string | null;
+  /** Quem atende a CONVERSA — grandeza diferente de quem é dono do negócio. */
   assignee_kind: "user" | "ai" | null;
   last_activity_at: string | null;
   hours_since_activity: number;
@@ -73,7 +80,9 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   const { data: leads, error: leadsErr } = await admin
     .from("crm_leads")
-    .select("id, title, contact_id, owner_user_id, last_activity_at, created_at, pipeline_id")
+    .select(
+      "id, title, contact_id, owner_user_id, owner_kind, owner_agent_id, stage_id, last_activity_at, created_at, pipeline_id",
+    )
     .eq("organization_id", org.orgId)
     .eq("status", "open")
     .order("last_activity_at", { ascending: true, nullsFirst: true })
@@ -83,6 +92,45 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const rows = leads ?? [];
+
+  // Dono AGENTE (0070). Sem isto, um lead que a IA trabalha há dezenas de turnos
+  // aparece no radar como "Sem dono" e um humano vai resgatar o que já está sendo
+  // tocado. Resolvido SEM filtrar is_active/archived_at, pelo mesmo motivo do
+  // board: exibir quem é o dono é obrigatório mesmo com o agente desligado —
+  // quem filtra inativo é o picker de atribuição, não a exibição.
+  const agentIds = [
+    ...new Set(rows.map((l) => l.owner_agent_id).filter((a): a is string => a !== null)),
+  ];
+  const agentNameById = new Map<string, string>();
+  if (agentIds.length > 0) {
+    const { data: agents } = await admin
+      .from("ai_agents")
+      .select("id, name")
+      .eq("organization_id", org.orgId)
+      .in("id", agentIds);
+    for (const a of (agents ?? []) as Array<{ id: string; name: string }>) {
+      agentNameById.set(a.id, a.name);
+    }
+  }
+
+  // Janela de esfriamento POR ESTÁGIO (decisão §3.3): "sem resposta há 2 dias" é
+  // normal numa negociação e é abandono num agendamento. Uma fonte só —
+  // resolveStageWindow — para o radar e o card nunca discordarem do mesmo lead.
+  const stageIds = [...new Set(rows.map((l) => l.stage_id).filter(Boolean))];
+  const windowByStage = new Map<string, ReturnType<typeof resolveStageWindow>>();
+  if (stageIds.length > 0) {
+    const { data: stages } = await admin
+      .from("crm_stages")
+      .select("id, expected_duration_hours")
+      .eq("organization_id", org.orgId)
+      .in("id", stageIds);
+    for (const s of (stages ?? []) as Array<{
+      id: string;
+      expected_duration_hours: number | null;
+    }>) {
+      windowByStage.set(s.id, resolveStageWindow(s));
+    }
+  }
   const contactIds = [...new Set(rows.map((l) => l.contact_id).filter((c): c is string => c !== null))];
 
   // Follow-ups agendados no futuro por contato (mais próximo primeiro) — "em voo".
@@ -138,6 +186,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       lastActivityAt: new Date(lastActivity),
       now,
       inFlight: nextFollowupAt !== null,
+      window: windowByStage.get(l.stage_id) ?? resolveStageWindow(null),
     });
     if (!onRadar || hoursSinceActivity < min_hours) continue;
     const conv = l.contact_id ? convByContact.get(l.contact_id) ?? null : null;
@@ -148,6 +197,9 @@ export async function GET(req: NextRequest): Promise<Response> {
       contact_id: l.contact_id,
       contact_name: l.contact_id ? nameByContact.get(l.contact_id) ?? null : null,
       owner_user_id: l.owner_user_id,
+      owner_kind: l.owner_kind,
+      owner_agent_id: l.owner_agent_id,
+      owner_agent_name: l.owner_agent_id ? agentNameById.get(l.owner_agent_id) ?? null : null,
       assignee_kind: conv?.assignee_kind ?? null,
       last_activity_at: l.last_activity_at,
       hours_since_activity: Math.round(hoursSinceActivity),

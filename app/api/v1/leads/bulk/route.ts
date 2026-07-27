@@ -14,6 +14,9 @@ import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { resolveOwnerPatch } from "@/lib/leads/owner-patch";
+import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
+import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
 import { bulkLeadActionSchema, validateRequest } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -137,6 +140,57 @@ export async function POST(req: NextRequest): Promise<Response> {
       // consumes per-entity events) fires for bulk moves too — mirrors
       // moveLeadHandler's payload. Skip leads already at the target stage.
       const movedIds = new Set((data ?? []).map((r) => r.id as string));
+
+      // Wave 3 (CORE 2): mover 30 cards de uma vez é 30 mudanças de estado —
+      // cada uma entra no barramento, senão o lote inteiro fica invisível na
+      // timeline e a operação em massa vira o buraco por onde a atividade some.
+      const nomesEstagio = new Map<string, string>();
+      const { data: stageRows } = await supabase
+        .from("crm_stages")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .in("id", [input.params.stage_id, ...visible.map((r) => r.stage_id as string)]);
+      for (const s of (stageRows ?? []) as Array<{ id: string; name: string }>) {
+        nomesEstagio.set(s.id, s.name);
+      }
+
+      await Promise.all(
+        visible
+          .filter((row) => movedIds.has(row.id) && row.stage_id !== input.params.stage_id)
+          .map(async (row) => {
+            const r = await emitLeadActivity(supabase, {
+              organizationId,
+              leadId: row.id as string,
+              type: "stage_changed",
+              sourceModule: "crm",
+              sourceId: row.id as string,
+              actor: { type: "user", id: user.id },
+              reason: stageChangeReason(
+                nomesEstagio.get(row.stage_id as string) ?? null,
+                nomesEstagio.get(input.params.stage_id) ?? null,
+              ),
+              payload: {
+                from_stage_id: row.stage_id,
+                to_stage_id: input.params.stage_id,
+                pipeline_id: row.pipeline_id,
+                bulk: true,
+              },
+            });
+            if (!r.ok) {
+              // O bulk é o pior caso dos três: N leads movidos, e uma falha de
+              // atividade some junto com as outras N-1 que deram certo. Sem o
+              // aviso, o buraco na timeline não tem nem tamanho conhecido.
+              await registraFalhaDeAtividade(supabase, {
+                organizationId: row.organization_id,
+                leadId: row.id,
+                tipo: "stage_changed",
+                origem: "leads/bulk",
+                erro: r.error,
+                requestId,
+              });
+            }
+          }),
+      );
       await Promise.all(
         visible
           .filter((row) => movedIds.has(row.id) && row.stage_id !== input.params.stage_id)
@@ -162,11 +216,24 @@ export async function POST(req: NextRequest): Promise<Response> {
       break;
     }
     case "assign": {
+      // 0070: o trio de posse vem do helper compartilhado. Escrever só
+      // owner_user_id aqui quebrava de dois jeitos: lote com algum lead de dono
+      // AGENTE estourava 23514 e derrubava a operação inteira; e lead sem dono
+      // ganhava dono sem owner_kind (drift silencioso).
+      const owner = resolveOwnerPatch({ owner_user_id: input.params.owner_user_id });
+      if (!owner.ok || !owner.patch) {
+        return fail(
+          "validation_failed",
+          "Um lead tem um dono: informe owner_user_id OU owner_agent_id.",
+          422,
+          { requestId },
+        );
+      }
       const patch: Record<string, unknown> = {
-        owner_user_id: input.params.owner_user_id,
+        ...owner.patch,
         updated_at: nowIso,
       };
-      if (input.params.owner_user_id !== null) {
+      if (owner.patch.owner_kind !== null) {
         patch.assigned_at = nowIso;
       }
       const { data, error } = await supabase

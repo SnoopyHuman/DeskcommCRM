@@ -12,6 +12,16 @@
  */
 import type pg from 'pg';
 
+/**
+ * O vocabulário dos avisos do runtime. Espelha o CHECK de
+ * `agent_inbox_items.kind` — e o espelho é MECÂNICO: o invariante
+ * `tests/invariants/vocabulario-banco-x-typescript.test.ts` compara os dois
+ * conjuntos contra Postgres real, porque o compilador não enxerga o banco.
+ *
+ * Esta lista já ficou 3 valores atrás do banco (`judge_unaligned`,
+ * `followup_dead`, `next_action_ambiguous`) sem nada falhar. Quem adiciona um
+ * kind numa migration adiciona aqui na mesma mudança.
+ */
 export type InboxKind =
   | 'qr_rescan'
   | 'job_dead'
@@ -19,7 +29,12 @@ export type InboxKind =
   | 'budget_exceeded'
   | 'handoff'
   | 'promotion_review'
+  | 'judge_unaligned'
+  | 'followup_dead'
   | 'snooze_expired'
+  | 'next_action_ambiguous'
+  | 'risk_backlog_seeded'
+  | 'reactivation_expired'
   | 'other';
 
 export interface InboxItemRow {

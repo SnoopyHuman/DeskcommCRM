@@ -27,13 +27,13 @@ interface ApproveButtonProps {
 }
 
 const VARIANT_LABELS: Record<LgpdRequestType, { button: string; title: string; description: string }> = {
-  customer_data_request: {
+  data_request: {
     button: "Aprovar export",
     title: "Aprovar exportação de dados",
     description:
       "Ao confirmar, esta solicitação será colocada em fila para exportação dos dados do titular. A ação não pode ser desfeita.",
   },
-  customer_redact: {
+  redact: {
     button: "Aprovar anonimização",
     title: "Aprovar anonimização de contato",
     description:

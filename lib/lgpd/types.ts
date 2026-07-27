@@ -3,7 +3,22 @@
  * Mapped from docs/specs/01-spec-platform-base.md §8.1 and Spec 06 §5.6.
  */
 
-export type LgpdRequestType = "customer_redact" | "customer_data_request" | "store_redact";
+/**
+ * Os TRÊS valores que o banco aceita — `lgpd_requests_request_type_check`.
+ *
+ * A UI e as rotas usavam `customer_redact`/`customer_data_request`, que o CHECK
+ * REJEITA: todo pedido criado com esse vocabulário estourava no INSERT, e o
+ * filtro por tipo na tela nunca casava com nada. Se for preciso renomear, o
+ * caminho é migration primeiro, este tipo depois — nunca só aqui.
+ */
+export type LgpdRequestType = "data_request" | "redact" | "store_redact";
+
+/** Rótulo em pt-BR — fonte única, para as cinco telas não divergirem. */
+export const LGPD_REQUEST_TYPE_LABELS: Record<LgpdRequestType, string> = {
+  data_request: "Solicitação de dados",
+  redact: "Anonimização cliente",
+  store_redact: "Anonimização tenant",
+};
 
 export type LgpdScope = "contact" | "tenant";
 

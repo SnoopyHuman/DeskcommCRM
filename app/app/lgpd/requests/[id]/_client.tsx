@@ -20,8 +20,8 @@ interface Props {
 }
 
 const TYPE_LABELS: Record<LgpdRequestType, string> = {
-  customer_redact: "Anonimização cliente",
-  customer_data_request: "Solicitação de dados",
+  redact: "Anonimização cliente",
+  data_request: "Solicitação de dados",
   store_redact: "Anonimização tenant",
 };
 

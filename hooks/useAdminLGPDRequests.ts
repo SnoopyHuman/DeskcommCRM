@@ -8,7 +8,10 @@ import { apiClient } from "@/lib/api/client";
 
 export type AdminLgpdRiskLevel = "expired" | "at_risk" | "warning" | "ok";
 export type AdminLgpdStatus = "received" | "processing" | "completed" | "failed" | "pending_review";
-export type AdminLgpdRequestType = "customer_redact" | "customer_data_request" | "store_redact";
+// Alias do tipo canônico (lib/lgpd/types.ts): o admin e o app falam o MESMO
+// vocabulário do banco. Duas listas era como uma podia divergir sozinha.
+import type { LgpdRequestType } from "@/lib/lgpd/types";
+export type AdminLgpdRequestType = LgpdRequestType;
 
 export interface AdminLgpdRequest {
   id: string;

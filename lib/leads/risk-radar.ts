@@ -14,12 +14,48 @@ export type RiskBucket = "critico" | "em_risco" | "em_voo" | "em_dia";
 export const RISK_COLD_HOURS = 24;
 export const RISK_CRITICAL_HOURS = 72;
 
+/** Quantas horas de silêncio esfriam, e quantas tornam crítico, NESTE estágio. */
+export interface StageWindow {
+  coldHours: number;
+  criticalHours: number;
+}
+
+/**
+ * A janela de esfriamento sai do estágio (`crm_stages.expected_duration_hours`),
+ * não de uma constante global: "sem resposta há 2 dias" é normal numa
+ * negociação de contrato e é abandono num agendamento de consulta.
+ *
+ * Fallback nas constantes atuais quando o pipeline ainda não configurou a
+ * duração — o radar continua funcionando em quem nunca mexeu nisso. A razão
+ * crítico/frio (3×) é a mesma das constantes, para o significado dos buckets
+ * não mudar de estágio para estágio.
+ */
+export function resolveStageWindow(
+  stage?: { expected_duration_hours?: number | null } | null,
+): StageWindow {
+  const configured = stage?.expected_duration_hours;
+  const coldHours =
+    typeof configured === "number" && configured > 0 ? configured : RISK_COLD_HOURS;
+  return {
+    coldHours,
+    criticalHours: coldHours * (RISK_CRITICAL_HOURS / RISK_COLD_HOURS),
+  };
+}
+
 export interface RiskInput {
   /** last_activity_at do lead (ou created_at se nunca teve atividade). */
   lastActivityAt: Date;
   now: Date;
   /** há follow-up agendado no futuro (cron_jobs kind='at' enabled) para o contato. */
   inFlight: boolean;
+  /**
+   * Janela do estágio — OBRIGATÓRIA. Era opcional durante a transição, e
+   * opcional aqui significa "esquecer é silencioso": o chamador que não passa
+   * volta a classificar tudo pela janela global e o esfriamento de uma clínica
+   * vira o de um contrato. Quem não tem estágio à mão passa
+   * `resolveStageWindow(null)` e o fallback fica explícito na chamada.
+   */
+  window: StageWindow;
 }
 
 export interface RiskResult {
@@ -29,17 +65,18 @@ export interface RiskResult {
   onRadar: boolean;
 }
 
-export function classifyRisk({ lastActivityAt, now, inFlight }: RiskInput): RiskResult {
+export function classifyRisk({ lastActivityAt, now, inFlight, window }: RiskInput): RiskResult {
+  const { coldHours, criticalHours } = window;
   const hoursSinceActivity = Math.max(
     0,
     (now.getTime() - lastActivityAt.getTime()) / 3_600_000,
   );
   let bucket: RiskBucket;
-  if (hoursSinceActivity < RISK_COLD_HOURS) {
+  if (hoursSinceActivity < coldHours) {
     bucket = "em_dia";
   } else if (inFlight) {
     bucket = "em_voo";
-  } else if (hoursSinceActivity >= RISK_CRITICAL_HOURS) {
+  } else if (hoursSinceActivity >= criticalHours) {
     bucket = "critico";
   } else {
     bucket = "em_risco";

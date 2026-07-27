@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { DotsThree, PencilSimple, Users } from "@/lib/ui/icons";
 import { useWinLead, useEditLead } from "@/hooks/kanban/useUpdateLead";
 import { useAssignableMembers } from "@/hooks/inbox/useAssignableMembers";
+import { useAssignableAgents } from "@/hooks/kanban/useAssignableAgents";
+import { usePermission } from "@/hooks/auth/AuthProvider";
 import { LoseLeadDialog } from "./LoseLeadDialog";
 import { EditLeadDialog } from "./EditLeadDialog";
 import type { Lead } from "@/lib/types/leads";
@@ -28,11 +30,30 @@ export function KanbanCardActions({ lead, pipelineId }: KanbanCardActionsProps) 
   const [editOpen, setEditOpen] = useState(false);
   const winMutation = useWinLead(pipelineId);
   const editMutation = useEditLead(pipelineId);
-  const { data: members } = useAssignableMembers(true);
+  // spec 13 §4: escrita no funil é agent+ — viewer não reatribui (a rota
+  // PATCH também recusa; aqui é só não oferecer o que seria negado).
+  const canAssign = usePermission("pipeline.move_card");
+  const { data: members } = useAssignableMembers(canAssign);
+  // A rota já devolve só agente ativo e não arquivado — é o picker.
+  const { data: agents } = useAssignableAgents(canAssign);
 
-  const reassign = (ownerUserId: string | null) => {
+  const reassignToUser = (ownerUserId: string | null) => {
     if (ownerUserId === lead.owner_user_id) return;
     editMutation.mutate({ leadId: lead.id, patch: { owner_user_id: ownerUserId } });
+  };
+
+  /** Transferir para um agente: o handler zera o dono humano e deriva owner_kind. */
+  const reassignToAgent = (agentId: string) => {
+    if (agentId === lead.owner_agent_id) return;
+    editMutation.mutate({ leadId: lead.id, patch: { owner_agent_id: agentId } });
+  };
+
+  const clearOwner = () => {
+    if (lead.owner_user_id === null && lead.owner_agent_id === null) return;
+    editMutation.mutate({
+      leadId: lead.id,
+      patch: lead.owner_agent_id ? { owner_agent_id: null } : { owner_user_id: null },
+    });
   };
 
   return (
@@ -60,29 +81,49 @@ export function KanbanCardActions({ lead, pipelineId }: KanbanCardActionsProps) 
           >
             <PencilSimple size={14} className="mr-2" /> Editar
           </DropdownMenuItem>
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <Users size={14} className="mr-2" /> Responsável
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
-              <DropdownMenuItem
-                disabled={editMutation.isPending || lead.owner_user_id === null}
-                onSelect={() => reassign(null)}
-              >
-                Sem responsável
-              </DropdownMenuItem>
-              {(members ?? []).length > 0 && <DropdownMenuSeparator />}
-              {(members ?? []).map((m) => (
+          {canAssign && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Users size={14} className="mr-2" /> Responsável
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
                 <DropdownMenuItem
-                  key={m.user_id}
-                  disabled={editMutation.isPending || m.user_id === lead.owner_user_id}
-                  onSelect={() => reassign(m.user_id)}
+                  disabled={
+                    editMutation.isPending ||
+                    (lead.owner_user_id === null && lead.owner_agent_id === null)
+                  }
+                  onSelect={clearOwner}
                 >
-                  {m.full_name ?? "Sem nome"}
+                  Sem responsável
                 </DropdownMenuItem>
-              ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+                {(members ?? []).length > 0 && <DropdownMenuSeparator />}
+                {(members ?? []).map((m) => (
+                  <DropdownMenuItem
+                    key={m.user_id}
+                    disabled={editMutation.isPending || m.user_id === lead.owner_user_id}
+                    onSelect={() => reassignToUser(m.user_id)}
+                  >
+                    {m.full_name ?? "Sem nome"}
+                  </DropdownMenuItem>
+                ))}
+                {(agents ?? []).length > 0 && <DropdownMenuSeparator />}
+                {(agents ?? []).map((a) => (
+                  <DropdownMenuItem
+                    key={a.agent_id}
+                    disabled={editMutation.isPending || a.agent_id === lead.owner_agent_id}
+                    onSelect={() => reassignToAgent(a.agent_id)}
+                  >
+                    {a.name}
+                    {a.version_number != null && (
+                      <span className="ml-1.5 font-mono text-[10px] text-text-muted">
+                        v{a.version_number}
+                      </span>
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
           <DropdownMenuItem
             disabled={winMutation.isPending}
             onSelect={() => {

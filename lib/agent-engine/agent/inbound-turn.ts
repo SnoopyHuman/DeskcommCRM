@@ -98,6 +98,8 @@ import type { DisclosureMode } from '../guardrails/disclosure/template';
 import { decidePromise } from '../guardrails/promise/engine';
 import { loadPromiseTable } from '../guardrails/promise/table';
 import { classifyPromise } from '../guardrails/promise/semantic';
+import { diffCheckpoint } from '@/lib/leads/checkpoint-diff';
+import { emitAgentActivityForContact } from '@/lib/leads/agent-activity';
 import {
   JAILBREAK_ESCALATION_LEVEL,
   classifyJailbreak,
@@ -1528,7 +1530,59 @@ export async function runAgentTurn(
     { registry: deps.registry, log: runLog },
   );
   const content = parseCheckpointText(closing.result.text);
+
+  // Wave 3 (2.4): o checkpoint anterior é lido ANTES de gravar o novo — a
+  // timeline recebe o DIFF, nunca o snapshot. Emitir a cada turno encheria a
+  // tela com "a IA pensou" e enterraria a única linha que muda o que alguém
+  // faria a seguir.
+  const checkpointAnterior = await latestCheckpoint(pool, tenantId, leadId);
   await insertCheckpoint(pool, { tenantId, leadId, jobId: job.id, content });
+
+  const mudanca = diffCheckpoint(
+    checkpointAnterior
+      ? {
+          commitments: (checkpointAnterior.commitments ?? []) as string[],
+          objections: (checkpointAnterior.objections ?? []) as string[],
+          next_action: checkpointAnterior.next_action ?? null,
+          rolling_summary: checkpointAnterior.rolling_summary ?? null,
+        }
+      : null,
+    content,
+  );
+
+  if (mudanca.emit) {
+    try {
+      const r = await emitAgentActivityForContact({
+        pool,
+        organizationId: tenantId,
+        contactId: leadId,
+        type: "ai_turn",
+        sourceModule: "agent",
+        sourceId: job.id,
+        // O lastro é a chamada de modelo que PRODUZIU este checkpoint
+        // (llm_calls.id). Sem ele a linha entraria como 'system' e perderia a
+        // autoria justamente no evento mais "de IA" que existe.
+        ...(closing.callId ? { evidence: { llm_call_ids: [closing.callId] } } : {}),
+        ...(agentConfig?.agentId ? { agentId: agentConfig.agentId } : {}),
+        reason: mudanca.reason,
+        payload: {
+          added_commitments: mudanca.addedCommitments,
+          added_objections: mudanca.addedObjections,
+          next_action_changed: mudanca.nextActionChanged,
+        },
+      });
+      if (!r.routed) {
+        runLog.info('checkpoint sem negócio para pendurar: registrado no event_log', {
+          reason: r.reason,
+        });
+      }
+    } catch (err) {
+      // A timeline do turno não pode derrubar o turno.
+      runLog.error('falha ao registrar atividade de checkpoint (segue)', {
+        error: err instanceof Error ? err.name : 'unknown',
+      });
+    }
+  }
 
   // F3-11: divergência classificador×modelo. O classificador sugeriu um estágio; se o
   // modelo confirmou (via update_lead_state — a máquina F2-10) um estágio DIFERENTE, o

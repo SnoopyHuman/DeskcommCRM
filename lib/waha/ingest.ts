@@ -224,8 +224,28 @@ async function upsertConversation(
   return (data as string) ?? null;
 }
 
+/**
+ * Carimba a conversa com a mensagem que acabou de entrar.
+ *
+ * ⚠️ FALHA BAIXO, MAS CONTA — e a diferença entre as duas coisas é o motivo
+ * desta função existir com corpo próprio. A mensagem JÁ foi inserida quando
+ * chegamos aqui; bloquear a ingestão porque o carimbo falhou deixaria o
+ * histórico refém de uma coluna derivada. Então não se bloqueia.
+ *
+ * Mas `console.error` sozinho não é "falhar baixo": ele **não bloqueia e também
+ * não conta** (anti-pattern nº 14 do CLAUDE.md, e a mesma doutrina já escrita em
+ * `lib/leads/activity-write-failure.ts`). Log de servidor sem destino não vira
+ * alerta de ninguém — e o efeito prático é que "a RPC falha às vezes" nunca sai
+ * de OPINIÃO para NÚMERO. Em 25/07 isso custou caro: a suspeita de que esta
+ * chamada falhava foi levada a sério por horas, e não havia como medi-la porque
+ * cada falha tinha sumido no log de um processo que já não existia.
+ *
+ * O evento é o que torna a pergunta respondível: `select count(*) from event_log
+ * where event_type = 'whatsapp.conversation_mark_failed'`.
+ */
 async function markConversation(
   admin: Admin,
+  organizationId: string,
   convId: string,
   direction: "inbound" | "outbound",
   preview: string,
@@ -237,7 +257,29 @@ async function markConversation(
     p_preview: preview,
     p_at: at,
   } as never);
-  if (error) console.error("[waha.ingest] fn_mark_conversation_message failed", error.message);
+  if (!error) return;
+
+  const { error: erroAviso } = await admin.rpc("emit_event" as never, {
+    p_event_type: "whatsapp.conversation_mark_failed",
+    p_entity_kind: "conversation",
+    p_entity_id: convId,
+    // O preview NÃO entra no payload: ele é o texto da mensagem do cliente, e
+    // isto é registro operacional, não cópia de conteúdo. O que se precisa
+    // saber para agir é qual conversa, que sentido, e o erro.
+    p_payload: { direction, erro: error.message },
+    p_metadata: { severity: "warn" },
+    p_organization_id: organizationId,
+  } as never);
+
+  if (erroAviso) {
+    // Segunda linha de defesa: o próprio canal de aviso caiu. Aqui o log do
+    // processo é o que sobra — é para ESTE caso que ele existe, não como rotina.
+    console.error("[waha.ingest] o carimbo falhou E o aviso também", {
+      conversa: convId,
+      erro: error.message,
+      aviso: erroAviso.message,
+    });
+  }
 }
 
 /**
@@ -292,7 +334,7 @@ async function handleInbound(
   }
   if (insertErr?.code === "23505") return;
 
-  await markConversation(admin, conversationId, "inbound", previewFromMessage(p), now);
+  await markConversation(admin, session.organization_id, conversationId, "inbound", previewFromMessage(p), now);
 
   if (p.body && STOP_RX.test(p.body)) {
     await admin
@@ -423,7 +465,7 @@ async function handleOutboundFromUserPhone(
   }
   if (insertErr?.code === "23505") return;
 
-  await markConversation(admin, conversationId, "outbound", previewFromMessage(p), now);
+  await markConversation(admin, session.organization_id, conversationId, "outbound", previewFromMessage(p), now);
 
   await audit({
     action: "message.sent",

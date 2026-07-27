@@ -37,6 +37,8 @@ export const ApiErrorCodes = {
   tenant_already_exists: "tenant_already_exists",
   duplicate_external_id: "duplicate_external_id",
   event_gone: "event_gone", // resend de run cujo event_log original foi apagado (on delete set null)
+  next_action_absent: "next_action_absent", // decisão sobre proposta que não existe (mais) [wave 4]
+  next_action_changed: "next_action_changed", // o agente reescreveu a proposta entre o render e o clique
 
   // 422 — semântica
   unprocessable_entity: "unprocessable_entity",

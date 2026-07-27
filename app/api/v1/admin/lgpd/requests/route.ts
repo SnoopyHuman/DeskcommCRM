@@ -24,7 +24,7 @@ const querySchema = z.object({
     .enum(["received", "processing", "completed", "failed", "pending_review"])
     .optional(),
   request_type: z
-    .enum(["customer_redact", "customer_data_request", "store_redact"])
+    .enum(["redact", "data_request", "store_redact"])
     .optional(),
   risk_level: z.enum(["expired", "at_risk", "warning", "ok"]).optional(),
   tenant_id: z.string().uuid().optional(),

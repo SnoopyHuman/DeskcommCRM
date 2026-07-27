@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useCallback } from "react";
+import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api/client";
-import { createClient } from "@/lib/supabase/browser";
+import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
 import type { TenantHealthResponse } from "@/app/api/v1/admin/tenants/[id]/health/route";
 
 export type { TenantHealthResponse };
@@ -28,20 +28,15 @@ export function useTenantHealth(id: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient, id]);
 
-  // Realtime: subscribe to broadcast channel; any event triggers a refetch
-  useEffect(() => {
-    if (!id) return;
-    const supabase = createClient();
-    const channelName = `tenant-health-${id}`;
-    const channel = supabase
-      .channel(channelName)
-      .on("broadcast", { event: "*" }, invalidate)
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [id, invalidate]);
+  // Pelo hook compartilhado: `.channel()` cru assina como ANÔNIMO (cookie de
+  // sessão httpOnly), recebe "ok" e nunca entrega evento. A correção mora em
+  // `useRealtimeChannel`, que chama `setAuth` antes do `subscribe`.
+  useRealtimeChannel({
+    name: id ? `tenant-health-${id}` : "tenant-health-disabled",
+    broadcast: { event: "*" },
+    onChange: invalidate,
+    enabled: !!id,
+  });
 
   return query;
 }

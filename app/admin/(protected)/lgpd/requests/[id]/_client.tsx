@@ -39,7 +39,7 @@ function SlaTimelineInline({ received_at, due_at, request_type }: SlaTimelinePro
     progress >= 1 ? "bg-red-500" : progress >= 0.75 ? "bg-yellow-500" : "bg-emerald-500";
 
   const milestones =
-    request_type === "customer_data_request"
+    request_type === "data_request"
       ? [
           { label: "Recebido", day: 0 },
           { label: "Revisão intermediária", day: 5 },
@@ -170,8 +170,8 @@ function AuditTrailInline({ entries }: { entries: AuditEntry[] }) {
 // ---------------------------------------------------------------------------
 
 const TYPE_LABELS: Record<AdminLgpdRequestType, string> = {
-  customer_redact: "Anonimização cliente",
-  customer_data_request: "Solicitação de dados",
+  redact: "Anonimização cliente",
+  data_request: "Solicitação de dados",
   store_redact: "Anonimização tenant",
 };
 

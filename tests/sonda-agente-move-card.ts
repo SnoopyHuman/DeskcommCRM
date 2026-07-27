@@ -1,0 +1,78 @@
+/**
+ * Cenários 25 e 26 no banco real: o agente avança o funil DELE e o card anda no
+ * funil do TENANT — em dois nichos com nomes completamente diferentes.
+ */
+import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
+
+import { createClient } from "@supabase/supabase-js";
+
+import { sincronizaEstagioDoAgente } from "@/lib/leads/agent-stage-sync";
+
+const env = Object.fromEntries(
+  fs.readFileSync(".env.local", "utf8").split("\n")
+    .filter((l) => l.includes("=") && !l.trimStart().startsWith("#"))
+    .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).replace(/^"|"$/g, "")]),
+);
+const admin = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!, {
+  auth: { persistSession: false },
+});
+const ORG = "6e567068-fd1c-4f94-ae1f-40e0334be190";
+const CLINICA = "35bf4ac9-c5e0-4f7d-846a-99b1bcc92d69";
+const PEDIDOS = "48c02b4a-0ca1-4bca-8ef0-206b6d240d23";
+
+async function main(): Promise<void> {
+  const estagios = async (pipe: string) => {
+    const { data } = await admin
+      .from("crm_stages").select("id, name, slug, agent_stage_hint").eq("pipeline_id", pipe).order("position");
+    return (data ?? []) as Array<{ id: string; name: string; slug: string; agent_stage_hint: string | null }>;
+  };
+
+  // O tenant CONFIGURA o mapeamento — é decisão dele, não do sistema.
+  const mapear = async (pipe: string, pares: Array<[string, string]>) => {
+    for (const [slug, hint] of pares) {
+      await admin.from("crm_stages").update({ agent_stage_hint: hint }).eq("pipeline_id", pipe).eq("slug", slug);
+    }
+  };
+  await mapear(CLINICA, [["primeiro_contato", "contacted"], ["avaliacao", "qualifying"], ["proposta", "negotiating"]]);
+  await mapear(PEDIDOS, [["aguardando_pagamento", "negotiating"]]);
+
+  const rodar = async (pipe: string, nome: string, passo: string) => {
+    const st = await estagios(pipe);
+    const primeiro = st[0]!;
+    const contactId = randomUUID();
+    await admin.from("contacts").insert({
+      id: contactId, organization_id: ORG, name: `sonda 25 ${nome}`, phone_number: null,
+    });
+    const leadId = randomUUID();
+    await admin.from("crm_leads").insert({
+      id: leadId, organization_id: ORG, pipeline_id: pipe, stage_id: primeiro.id,
+      contact_id: contactId, title: `sonda 25 — ${nome}`, position_in_stage: 1,
+    });
+
+    const antes = st.find((s) => s.id === primeiro.id)!.name;
+    const r = await sincronizaEstagioDoAgente(admin, { organizationId: ORG, contactId, passo });
+    const { data: depois } = await admin
+      .from("crm_leads").select("stage_id").eq("id", leadId).maybeSingle();
+    const nomeDepois = st.find((s) => s.id === (depois as { stage_id: string }).stage_id)?.name;
+    const { data: ativ } = await admin
+      .from("crm_lead_activities").select("type, reason, actor_kind").eq("lead_id", leadId).maybeSingle();
+
+    console.info(`${nome} · agente vai para "${passo}"`);
+    console.info(`   card: ${antes} → ${nomeDepois} ${r.moveu ? "" : `(NÃO moveu: ${r.motivo})`}`);
+    if (ativ) {
+      const a = ativ as { type: string; reason: string; actor_kind: string };
+      console.info(`   timeline: ${a.type} · ${a.reason} · ator=${a.actor_kind}`);
+    }
+    await admin.from("crm_leads").delete().eq("id", leadId);
+    await admin.from("contacts").delete().eq("id", contactId);
+  };
+
+  console.info("=== 26: o MESMO passo, dois nichos ===");
+  await rodar(CLINICA, "clínica", "negotiating");
+  await rodar(PEDIDOS, "e-commerce", "negotiating");
+
+  console.info("\n=== 25: passo sem mapeamento no pipeline ===");
+  await rodar(PEDIDOS, "e-commerce", "qualifying");
+}
+void main();

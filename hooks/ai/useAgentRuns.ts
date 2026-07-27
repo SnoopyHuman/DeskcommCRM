@@ -8,12 +8,12 @@
  * controla subscribe/unsubscribe pra não vazar canais quando a tab Runs não
  * está ativa.
  */
-import { useEffect } from "react";
+import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { apiClient } from "@/lib/api/client";
-import { createClient } from "@/lib/supabase/browser";
+import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
 
 export type RunStatus =
   | "pending"
@@ -77,41 +77,40 @@ export function useAgentRuns(
     enabled: !!agentId && enabled,
   });
 
-  useEffect(() => {
-    if (!agentId || !realtime) return;
-    const supabase = createClient();
-    const channel = supabase
-      .channel(`ai-agent-runs-${agentId}`)
-      .on(
-        "postgres_changes" as never,
-        {
-          event: "*",
-          schema: "public",
-          table: "ai_agent_runs",
-          filter: `agent_id=eq.${agentId}`,
-        },
-        (payload: { eventType?: string; new?: AgentRunRow }) => {
-          qc.invalidateQueries({ queryKey: agentRunsKey(agentId) });
-          if (payload?.eventType === "INSERT" && !payload.new?.is_dry_run) {
-            toast.info("Nova execução iniciada.");
-          }
-          if (payload?.eventType === "UPDATE" && payload.new?.status === "completed") {
-            toast.success("Execução concluída.");
-          }
-          if (
-            payload?.eventType === "UPDATE" &&
-            (payload.new?.status === "failed" || payload.new?.status === "aborted")
-          ) {
-            toast.error(`Execução ${payload.new?.status}.`);
-          }
-        },
-      )
-      .subscribe();
+  const onChange = useCallback(
+    (raw: unknown) => {
+      const payload = raw as { eventType?: string; new?: AgentRunRow } | null;
+      qc.invalidateQueries({ queryKey: agentRunsKey(agentId) });
+      if (payload?.eventType === "INSERT" && !payload.new?.is_dry_run) {
+        toast.info("Nova execução iniciada.");
+      }
+      if (payload?.eventType === "UPDATE" && payload.new?.status === "completed") {
+        toast.success("Execução concluída.");
+      }
+      if (
+        payload?.eventType === "UPDATE" &&
+        (payload.new?.status === "failed" || payload.new?.status === "aborted")
+      ) {
+        toast.error(`Execução ${payload.new?.status}.`);
+      }
+    },
+    [agentId, qc],
+  );
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [agentId, realtime, qc]);
+  // Pelo hook compartilhado. Este canal foi o PROVADO MORTO pelo @QAVivo: A/B na
+  // mesma página, mesma sessão, mesmo socket — o do board (curado) ia com token,
+  // este ia sem. Um UPDATE real na tabela, dentro do filtro, não produziu quadro
+  // nenhum. Consequência ao usuário: a tela promete acompanhamento ao vivo, e os
+  // avisos abaixo NUNCA apareceram — quem abria para ver o agente trabalhando via
+  // lista parada e concluía que nada estava acontecendo.
+  useRealtimeChannel({
+    name: agentId ? `ai-agent-runs-${agentId}` : "ai-agent-runs-disabled",
+    postgresChanges: agentId
+      ? { event: "*", schema: "public", table: "ai_agent_runs", filter: `agent_id=eq.${agentId}` }
+      : undefined,
+    onChange,
+    enabled: !!agentId && realtime,
+  });
 
   return query;
 }

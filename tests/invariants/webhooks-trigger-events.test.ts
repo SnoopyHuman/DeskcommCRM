@@ -38,6 +38,8 @@ function sqlLiteral(v: unknown): string {
   if (typeof v === "number") return String(v);
   if (typeof v === "boolean") return v ? "true" : "false";
   if (Array.isArray(v)) return `ARRAY[${v.map((x) => sqlString(String(x))).join(",")}]::text[]`;
+  // jsonb (evidence, payload): sem isto o objeto viraria a string "[object Object]".
+  if (typeof v === "object") return `${sqlString(JSON.stringify(v))}::jsonb`;
   return sqlString(String(v));
 }
 
@@ -60,6 +62,28 @@ class FakeQB {
     }
     this.cols = cols;
     return this;
+  }
+
+  /**
+   * INSERT real, pelo mesmo `sql()` de select/update — a linha POUSA no Postgres
+   * do harness.
+   *
+   * Um `insert()` de fachada (devolver {error:null} e não gravar) deixaria este
+   * teste verde e CEGO: como `moveLeadHandler` engole a falha do emissor de
+   * propósito (fire-and-forget, para a timeline não derrubar a operação que ela
+   * descreve), este invariante é a ÚNICA testemunha de emissão morta no
+   * sistema. Fachada aqui seria a mesma doença que escondeu o bug de LGPD — um
+   * teste que prova que a chamada acontece, não que ela funciona.
+   */
+  async insert(data: Record<string, unknown>): Promise<QResult> {
+    try {
+      const cols = Object.keys(data);
+      const vals = cols.map((c) => sqlLiteral(data[c]));
+      sql(`insert into public.${this.table} (${cols.join(", ")}) values (${vals.join(", ")});`);
+      return { data: null, error: null };
+    } catch (err) {
+      return { data: null, error: { message: (err as Error).message } };
+    }
   }
 
   update(data: Record<string, unknown>): this {
@@ -185,6 +209,24 @@ describe("webhooks trigger events — emissões faltantes (Task 3)", () => {
     expect(rows[0]!.payload.pipeline_id).toBe(GOV_PIPELINE);
     expect(rows[0]!.payload.from_stage_id).toBe(GOV_STAGE);
     expect(rows[0]!.payload.to_stage_id).toBe(T3_STAGE_2);
+
+    // Wave 3 (CORE 2): mover também escreve no barramento da vida do lead. A
+    // asserção é da LINHA, não de "não explodiu" — org certa, quem agiu, e o
+    // porquê legível. Emissor que não emite reprova aqui.
+    const atividade = JSON.parse(
+      sql(
+        `select coalesce(json_agg(t), '[]') from (
+           select organization_id, actor_kind, reason, source_module
+             from public.crm_lead_activities
+            where lead_id = ${sqlString(T3_LEAD)} and type = 'stage_changed'
+         ) t;`,
+      ) || "[]",
+    ) as Array<Record<string, unknown>>;
+    expect(atividade.length).toBe(1);
+    expect(atividade[0]!.organization_id).toBe(GOV_ORG);
+    expect(atividade[0]!.actor_kind).toBe("user");
+    expect(atividade[0]!.source_module).toBe("crm");
+    expect(String(atividade[0]!.reason)).toMatch(/^Movido de .+ para .+$/);
   });
 
   it("updateLeadHandler emite lead.tag_added só quando há tag NOVA", async () => {

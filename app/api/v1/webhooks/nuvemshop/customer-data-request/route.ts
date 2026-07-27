@@ -229,7 +229,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const result = await createLgpdRequest({
       organizationId: orgId,
-      requestType: "customer_data_request",
+      requestType: "data_request",
       source: "nuvemshop",
       contactId,
       externalCustomerId: customerId,

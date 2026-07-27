@@ -90,3 +90,4 @@ package-lock.json
 .e2e-owner.json
 .e2e-invite-url.json
 .superpowers/evidence/
+evidence/.sonda-score-residuo.json

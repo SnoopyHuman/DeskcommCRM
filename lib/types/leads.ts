@@ -1,3 +1,5 @@
+import type { ScoreBand } from "@/lib/kanban/score-band";
+
 /**
  * Canonical Lead shape returned by the `/api/v1/leads/*` endpoints.
  * Mirrors `crm_leads` columns (Spec 04 §schema). Status transitions go through
@@ -5,6 +7,29 @@
  * directly (P-02).
  */
 export type LeadStatus = "open" | "won" | "lost";
+
+/**
+ * 0070 — o dono do negócio é humano ou agente de IA (mesmo padrão de
+ * `conversations.assignee_kind`, 0032). `null` = sem dono.
+ */
+export type OwnerKind = "user" | "ai" | null;
+
+/**
+ * Identidade do agente dono, resolvida no servidor e anexada ao lead pela rota
+ * do board. **Não é coluna** de `crm_leads`.
+ *
+ * Por que viaja com o lead em vez de sair de uma lista de agentes: "quem PODE
+ * receber um lead" (picker — só agente ativo) e "quem É o dono deste lead"
+ * (exibição — qualquer agente, inclusive desativado ou arquivado) são perguntas
+ * diferentes. Resolver a segunda pela primeira faz o dono ficar anônimo no dia
+ * em que alguém desativa o agente.
+ */
+export interface LeadOwnerAgent {
+  id: string;
+  name: string;
+  /** Versão publicada no momento da leitura — nunca congelada no lead. */
+  version_number: number | null;
+}
 
 export interface Lead {
   id: string;
@@ -20,6 +45,33 @@ export interface Lead {
   value_cents: number | null;
   currency: string | null;
   owner_user_id: string | null;
+  /** 0070: quem é dono do negócio — humano, agente de IA, ou ninguém. */
+  owner_kind: OwnerKind;
+  /** 0070: identidade do agente dono (ai_agents.id), nunca a versão. */
+  owner_agent_id: string | null;
+  /** Derivado (não é coluna): quem é o agente dono — ver LeadOwnerAgent. */
+  owner_agent?: LeadOwnerAgent | null;
+  /**
+   * Derivado (não é coluna): a próxima ação que o agente propôs para o CONTATO,
+   * já roteada para o negócio ativo dele. Ver lib/leads/next-action.ts — só
+   * aparece quando o roteamento é inequívoco.
+   */
+  next_action?: { label: string; seq: number; proposed_at: string } | null;
+  /**
+   * Derivado (não é coluna): o score vem de `crm_lead_scores` por LEFT JOIN.
+   *
+   * Ausente é estado LEGÍTIMO (sinal insuficiente, cenário 17) — por isso LEFT
+   * e não INNER: um INNER apagaria do board justamente os leads sem sinal, que
+   * são os que mais precisam de atenção humana.
+   */
+  score?: {
+    probability: number;
+    reason: string;
+    /** A faixa PERSISTIDA. A UI não a recalcula — ver lib/kanban/score-band.ts. */
+    band: ScoreBand;
+    factors: Array<{ pontos: number; frase: string; ancora?: { kind: string; id: string } }>;
+    at: string | null;
+  } | null;
   assigned_at: string | null;
   last_activity_at: string | null;
   expected_close_date: string | null;

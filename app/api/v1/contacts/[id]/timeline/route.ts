@@ -10,6 +10,12 @@
  *   - type: repeatable query param (?type=order_created&type=message_inbound)
  *   - cursor: opaque base64 of (performed_at, id)
  *   - limit: 1..100 (default 50)
+ *
+ * ESTA ROTA NÃO É O DOSSIÊ DO NEGÓCIO. Ela é a vida do CONTATO, e por isso
+ * soma os negócios dele — o que no dossiê de UM negócio apareceria como
+ * história do irmão. O dossiê usa `leads/[id]/timeline`, ancorada no lead;
+ * as duas dividem as peças de `lib/leads/timeline-query.ts` e divergem só na
+ * cláusula, que é justamente onde a diferença mora.
  */
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
@@ -17,30 +23,15 @@ import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/api/wrappers";
 import { createClient } from "@/lib/supabase/server";
 import type { TimelineItem } from "@/lib/types/contacts";
+import {
+  TIMELINE_COLS,
+  comNomeDoAtor,
+  decodeCursor,
+  encodeCursor,
+  type Cursor,
+} from "@/lib/leads/timeline-query";
 
 export const dynamic = "force-dynamic";
-
-const TIMELINE_COLS =
-  "id, organization_id, lead_id, contact_id, source_module, source_id, type, payload, metadata, performed_at, performed_by_user_id";
-
-interface Cursor {
-  performed_at: string;
-  id: string;
-}
-
-function encodeCursor(c: Cursor): string {
-  return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
-}
-function decodeCursor(raw: string): Cursor | null {
-  try {
-    const json = Buffer.from(raw, "base64url").toString("utf8");
-    const parsed = JSON.parse(json) as Cursor;
-    if (typeof parsed.id !== "string" || typeof parsed.performed_at !== "string") return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(
   req: NextRequest,
@@ -125,9 +116,15 @@ export async function GET(
     return fail("internal_error", leadRes.error.message, 500, { requestId });
   }
 
+  // Cast duplo porque a lista de colunas agora é montada com `join()`: o
+  // supabase-js infere o shape a partir da STRING LITERAL do select, e a
+  // string dinâmica apaga essa inferência (vira GenericStringError[]). A troca
+  // é deliberada — perde-se uma inferência que já não protegia contra o bug
+  // real (campo do tipo fora do SELECT compilava verde) e ganha-se o portão de
+  // exaustividade acima, que protege.
   const merged = new Map<string, TimelineItem>();
-  for (const row of (directRes.data ?? []) as TimelineItem[]) merged.set(row.id, row);
-  for (const row of (leadRes.data ?? []) as TimelineItem[]) merged.set(row.id, row);
+  for (const row of (directRes.data ?? []) as unknown as TimelineItem[]) merged.set(row.id, row);
+  for (const row of (leadRes.data ?? []) as unknown as TimelineItem[]) merged.set(row.id, row);
 
   const sorted = Array.from(merged.values()).sort((a, b) => {
     if (a.performed_at !== b.performed_at) {
@@ -137,7 +134,14 @@ export async function GET(
   });
 
   const hasMore = sorted.length > limit;
-  const page = hasMore ? sorted.slice(0, limit) : sorted;
+  const pageRows = hasMore ? sorted.slice(0, limit) : sorted;
+
+  // Quem agiu, com NOME — resolvido aqui, na borda, e não na tela. É a mesma
+  // decisão do dono agente no board: o dado de exibição viaja com a linha, em
+  // vez de a tela ter de descobrir sozinha (e mostrar "Agente" genérico quando
+  // não descobre). Sem filtro de is_active/archived: quem AGIU agiu, mesmo que
+  // o agente tenha sido desligado depois.
+  const page = await comNomeDoAtor(supabase, pageRows);
   const last = page[page.length - 1];
   const nextCursor =
     hasMore && last

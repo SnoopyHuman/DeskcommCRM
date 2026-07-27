@@ -12,8 +12,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useUser } from "@/hooks/auth/AuthProvider";
 import { useAssignableMembers } from "@/hooks/inbox/useAssignableMembers";
-import type { Lead } from "@/lib/types/leads";
-import type { LeadFilters } from "@/lib/kanban/filters";
+import { useAssignableAgents } from "@/hooks/kanban/useAssignableAgents";
+import type { Lead, OwnerKind } from "@/lib/types/leads";
+import { OwnerBadge } from "./OwnerBadge";
+import {
+  agentOwnerFilter,
+  parseAgentOwnerFilter,
+  type LeadFilters,
+} from "@/lib/kanban/filters";
 import { cn } from "@/lib/utils";
 
 interface FilterBarProps {
@@ -32,6 +38,7 @@ const STATUS_OPTIONS: Array<{ value: NonNullable<LeadFilters["status"]>; label: 
 export function FilterBar({ filters, onChange, leads }: FilterBarProps) {
   const user = useUser();
   const { data: members } = useAssignableMembers(true);
+  const { data: agents } = useAssignableAgents(true);
   const [searchInput, setSearchInput] = useState(filters.search ?? "");
 
   // Debounce search 250ms
@@ -51,15 +58,52 @@ export function FilterBar({ filters, onChange, leads }: FilterBarProps) {
     return Array.from(set).sort();
   }, [leads]);
 
+  const filteredAgentId = parseAgentOwnerFilter(filters.owner);
+
+  /**
+   * Responsáveis atribuíveis numa lista única — humanos e agentes ordenados
+   * juntos. O dono de um lead é UM campo; quem pode ser dono aparece numa lista
+   * só. A distinção é geométrica (avatar), nunca posicional.
+   */
+  const assignees = useMemo(() => {
+    type Row = {
+      key: string;
+      owner: string;
+      name: string;
+      kind: OwnerKind;
+      version: number | null;
+    };
+    const rows: Row[] = [
+      ...(members ?? [])
+        .filter((m) => m.user_id !== user.id)
+        .map((m) => ({
+          key: `u:${m.user_id}`,
+          owner: m.user_id,
+          name: m.full_name ?? "Sem nome",
+          kind: "user" as OwnerKind,
+          version: null,
+        })),
+      ...(agents ?? []).map((a) => ({
+        key: `a:${a.agent_id}`,
+        owner: agentOwnerFilter(a.agent_id),
+        name: a.name,
+        kind: "ai" as OwnerKind,
+        version: a.version_number,
+      })),
+    ];
+    return rows.sort((x, y) => x.name.localeCompare(y.name, "pt-BR"));
+  }, [members, agents, user.id]);
   const ownerLabel =
-    filters.ownerUserId === "unassigned"
+    filters.owner === "unassigned"
       ? "Sem responsável"
-      : !filters.ownerUserId || filters.ownerUserId === "any"
+      : !filters.owner || filters.owner === "any"
         ? "Todos"
-        : filters.ownerUserId === user.id
-          ? "Eu"
-          : (members?.find((m) => m.user_id === filters.ownerUserId)?.full_name ??
-            "Responsável");
+        : filteredAgentId
+          ? (agents?.find((a) => a.agent_id === filteredAgentId)?.name ?? "Agente")
+          : filters.owner === user.id
+            ? "Eu"
+            : (members?.find((m) => m.user_id === filters.owner)?.full_name ??
+              "Responsável");
 
   const statusLabel =
     STATUS_OPTIONS.find((o) => o.value === (filters.status ?? "all"))?.label ?? "Todos";
@@ -83,28 +127,37 @@ export function FilterBar({ filters, onChange, leads }: FilterBarProps) {
         <DropdownMenuContent align="start">
           <DropdownMenuLabel>Responsável</DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => onChange({ ...filters, ownerUserId: "any" })}>
+          <DropdownMenuItem onClick={() => onChange({ ...filters, owner: "any" })}>
             Todos
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onChange({ ...filters, ownerUserId: "unassigned" })}>
+          <DropdownMenuItem onClick={() => onChange({ ...filters, owner: "unassigned" })}>
             Sem responsável
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onChange({ ...filters, ownerUserId: user.id })}>
+          <DropdownMenuItem onClick={() => onChange({ ...filters, owner: user.id })}>
             Eu
           </DropdownMenuItem>
-          {members && members.filter((m) => m.user_id !== user.id).length > 0 && (
+          {/*
+            Humanos e agentes numa lista SÓ, ordenados juntos por nome. Não existe
+            separador entre eles: separador agrupa, e agrupar comunica "as pessoas,
+            e depois também os bots" — segregação por posição, que é a mesma ideia
+            do badge "AI" colorido que o contrato de UI proíbe. Quem distingue é o
+            avatar (disco preenchido = humano, círculo vazado com anel = agente),
+            reusando o OwnerBadge do card para os dois não divergirem.
+            O separador ACIMA (linha do "Eu") fica: ele divide as opções meta
+            (Todos / Sem responsável / Eu) das pessoas, e ali agrupar está certo.
+          */}
+          {assignees.length > 0 && (
             <>
               <DropdownMenuSeparator />
-              {members
-                .filter((m) => m.user_id !== user.id)
-                .map((m) => (
-                  <DropdownMenuItem
-                    key={m.user_id}
-                    onClick={() => onChange({ ...filters, ownerUserId: m.user_id })}
-                  >
-                    {m.full_name ?? "Sem nome"}
-                  </DropdownMenuItem>
-                ))}
+              {assignees.map((a) => (
+                <DropdownMenuItem key={a.key} onClick={() => onChange({ ...filters, owner: a.owner })}>
+                  <OwnerBadge
+                    ownerKind={a.kind}
+                    ownerName={a.name}
+                    agentVersion={a.version}
+                  />
+                </DropdownMenuItem>
+              ))}
             </>
           )}
         </DropdownMenuContent>
@@ -160,7 +213,7 @@ export function FilterBar({ filters, onChange, leads }: FilterBarProps) {
       </label>
 
       {(filters.search ||
-        filters.ownerUserId ||
+        filters.owner ||
         filters.tag ||
         filters.overdueOnly ||
         (filters.status && filters.status !== "all")) && (

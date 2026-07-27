@@ -2,23 +2,16 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api/client";
-import type { RiskBucket } from "@/lib/leads/risk-radar";
 
-export interface AtRiskLead {
-  id: string;
-  title: string;
-  contact_id: string | null;
-  contact_name: string | null;
-  owner_user_id: string | null;
-  assignee_kind: "user" | "ai" | null;
-  last_activity_at: string | null;
-  hours_since_activity: number;
-  risk: RiskBucket;
-  in_flight: boolean;
-  next_followup_at: string | null;
-  conversation_id: string | null;
-  pipeline_id: string;
-}
+/**
+ * O tipo vem da ROTA, não é redigitado aqui. Uma cópia local já custou caro nesta
+ * entrega: o dono-agente entrou na rota e o radar continuou exibindo "Sem dono"
+ * porque a cópia não sabia da coluna nova — e o compilador não reclamou, porque
+ * as duas versões eram válidas separadamente. Contrato duplicado é contrato que
+ * diverge em silêncio.
+ */
+export type { AtRiskLead } from "@/app/api/v1/leads/at-risk/route";
+import type { AtRiskLead } from "@/app/api/v1/leads/at-risk/route";
 
 export interface AtRiskData {
   items: AtRiskLead[];

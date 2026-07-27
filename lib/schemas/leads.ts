@@ -68,6 +68,8 @@ export const createLeadSchema = z.object({
   value_cents: z.coerce.number().int().nonnegative().nullable().optional(),
   currency: z.string().length(3).default("BRL"),
   owner_user_id: z.string().uuid().nullable().optional(),
+  /** Dono agente já na criação (0070) — mesma regra do update: os dois é 422. */
+  owner_agent_id: z.string().uuid().nullable().optional(),
   expected_close_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -89,6 +91,13 @@ export const updateLeadSchema = z.object({
   value_cents: z.coerce.number().int().nonnegative().nullable().optional(),
   currency: z.string().length(3).optional(),
   owner_user_id: z.string().uuid().nullable().optional(),
+  /**
+   * Dono agente (0070). Exclusivo com owner_user_id — mandar os dois não-nulos
+   * é 422. `owner_kind` NÃO entra aqui: é derivado no handler a partir de qual
+   * dos dois veio, para a constraint crm_leads_owner_kind_coherence nunca
+   * depender do que o cliente mandou.
+   */
+  owner_agent_id: z.string().uuid().nullable().optional(),
   expected_close_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)

@@ -1,8 +1,8 @@
 "use client";
-import { useEffect } from "react";
+import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { createClient } from "@/lib/supabase/browser";
+import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
 import {
   sourcesQueryKey,
   useKnowledgeSources,
@@ -34,29 +34,23 @@ export function KnowledgeSourcesClient({ agentId, initialSources }: Props) {
   const { data: sources } = useKnowledgeSources(agentId, { initialData: initialSources });
   const reindex = useReindexSource(agentId);
 
-  // Realtime subscription.
-  useEffect(() => {
-    const supabase = createClient();
-    const channel = supabase
-      .channel(`ai-knowledge-sources-${agentId}`)
-      .on(
-        "postgres_changes" as never,
-        {
-          event: "*",
-          schema: "public",
-          table: "ai_knowledge_sources",
-          filter: `agent_id=eq.${agentId}`,
-        },
-        () => {
-          qc.invalidateQueries({ queryKey: sourcesQueryKey(agentId) });
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+  const onChange = useCallback(() => {
+    qc.invalidateQueries({ queryKey: sourcesQueryKey(agentId) });
   }, [agentId, qc]);
+
+  // Pelo hook compartilhado: `.channel()` cru assina como ANÔNIMO (cookie de
+  // sessão httpOnly) — recebe "ok" e nunca entrega. Aqui o efeito era a lista de
+  // fontes não atualizar sozinha depois de uma reindexação.
+  useRealtimeChannel({
+    name: `ai-knowledge-sources-${agentId}`,
+    postgresChanges: {
+      event: "*",
+      schema: "public",
+      table: "ai_knowledge_sources",
+      filter: `agent_id=eq.${agentId}`,
+    },
+    onChange,
+  });
 
   const list = sources ?? [];
 

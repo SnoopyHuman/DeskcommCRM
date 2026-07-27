@@ -101,8 +101,8 @@ export function LgpdAdminClient() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={NONE}>Todos os tipos</SelectItem>
-            <SelectItem value="customer_redact">Anonimização cliente</SelectItem>
-            <SelectItem value="customer_data_request">Solicitação de dados</SelectItem>
+            <SelectItem value="redact">Anonimização cliente</SelectItem>
+            <SelectItem value="data_request">Solicitação de dados</SelectItem>
             <SelectItem value="store_redact">Anonimização tenant</SelectItem>
           </SelectContent>
         </Select>

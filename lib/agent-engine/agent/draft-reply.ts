@@ -52,11 +52,34 @@ export async function generateDraftReply(
     return { ok: false, reason: 'blocked' };
   }
 
+  // A decisão do vendedor sobre a última proposta do agente ENTRA no prompt.
+  //
+  // Sem isto o rascunho pode sugerir exatamente o que ele acabou de recusar — e
+  // aí o botão "Ignorar" da Wave 4 mente: prometemos que a recusa é sinal, e o
+  // gesto seguinte de quem recusou é justamente pedir um rascunho. O agravante
+  // é o modo: o prompt manda escrever COMO O VENDEDOR, sem disclosure. Não é só
+  // repetir o recusado — é o sistema pôr NA BOCA DELE o que ele acabou de negar,
+  // e quem lê a sugestão não tem como saber que a fonte ignorou a decisão.
+  //
+  // O dado já chegava aqui dentro de `ctx.context` (bloco 4.5) e estava sendo
+  // descartado na montagem do prompt: contexto lido e não usado é a mesma
+  // cegueira do evento sem consumer, um passo adiante.
+  const decisao = ctx.context.last_human_decision;
+  const blocoDecisao = decisao
+    ? decisao.decision === 'dismissed'
+      ? `\n\n[DECISÃO DO VENDEDOR] Ele JÁ DESCARTOU esta próxima ação: "${decisao.action}". ` +
+        `NÃO sugira essa ação nem uma reformulação dela. Se for o único caminho que resta, ` +
+        `escreva uma resposta que avance a conversa por outro lado.`
+      : `\n\n[DECISÃO DO VENDEDOR] Ele JÁ APROVOU esta próxima ação: "${decisao.action}". ` +
+        `A sugestão deve APOIAR essa ação, não propor outra em lugar dela.`
+    : '';
+
   const system =
     `${agent.systemPrompt}\n\n` +
     `[MODO RASCUNHO] Gere UMA resposta pronta para o vendedor humano enviar ao cliente. ` +
     `Escreva como o vendedor (NÃO se identifique como assistente/IA, NÃO use disclosure de bot). ` +
-    `Responda só com o texto da mensagem, sem aspas nem comentários.`;
+    `Responda só com o texto da mensagem, sem aspas nem comentários.` +
+    blocoDecisao;
 
   const messages: ModelMessage[] = ctx.context.messages.map((m) => ({
     role: m.direction === 'inbound' ? 'user' : 'assistant',

@@ -33,8 +33,8 @@ import { SlaBanner } from "./SlaBanner";
 // ── Label helpers ─────────────────────────────────────────────────────────────
 
 const TYPE_LABELS: Record<LgpdRequestType, string> = {
-  customer_redact: "Anonimização cliente",
-  customer_data_request: "Solicitação dados",
+  redact: "Anonimização cliente",
+  data_request: "Solicitação dados",
   store_redact: "Anonimização tenant",
 };
 
@@ -171,8 +171,8 @@ export function RequestsTable() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>Tipo: todos</SelectItem>
-            <SelectItem value="customer_redact">Anonimização cliente</SelectItem>
-            <SelectItem value="customer_data_request">Solicitação dados</SelectItem>
+            <SelectItem value="redact">Anonimização cliente</SelectItem>
+            <SelectItem value="data_request">Solicitação dados</SelectItem>
             <SelectItem value="store_redact">Anonimização tenant</SelectItem>
           </SelectContent>
         </Select>

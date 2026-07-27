@@ -9,11 +9,66 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/api/types";
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import { resolveOwnerPatch, type OwnerPatch, type OwnerPatchInput } from "@/lib/leads/owner-patch";
+import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
+import { listaLegivel } from "@/lib/leads/activity-vocabulary";
+import { camposAlterados } from "@/lib/leads/campos-alterados";
+import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
 import type { CreateLeadInput, UpdateLeadInput } from "@/lib/schemas";
 
 type SB = SupabaseClient;
 
 const LEAD_COLS = "*";
+
+/**
+ * Aplica a regra de posse (0070) e valida a tenancy do agente.
+ *
+ * A FK garante que o agente EXISTE, não que é da MESMA org — sem este check um
+ * id vazado atribuiria o negócio a um agente de outro tenant. `null` de retorno
+ * = o chamador não mencionou dono.
+ */
+async function ownerPatchOrThrow(
+  supabase: SB,
+  ctx: HandlerCtx,
+  input: OwnerPatchInput,
+): Promise<OwnerPatch | null> {
+  const result = resolveOwnerPatch(input);
+  if (!result.ok) {
+    throw new ApiError(
+      422,
+      "validation_failed",
+      undefined,
+      ctx.requestId,
+      "Um lead tem um dono: informe owner_user_id OU owner_agent_id.",
+    );
+  }
+  if (!result.patch) return null;
+
+  if (result.patch.owner_agent_id !== null) {
+    const { data: agent, error: agentErr } = await supabase
+      .from("ai_agents")
+      .select("id")
+      .eq("id", result.patch.owner_agent_id)
+      .eq("organization_id", ctx.organization_id)
+      .is("archived_at", null)
+      .maybeSingle();
+
+    if (agentErr) {
+      throw new ApiError(500, "internal_error", undefined, ctx.requestId, agentErr.message);
+    }
+    if (!agent) {
+      throw new ApiError(
+        422,
+        "validation_failed",
+        undefined,
+        ctx.requestId,
+        "Agente não encontrado nesta organização.",
+      );
+    }
+  }
+
+  return result.patch;
+}
 
 function actorAuditPayload(actor: Actor): {
   actorUserId: string | null;
@@ -191,6 +246,12 @@ export async function createLeadHandler(
   }
   const nextPos = maxRow?.position_in_stage ? Number(maxRow.position_in_stage) + 1000 : 1000;
 
+  // Nascer com dono e sem owner_kind é drift silencioso (o CHECK aceita kind
+  // null): o lead teria dono e sumiria do filtro e das métricas por kind.
+  const ownerPatch =
+    (await ownerPatchOrThrow(supabase, ctx, input)) ??
+    ({ owner_user_id: null, owner_agent_id: null, owner_kind: null } satisfies OwnerPatch);
+
   const { data: lead, error: insErr } = await supabase
     .from("crm_leads")
     .insert({
@@ -202,7 +263,9 @@ export async function createLeadHandler(
       contact_id: input.contact_id ?? null,
       value_cents: input.value_cents ?? null,
       currency: input.currency ?? "BRL",
-      owner_user_id: input.owner_user_id ?? null,
+      ...ownerPatch,
+      assigned_at:
+        ownerPatch.owner_kind === null ? null : new Date().toISOString(),
       expected_close_date: input.expected_close_date ?? null,
       tags: input.tags ?? [],
       source: input.source,
@@ -272,9 +335,13 @@ export async function updateLeadHandler(
   leadId: string,
   input: UpdateLeadInput,
 ): Promise<Record<string, unknown>> {
+  // `*` e nao lista explicita DE PROPOSITO: `camposAlterados` compara o patch
+  // contra isto, e uma lista fixa faria todo campo NOVO do patch cair contra
+  // `undefined` e ser marcado como alterado em toda edicao — o mesmo defeito
+  // que este select conserta, reaparecendo por outra porta em seis meses.
   const { data: existing, error: selErr } = await supabase
     .from("crm_leads")
-    .select("id, organization_id, tags")
+    .select("*")
     .eq("id", leadId)
     .maybeSingle();
 
@@ -291,9 +358,12 @@ export async function updateLeadHandler(
   if (input.contact_id !== undefined) patch.contact_id = input.contact_id;
   if (input.value_cents !== undefined) patch.value_cents = input.value_cents;
   if (input.currency !== undefined) patch.currency = input.currency;
-  if (input.owner_user_id !== undefined) {
-    patch.owner_user_id = input.owner_user_id;
-    if (input.owner_user_id !== null) {
+  // Dono do negócio (0070): regra em lib/leads/owner-patch.ts, compartilhada
+  // com create, bulk e MCP. owner_kind é DERIVADO — nunca lido do body.
+  const ownerPatch = await ownerPatchOrThrow(supabase, ctx, input);
+  if (ownerPatch) {
+    Object.assign(patch, ownerPatch);
+    if (ownerPatch.owner_user_id !== null || ownerPatch.owner_agent_id !== null) {
       patch.assigned_at = new Date().toISOString();
     }
   }
@@ -317,7 +387,60 @@ export async function updateLeadHandler(
   }
 
   const a = actorAuditPayload(ctx.actor);
-  const fields = Object.keys(input);
+  // O QUE MUDOU, nao o que foi enviado: o formulario do dossie manda o form
+  // inteiro a cada salvamento, entao `Object.keys(input)` acusava cinco campos
+  // quando a pessoa mexeu em um. Detalhe em lib/leads/campos-alterados.ts.
+  const fields = camposAlterados(patch, existing as Record<string, unknown>);
+
+  // A EDIÇÃO HUMANA ENTRA NA TIMELINE (wave 6). Antes disto, mexer num campo
+  // era invisível: a IA deixava rastro e o humano não — meia continuidade
+  // vendida como continuidade, e o dossiê mostraria só metade da vida do lead.
+  //
+  // O `reason` carrega QUAIS campos mudaram porque "dados alterados" sozinho
+  // não muda o que ninguém faz a seguir; saber que mudou o VALOR é diferente de
+  // saber que mudou a descrição. Os nomes vão em português — o que a pessoa lê
+  // não pode ser o vocabulário da coluna.
+  // Salvar sem mexer em nada NAO e um acontecimento. Sem esta guarda, abrir o
+  // dossie e clicar Salvar geraria "Dados do negocio alterados" com a lista
+  // vazia — ruido na timeline exatamente na superficie que promete contar a
+  // vida do negocio.
+  const atividadeEdicao = fields.length === 0 ? { ok: true as const } : await emitLeadActivity(supabase, {
+    organizationId: existing.organization_id,
+    leadId,
+    contactId: (updated as { contact_id?: string | null }).contact_id ?? null,
+    type: "lead_edited",
+    sourceModule: "crm",
+    sourceId: leadId,
+    actor: ctx.actor,
+    // ⚠️ O REASON NOMEIA OS CAMPOS, NUNCA OS VALORES. Se você veio aqui para
+    // deixar a timeline "mais informativa" pondo o antes-e-depois — pare: neste
+    // produto o TÍTULO É O NOME DO CLIENTE ("Carlos — Clínica Vida Odonto"), e
+    // `custom_fields` é dado arbitrário do tenant, sem limite conhecido. O
+    // reason é RENDERIZADO NA TELA e vai junto em captura, exportação e ticket
+    // de suporte; o §9 proíbe PII nova em log, reason ou evidence.
+    //
+    // Quem precisa do valor anterior tem `api_audit_log`, que já registra a
+    // mutação SOB CONTROLE DE ACESSO. Duplicar aqui criaria um segundo lugar
+    // com o mesmo dado e menos proteção.
+    //
+    // NÃO confunda com a atividade de autorização vencida (wave 4), que mostra
+    // antes-e-depois DE PROPÓSITO: lá o texto é a proposta do PRÓPRIO AGENTE,
+    // escrita por máquina. A origem do texto é que decide, não a forma da frase.
+    reason: `Alterou ${listaLegivel(fields)}`,
+    payload: { fields },
+  });
+  if (!atividadeEdicao.ok) {
+    // Rastro de mutação já ocorrida: falha BAIXO, mas contada (ver
+    // lib/leads/activity-write-failure.ts).
+    await registraFalhaDeAtividade(supabase, {
+      organizationId: existing.organization_id,
+      leadId,
+      tipo: "lead_edited",
+      origem: "leads/_handler.updateLeadHandler",
+      erro: atividadeEdicao.error,
+      requestId: ctx.requestId,
+    });
+  }
 
   await supabase
     .rpc("emit_event", {
@@ -396,7 +519,7 @@ export async function moveLeadHandler(
 
   const { data: stage, error: stageErr } = await supabase
     .from("crm_stages")
-    .select("id, pipeline_id, organization_id")
+    .select("id, pipeline_id, organization_id, name")
     .eq("id", input.to_stage_id)
     .maybeSingle();
   if (stageErr) {
@@ -479,6 +602,48 @@ export async function moveLeadHandler(
     .then(({ error }) => {
       if (error) console.error("[lead.move] emit_event failed", error.message);
     });
+
+  // Wave 3 (CORE 2): a mudança de estágio entra no barramento da vida do lead.
+  // É mudança de ESTADO do negócio — passa no teste "isto muda o que alguém
+  // faria a seguir?". O nome do estágio de origem sai de crm_stages para o
+  // reason ser legível ("Movido de Avaliação para Proposta enviada") em vez de
+  // dois UUIDs.
+  const { data: fromStage } = await supabase
+    .from("crm_stages")
+    .select("name")
+    .eq("id", lead.stage_id)
+    .maybeSingle();
+
+  const atividade = await emitLeadActivity(supabase, {
+    organizationId: lead.organization_id,
+    leadId,
+    contactId: (lead as { contact_id: string | null }).contact_id,
+    type: "stage_changed",
+    sourceModule: "crm",
+    sourceId: leadId,
+    actor: ctx.actor,
+    reason: input.reason
+      ? `${stageChangeReason(fromStage?.name ?? null, stage.name)} — ${input.reason}`
+      : stageChangeReason(fromStage?.name ?? null, stage.name),
+    payload: {
+      from_stage_id: lead.stage_id,
+      to_stage_id: input.to_stage_id,
+      pipeline_id: lead.pipeline_id,
+    },
+  });
+  if (!atividade.ok) {
+    // Falha BAIXO: o card já moveu e bloquear deixaria o negócio refém da
+    // timeline. Mas falhar baixo é escolher não bloquear, não escolher não
+    // contar — o rastro perdido vira evento e alerta.
+    await registraFalhaDeAtividade(supabase, {
+      organizationId: lead.organization_id,
+      leadId,
+      tipo: "stage_changed",
+      origem: "leads/_handler.moveLeadHandler",
+      erro: atividade.error,
+      requestId: ctx.requestId,
+    });
+  }
 
   await audit({
     action: "lead.moved",

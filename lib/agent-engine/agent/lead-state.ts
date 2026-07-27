@@ -69,6 +69,8 @@ export interface LeadStateRow {
   stage: LeadStage;
   qualification: Record<string, string>;
   next_action: string | null;
+  /** Identidade da proposta corrente — ver migration 0073 e o upsert abaixo. */
+  next_action_seq: number;
   updated_at: Date;
 }
 
@@ -200,16 +202,34 @@ export async function applyLeadStateUpdate(
   const qualification = { ...(current?.qualification ?? {}), ...(input.qualification ?? {}) };
   const nextAction = input.next_action !== undefined ? input.next_action : (current?.next_action ?? null);
 
+  // `next_action_seq` só avança quando a próxima ação é REESCRITA nesta chamada
+  // ($6), e avança mesmo que o texto novo seja idêntico ao anterior: é o que
+  // distingue "a mesma proposta" de "a mesma frase". A autorização humana
+  // carrega este número e a execução o compara — comparar o texto deixaria
+  // passar a proposta reescrita com as mesmas palavras, e comparar `updated_at`
+  // recusaria autorização válida a cada escrita de estágio ou BANT.
+  //
+  // Este é o ÚNICO caminho de escrita de `next_action`, então o incremento tem
+  // um lugar só. Trigger não serviria: do lado do banco, "escreveu o mesmo
+  // valor de novo" é indistinguível de "não escreveu".
   const upsert = `
-    insert into lead_state (organization_id, contact_id, stage, qualification, next_action)
-    values ($1, $2, $3, $4::jsonb, $5)
+    insert into lead_state (organization_id, contact_id, stage, qualification, next_action, next_action_seq)
+    values ($1, $2, $3, $4::jsonb, $5, case when $6::boolean then 1 else 0 end)
     on conflict (organization_id, contact_id) do update
       set stage = excluded.stage,
           qualification = excluded.qualification,
           next_action = excluded.next_action,
+          next_action_seq = lead_state.next_action_seq + case when $6::boolean then 1 else 0 end,
           updated_at = now()
     returning *`;
-  const upsertParams = [ids.tenantId, ids.leadId, nextStage, JSON.stringify(qualification), nextAction];
+  const upsertParams = [
+    ids.tenantId,
+    ids.leadId,
+    nextStage,
+    JSON.stringify(qualification),
+    nextAction,
+    input.next_action !== undefined,
+  ];
 
   let state: LeadStateRow;
   if (transition !== null) {
@@ -217,7 +237,7 @@ export async function applyLeadStateUpdate(
       `with up as (${upsert}),
        tr as (
          insert into lead_state_transitions (organization_id, contact_id, job_id, from_stage, to_stage, reason)
-         values ($1, $2, $6, $7, $3, $8)
+         values ($1, $2, $7, $8, $3, $9)
        )
        select * from up`,
       [...upsertParams, ids.jobId ?? null, transition.from, transition.reason ?? null],

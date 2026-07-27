@@ -10,10 +10,9 @@ export type LgpdRequestStatus =
   | "failed"
   | "pending_review";
 
-export type LgpdRequestType =
-  | "customer_redact"
-  | "customer_data_request"
-  | "store_redact";
+// Fonte única do vocabulário: lib/lgpd/types.ts (espelha o CHECK do banco).
+export type { LgpdRequestType } from "@/lib/lgpd/types";
+import type { LgpdRequestType } from "@/lib/lgpd/types";
 
 export type SlaBucket = "overdue" | "critical" | "warning" | "ok";
 

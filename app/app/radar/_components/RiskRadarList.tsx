@@ -14,7 +14,6 @@ import {
   CheckCircle,
   ClockCountdown,
   PaperPlaneTilt,
-  Robot,
   Warning,
 } from "@/lib/ui/icons";
 
@@ -94,16 +93,24 @@ function RadarRow({ lead }: { lead: AtRiskLead }) {
   const claim = useClaimConversation();
   const qc = useQueryClient();
 
-  const owned = Boolean(lead.owner_user_id) || lead.assignee_kind === "user";
-  const assignee =
-    lead.assignee_kind === "ai"
-      ? { icon: <Robot size={13} aria-hidden />, text: "Assistente" }
-      : owned
-        ? { icon: null, text: "Com atendente" }
-        : { icon: null, text: "Sem dono" };
+  // Dono do NEGÓCIO — humano OU agente (0070). Antes desta linha o radar lia só
+  // `owner_user_id`, então um lead que a IA trabalha há dezenas de turnos aparecia
+  // como "Sem dono" e mandava um humano resgatar o que já estava sendo tocado.
+  // A distinção é a MESMA do card (OwnerBadge): geométrica, nunca ícone de robô —
+  // uma fonte de verdade para "quem é o dono", em todas as telas.
+  const dono =
+    lead.owner_kind === "ai"
+      ? `Agente: ${lead.owner_agent_name ?? "sem nome"}`
+      : lead.owner_user_id || lead.assignee_kind === "user"
+        ? "Com atendente"
+        : lead.assignee_kind === "ai"
+          ? "Assistente na conversa"
+          : "Sem dono";
 
-  // Só é possível assumir demandas que têm conversa e ainda não têm dono humano.
-  const canClaim = Boolean(lead.conversation_id) && !owned;
+  // "Assumir" é tirar da IA e trazer para si: continua valendo enquanto não há
+  // dono HUMANO — dono agente não bloqueia o handoff, é justamente o caso dele.
+  const ownedByHuman = Boolean(lead.owner_user_id) || lead.assignee_kind === "user";
+  const canClaim = Boolean(lead.conversation_id) && !ownedByHuman;
 
   function handleClaim() {
     if (!lead.conversation_id) return;
@@ -137,8 +144,7 @@ function RadarRow({ lead }: { lead: AtRiskLead }) {
               {coldFor(lead.hours_since_activity)}
             </span>
             <span className="inline-flex items-center gap-1" data-testid="radar-assignee">
-              {assignee.icon}
-              {assignee.text}
+              {dono}
             </span>
           </p>
           {lead.in_flight && lead.next_followup_at ? (
