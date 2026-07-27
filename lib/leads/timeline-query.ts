@@ -1,6 +1,4 @@
 import type { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { isServiceRoleConfigured } from "@/lib/audit";
 import type { TimelineItem, TimelineItemView } from "@/lib/types/contacts";
 
 /**
@@ -111,15 +109,37 @@ export async function comNomeDoAtor(
   }
 
   const nomeUsuario = new Map<string, string>();
-  if (userIds.length > 0 && isServiceRoleConfigured()) {
-    const admin = createAdminClient();
-    await Promise.all(
-      userIds.map(async (id) => {
-        const { data } = await admin.auth.admin.getUserById(id);
-        const nome = data?.user?.user_metadata?.full_name;
-        if (typeof nome === "string" && nome.trim() !== "") nomeUsuario.set(id, nome);
-      }),
-    );
+  if (userIds.length > 0) {
+    // ⚠️ IMPORTS TARDIOS, E NÃO É ESTILO: os DOIS módulos abaixo importam
+    // `@/lib/env`, que VALIDA o ambiente no topo e LANÇA se faltar variável.
+    // Com eles no topo daqui, só de carregar este arquivo o ambiente precisava
+    // estar completo — e `eixoDoDossie`, que é função PURA e não toca em
+    // Supabase nenhum, arrastava o env junto.
+    //
+    // Foi assim que a main quebrou (run 30182066284): `tests/unit/timeline-
+    // eixo.test.ts` importava só a função pura, o CI não tem `.env` no disco, e
+    // a SUÍTE INTEIRA falhou ao carregar — 1 failed / 134 passed. Falha de
+    // MÓDULO, não de teste: nenhuma asserção chegou a rodar.
+    //
+    // E `@/lib/audit` é o menos óbvio dos dois: `isServiceRoleConfigured` é um
+    // helper de três linhas que não usa env para nada — quem o arrasta é o
+    // módulo em que ele mora. Consertar só o admin client deixava a main
+    // vermelha do mesmo jeito (medido: a sonda de import continuou falhando).
+    //
+    // Os imports ficam onde as funções são de fato USADAS. Quem importa a
+    // função pura não paga por dependência que ela não tem.
+    const { isServiceRoleConfigured } = await import("@/lib/audit");
+    if (isServiceRoleConfigured()) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const admin = createAdminClient();
+      await Promise.all(
+        userIds.map(async (id) => {
+          const { data } = await admin.auth.admin.getUserById(id);
+          const nome = data?.user?.user_metadata?.full_name;
+          if (typeof nome === "string" && nome.trim() !== "") nomeUsuario.set(id, nome);
+        }),
+      );
+    }
   }
 
   return rows.map((r) => ({
