@@ -18,6 +18,17 @@
 
 </div>
 
+---
+
+> ### ☁️ Run this CRM in production with one command
+>
+> DeskcommCRM is developed in **partnership with HostGator**: the [`hostgator-setup-kit/`](hostgator-setup-kit/)
+> installs the full CRM (app + WAHA + database) on a VPS with a single command, and the
+> [production runbook](docs/runbooks/waha-hostgator.md) assumes that environment.
+>
+> **[👉 Get the HostGator VPS with the partnership discount](https://www.hostgator.com.br/52708-141-3-52.html)** —
+> São Paulo datacenter, ideal for WhatsApp running 24/7. *(partner link — subscribing through it supports the project and costs you less)*
+
 ## ✨ What is it
 
 **Deskcomm** comes from **Desk** + **comm** (commerce): your entire sales operation on a single desk, run by people and AI agents working together.
@@ -34,17 +45,6 @@ The project was born as an e-commerce CRM — and the open-source community took
 - 👥 **Support governance** — real server-side RBAC, audited assignment/transfer, queue with position, automatic routing and per-role visibility scopes.
 - 🏢 **Multi-tenant + privacy by design (LGPD)** — RLS on every tenant-aware table with an isolation test as a CI gate; anonymization preferred over deletion; append-only audit log with 5-year retention.
 - 🖥️ **Truly self-hosted** — your data on your VPS; one-command install; no paid tier, no gated features.
-
----
-
-> ### ☁️ Run this CRM in production with one command
->
-> DeskcommCRM is developed in **partnership with HostGator**: the [`hostgator-setup-kit/`](hostgator-setup-kit/)
-> installs the full CRM (app + WAHA + database) on a VPS with a single command, and the
-> [production runbook](docs/runbooks/waha-hostgator.md) assumes that environment.
->
-> **[👉 Get the HostGator VPS with the partnership discount](https://www.hostgator.com.br/52708-141-3-52.html)** —
-> São Paulo datacenter, ideal for WhatsApp running 24/7. *(partner link — subscribing through it supports the project and costs you less)*
 
 ### 🔌 Webhooks & Automations
 

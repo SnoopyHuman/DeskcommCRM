@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type pg from 'pg';
 
-import { loadPublishedAgentConfig } from './agent-config';
+import { loadPublishedAgentConfig, loadPublishedAgentConfigById } from './agent-config';
 
 const baseRow = {
   agent_id: 'a1', version_id: 'v1', agent_name: 'Vendedor', system_prompt: 'p',
@@ -37,5 +37,37 @@ describe('loadPublishedAgentConfig — campos de RAG', () => {
   it('activeKbVersionId nulo quando o agente não tem KB ativa', async () => {
     const cfg = await loadPublishedAgentConfig(poolWith({ ...baseRow, active_kb_version_id: null }), 'org1', 'cs1');
     expect(cfg?.activeKbVersionId).toBeNull();
+  });
+});
+
+describe('loadPublishedAgentConfigById', () => {
+  it('filtra por organization_id e agent_id, nessa ordem — risco de vazamento cross-tenant se removido', async () => {
+    const pool = poolWith(baseRow);
+    await loadPublishedAgentConfigById(pool, 'org1', 'a1');
+    const queryMock = pool.query as unknown as ReturnType<typeof vi.fn>;
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    // params na ORDEM exata — falha se o filtro de org for removido/trocado.
+    expect(params).toEqual(['org1', 'a1']);
+    // e o SQL de fato usa esses params pra filtrar org+id (não só passa o
+    // valor sem usar) — falha se o `and a.organization_id = $1` sumir do SQL.
+    expect(sql).toMatch(/a\.organization_id\s*=\s*\$1/);
+    expect(sql).toMatch(/a\.id\s*=\s*\$2/);
+  });
+
+  it('retorna null quando o agente não é encontrado', async () => {
+    const cfg = await loadPublishedAgentConfigById(poolWith(undefined), 'org1', 'a1');
+    expect(cfg).toBeNull();
+  });
+
+  it('mapeia a linha com o mesmo mapper de loadPublishedAgentConfig (rag knobs inclusos)', async () => {
+    const cfg = await loadPublishedAgentConfigById(poolWith(baseRow), 'org1', 'a1');
+    expect(cfg?.agentId).toBe('a1');
+    expect(cfg?.agentName).toBe('Vendedor');
+    expect(cfg?.provider).toBe('anthropic');
+    expect(cfg?.model).toBe('claude-sonnet-4-6');
+    expect(cfg?.activeKbVersionId).toBe('kb-1');
+    expect(cfg?.ragTopK).toBe(7);
+    expect(cfg?.ragSimilarityThreshold).toBe(0.8);
   });
 });

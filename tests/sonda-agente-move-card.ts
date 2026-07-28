@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import { createClient } from "@supabase/supabase-js";
 
+import { mirrorLeadStageToCrm } from "@/lib/agent-engine/edge/crm/move-lead-stage";
 import { sincronizaEstagioDoAgente } from "@/lib/leads/agent-stage-sync";
 
 const env = Object.fromEntries(
@@ -74,5 +75,52 @@ async function main(): Promise<void> {
 
   console.info("\n=== 25: passo sem mapeamento no pipeline ===");
   await rodar(PEDIDOS, "e-commerce", "qualifying");
+
+  await pelaPonte();
+}
+
+/**
+ * A PONTE que o turno de fato chama (`inbound-turn.ts` → mirrorLeadStageToCrm),
+ * e não o motor por baixo dela.
+ *
+ * ⚠️ Este cenário existe porque os de cima passariam com a ponte desligada: eles
+ * chamam `sincronizaEstagioDoAgente` direto. A propriedade mais cara da fusão —
+ * `input.leadId` do engine É o `contact_id` do CRM — só é exercida aqui, contra
+ * dado real. Trocá-la move o card errado, e nenhum mock notaria.
+ */
+async function pelaPonte(): Promise<void> {
+  console.info("\n=== a PONTE (mirrorLeadStageToCrm), como o turno chama ===");
+  const { data } = await admin
+    .from("crm_stages").select("id, name").eq("pipeline_id", CLINICA).order("position");
+  const st = (data ?? []) as Array<{ id: string; name: string }>;
+  const primeiro = st[0]!;
+
+  const contactId = randomUUID();
+  await admin.from("contacts").insert({ id: contactId, organization_id: ORG, name: "sonda ponte" });
+  const leadId = randomUUID();
+  await admin.from("crm_leads").insert({
+    id: leadId, organization_id: ORG, pipeline_id: CLINICA, stage_id: primeiro.id,
+    contact_id: contactId, title: "sonda ponte", position_in_stage: 1,
+  });
+
+  const nomeDe = async () => {
+    const { data: l } = await admin.from("crm_leads").select("stage_id").eq("id", leadId).maybeSingle();
+    return st.find((s) => s.id === (l as { stage_id: string }).stage_id)?.name;
+  };
+  // `leadId` do engine = contact_id do CRM (o funil do agente é por contato).
+  const mover = async (passo: "negotiating" | "qualified") => {
+    const antes = await nomeDe();
+    const r = await mirrorLeadStageToCrm({} as never, { supabase: admin }, {
+      tenantId: ORG, leadId: contactId, toStage: passo,
+    });
+    console.info(`   passo "${passo}" → ${JSON.stringify(r)}`);
+    console.info(`   card: ${antes} → ${await nomeDe()}`);
+  };
+  await mover("negotiating"); // pipeline declara destino → o card anda
+  await mover("qualified"); // nenhum estágio declara este hint → not_configured
+
+  await admin.from("crm_lead_activities").delete().eq("lead_id", leadId);
+  await admin.from("crm_leads").delete().eq("id", leadId);
+  await admin.from("contacts").delete().eq("id", contactId);
 }
 void main();

@@ -70,13 +70,7 @@ interface Row {
   agent_created_by: string | null;
 }
 
-export async function loadPublishedAgentConfig(
-  db: pg.Pool,
-  organizationId: string,
-  channelSessionId: string,
-): Promise<PublishedAgentConfig | null> {
-  const { rows } = await db.query<Row>(
-    `select a.id as agent_id,
+const SELECT_AGENT_CONFIG_COLUMNS = `a.id as agent_id,
             v.id as version_id,
             a.name as agent_name,
             v.system_prompt,
@@ -96,23 +90,11 @@ export async function loadPublishedAgentConfig(
             a.active_kb_version_id,
             a.config,
             v.created_by as version_created_by,
-            a.created_by as agent_created_by
-     from ai_agents a
-     join ai_agent_versions v on v.id = a.published_version_id
-     where a.organization_id = $1
-       and a.archived_at is null
-       -- is_active é semântica do rag_bot legado; para mcp_agent "ativo" =
-       -- published_version_id preenchido + não arquivado (mesmo critério do
-       -- dispatcher nativo do CRM — pausar = despublicar).
-       and v.status = 'published'
-       and v.channel_session_id = $2
-     order by a.priority desc, a.created_at asc
-     limit 1`,
-    [organizationId, channelSessionId],
-  );
-  const r = rows[0];
-  if (r === undefined) return null;
+            a.created_by as agent_created_by`;
 
+/** Mapeamento Row (snake_case do banco) → PublishedAgentConfig, compartilhado
+ * pelas duas variantes de loader (por channel_session e por agent id). */
+function mapAgentConfigRow(r: Row): PublishedAgentConfig {
   const cfg = (r.config ?? {}) as { rag_top_k?: unknown; rag_similarity_threshold?: unknown };
   const ragTopK =
     typeof cfg.rag_top_k === 'number' && Number.isInteger(cfg.rag_top_k) && cfg.rag_top_k >= 1 && cfg.rag_top_k <= 20
@@ -147,6 +129,57 @@ export async function loadPublishedAgentConfig(
     versionCreatedBy: r.version_created_by,
     agentCreatedBy: r.agent_created_by,
   };
+}
+
+export async function loadPublishedAgentConfig(
+  db: pg.Pool,
+  organizationId: string,
+  channelSessionId: string,
+): Promise<PublishedAgentConfig | null> {
+  const { rows } = await db.query<Row>(
+    `select ${SELECT_AGENT_CONFIG_COLUMNS}
+     from ai_agents a
+     join ai_agent_versions v on v.id = a.published_version_id
+     where a.organization_id = $1
+       and a.archived_at is null
+       -- is_active é semântica do rag_bot legado; para mcp_agent "ativo" =
+       -- published_version_id preenchido + não arquivado (mesmo critério do
+       -- dispatcher nativo do CRM — pausar = despublicar).
+       and v.status = 'published'
+       and v.channel_session_id = $2
+     order by a.priority desc, a.created_at asc
+     limit 1`,
+    [organizationId, channelSessionId],
+  );
+  const r = rows[0];
+  if (r === undefined) return null;
+  return mapAgentConfigRow(r);
+}
+
+/**
+ * Variante por agent_id — usada pelo Intent Router (Fase 3): membros de
+ * router (`ai_router_members.agent_id`) apontam pro agente diretamente, sem
+ * vínculo com a channel_session do turno (quem tem o vínculo é o ROUTER, não
+ * o agente-membro). `id` é único, então sem order/limit.
+ */
+export async function loadPublishedAgentConfigById(
+  db: pg.Pool,
+  organizationId: string,
+  agentId: string,
+): Promise<PublishedAgentConfig | null> {
+  const { rows } = await db.query<Row>(
+    `select ${SELECT_AGENT_CONFIG_COLUMNS}
+     from ai_agents a
+     join ai_agent_versions v on v.id = a.published_version_id
+     where a.organization_id = $1
+       and a.archived_at is null
+       and v.status = 'published'
+       and a.id = $2`,
+    [organizationId, agentId],
+  );
+  const r = rows[0];
+  if (r === undefined) return null;
+  return mapAgentConfigRow(r);
 }
 
 /**

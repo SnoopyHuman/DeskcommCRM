@@ -31,6 +31,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TokenCounter } from "@/lib/ui/TokenCounter";
+import { Info } from "@/lib/ui/icons";
+import Link from "next/link";
 
 import { ModelPicker, useModelMeta } from "./ModelPicker";
 import { CredentialPicker, findCredential } from "./CredentialPicker";
@@ -61,6 +63,7 @@ export interface ChannelSessionLite {
 interface BaseProps {
   credentials: CredentialRow[];
   channelSessions: ChannelSessionLite[];
+  routerMembership?: { routerId: string; routerName: string } | null;
   readOnly?: boolean;
 }
 
@@ -486,6 +489,21 @@ export function AgentForm(props: Props) {
           {/* WhatsApp session */}
           <Card className="space-y-3 p-4">
             <h3 className="text-sm font-medium">Número de WhatsApp</h3>
+            {props.routerMembership && (
+              <div className="flex items-start gap-2 rounded-md bg-accent-soft p-3 text-xs text-text-muted">
+                <Info className="mt-0.5 shrink-0" aria-hidden />
+                <p>
+                  Este agente é acionado pelo roteador{" "}
+                  <Link
+                    href={`/app/ai/routers/${props.routerMembership.routerId}`}
+                    className="font-medium underline underline-offset-2"
+                  >
+                    «{props.routerMembership.routerName}»
+                  </Link>{" "}
+                  — o campo de número abaixo não se aplica.
+                </p>
+              </div>
+            )}
             <div className="space-y-1">
               <Label htmlFor="channel_session_id">Sessão</Label>
               <Select

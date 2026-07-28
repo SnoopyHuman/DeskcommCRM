@@ -40,9 +40,9 @@ const LINKS: SettingsLink[] = [
   },
   {
     href: "/app/settings/tenant/pipelines",
-    title: "Pipelines",
-    description: "Vocabulário, custom fields, motivos de perda.",
-    adminOnly: true,
+    title: "Funis",
+    description: "Para onde o agente leva o card em cada passo do atendimento.",
+    managerOnly: true,
   },
   {
     href: "/app/connections",

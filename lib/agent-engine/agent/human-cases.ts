@@ -21,8 +21,8 @@
  *
  * `agent_cases.lead_id` é FK para `crm_leads` (o lead do pipeline do CRM) — uma
  * entidade DIFERENTE do `contact_id`/`leadId` usado no resto do agent-engine (ver
- * draft-reply.ts). O espelho contact→crm_leads ainda não está ligado
- * (mirrorLeadStageToCrm retorna 'not_configured' — Fase 2 da fusão), então
+ * draft-reply.ts). O espelho de estágio (mirrorLeadStageToCrm) já resolve o
+ * negócio do contato para MOVER o card, mas nada aqui lê esse id, então
  * `agent_cases.lead_id` fica NULL sempre — o caso ancora em `conversation_id`
  * (CaseIds não carrega o contact_id: nada aqui o lê).
  */

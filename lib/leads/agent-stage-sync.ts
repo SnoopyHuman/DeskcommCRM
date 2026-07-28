@@ -83,9 +83,27 @@ import { stageChangeReason } from "@/lib/leads/activity-emitter";
 
 export interface ResultadoDaSincronizacao {
   moveu: boolean;
-  motivo: "movido" | "sem_mapeamento" | "ja_esta_la" | "sem_negocio" | "ambiguo";
+  /**
+   * ⚠️ NENHUM RÓTULO PODE MENTIR — é o que separa os três grupos:
+   *  - estado legítimo do produto: `sem_mapeamento`, `sem_negocio`, `ambiguo`,
+   *    `ja_esta_la`, `conflito_humano` (o card não andou, e ninguém errou);
+   *  - o banco não respondeu: `indisponivel` (o funil PAROU — alguém precisa saber);
+   *  - a escrita falhou: `falha_de_escrita`.
+   * Reaproveitar um rótulo do primeiro grupo para os outros dois transformaria
+   * indisponibilidade em rotina, que é o defeito que esta função já teve.
+   */
+  motivo:
+    | "movido"
+    | "sem_mapeamento"
+    | "ja_esta_la"
+    | "sem_negocio"
+    | "ambiguo"
+    | "conflito_humano"
+    | "falha_de_escrita"
+    | "indisponivel";
   leadId?: string;
   stageName?: string;
+  detalhe?: string;
 }
 
 /**
@@ -106,11 +124,18 @@ export async function sincronizaEstagioDoAgente(
   admin: SupabaseClient,
   input: { organizationId: string; contactId: string; passo: string },
 ): Promise<ResultadoDaSincronizacao> {
-  const { data: leadRows } = await admin
+  // ⚠️ O erro do SELECT É LIDO, e isso não é zelo: o supabase-js NÃO LANÇA em
+  // falha de rede — devolve { data: null, error }. Descartar o erro faria o
+  // banco fora virar `candidatos = []` → "sem_negocio", ou seja, uma queda do
+  // Supabase indistinguível do estado normal de um contato sem negócio aberto.
+  const { data: leadRows, error: erroLeads } = await admin
     .from("crm_leads")
     .select("id, organization_id, pipeline_id, stage_id, status, created_at, last_activity_at")
     .eq("organization_id", input.organizationId)
     .eq("contact_id", input.contactId);
+  if (erroLeads) {
+    return { moveu: false, motivo: "indisponivel", detalhe: erroLeads.message };
+  }
   const candidatos = (leadRows ?? []) as Array<{
     id: string;
     organization_id: string;
@@ -136,10 +161,15 @@ export async function sincronizaEstagioDoAgente(
   }
   const lead = candidatos.find((c) => c.id === rota.leadId)!;
 
-  const { data: stageRows } = await admin
+  const { data: stageRows, error: erroStages } = await admin
     .from("crm_stages")
     .select("id, name, agent_stage_hint, is_archived")
     .eq("pipeline_id", lead.pipeline_id);
+  // Mesmo motivo do SELECT acima: sem esta linha, banco fora = pipeline sem
+  // hint nenhum = "sem_mapeamento", e o incidente se disfarça de configuração.
+  if (erroStages) {
+    return { moveu: false, motivo: "indisponivel", leadId: lead.id, detalhe: erroStages.message };
+  }
 
   const destino = resolveDestinoDoAgente(
     (stageRows ?? []) as EstagioCandidato[],
@@ -148,20 +178,37 @@ export async function sincronizaEstagioDoAgente(
   );
   if (!destino.move) return { moveu: false, motivo: destino.motivo, leadId: lead.id };
 
+  // O erro DESTE select é descartado de propósito — e a diferença para os dois de
+  // cima (onde descartar produziu o defeito de tratar banco fora como rotina) é
+  // que aqui nenhuma DECISÃO depende do resultado: o nome da origem só enfeita o
+  // texto da timeline, que degrada de "Movido de A para X" para "Movido para X".
+  // Abortar por causa dele desfaria um movimento que já aconteceu no banco.
   const { data: origem } = await admin
     .from("crm_stages")
     .select("name")
     .eq("id", lead.stage_id)
     .maybeSingle();
 
-  const { error } = await admin
+  const { data: atualizadas, error } = await admin
     .from("crm_leads")
     .update({ stage_id: destino.stageId })
     .eq("id", lead.id)
     // Trava otimista pelo estágio de ORIGEM: se um humano arrastou o card entre
     // a leitura e a escrita, o agente não atropela a decisão dele.
-    .eq("stage_id", lead.stage_id);
-  if (error) return { moveu: false, motivo: "ja_esta_la", leadId: lead.id };
+    .eq("stage_id", lead.stage_id)
+    // ⚠️ O `.select()` é o que torna a trava OBSERVÁVEL: sem ele, "0 linhas
+    // afetadas" não é erro nenhum e o código seguiria emitindo a atividade de
+    // um movimento que não aconteceu — história fabricada na timeline do
+    // cliente, que é pior que não mover.
+    .select("id");
+  if (error) {
+    return { moveu: false, motivo: "falha_de_escrita", leadId: lead.id, detalhe: error.message };
+  }
+  if ((atualizadas ?? []).length === 0) {
+    // A trava atuou: um humano moveu o card no meio da operação. Não é erro (a
+    // decisão dele vence) e NÃO emite atividade — nada aconteceu para contar.
+    return { moveu: false, motivo: "conflito_humano", leadId: lead.id };
+  }
 
   // A atividade usa o MESMO `stageChangeReason` do arrasto humano — a timeline
   // não deve ter duas gramáticas para o mesmo acontecimento. Quem moveu está no

@@ -92,6 +92,15 @@ Carga sob demanda além do prompt: `search_knowledge` (RAG), `read_skill_referen
 
 ## Fase 4 — Painel de Evolução
 
+> **CONCLUÍDA em 2026-07-27** (plano `docs/superpowers/plans/2026-07-27-harness-fase4-painel-evolucao.md`, 7 tasks). Entregue: `knowledge_searches` (migration 0086) + telemetria no `searchKnowledge`, a ponte do funil deixando de ser stub, o agregador puro `lib/ai/evolution/aggregate.ts`, a rota `GET /api/v1/ai/evolution` e a tela `app/app/ai/evolution`.
+>
+> **Três itens desta seção ficaram DE FORA, por decisão registrada** (não por esquecimento):
+> - **vereditos do juiz ao longo do tempo** — o veredito é sobre dataset de avaliação, não sobre conversa real do tenant; ao lado de "negócios ganhos" ele se leria como resultado de negócio;
+> - **comparativo antes/depois automático** — a linha do tempo marca as datas e o dono compara nos gráficos; um "melhorou 12%" sobre trinta conversas seria número que mente com aparência de rigor;
+> - **follow-ups executados** — `followup_enrollment_events` não tem evento de execução legível, e a própria seção proíbe coletor novo.
+>
+> Detalhe do que foi provado (e por qual caminho) no `HANDOFF-harness-evolution.md`.
+
 Leitura dos artefatos depositados pelas fases anteriores — nenhum sistema novo de coleta além do que já foi instrumentado:
 
 - **Linha do tempo de aprendizado**: entradas de memória criadas/aprovadas (Fase 1), propostas do flywheel aplicadas (existente), skills instaladas/atualizadas (Fase 2).

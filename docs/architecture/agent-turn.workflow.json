@@ -33,6 +33,26 @@
       "id": "config",
       "label": "Config (Memória da Org)",
       "variant": "exception"
+    },
+    {
+      "id": "skills",
+      "label": "Skills instaláveis (Fase 2)",
+      "variant": "exception"
+    },
+    {
+      "id": "router",
+      "label": "Intent Router (Fase 3)",
+      "variant": "exception"
+    },
+    {
+      "id": "evolucao",
+      "label": "Evolução da IA (Fase 4)",
+      "variant": "exception"
+    },
+    {
+      "id": "funil",
+      "label": "Funil: etapas + mapeamento",
+      "variant": "exception"
     }
   ],
   "mainPath": [
@@ -133,6 +153,78 @@
       "type": "backend",
       "label": "org_memory",
       "sublabel": "versão + ponteiro + aprendizados"
+    },
+    {
+      "id": "skillsscreen",
+      "lane": "skills",
+      "col": 0,
+      "type": "frontend",
+      "label": "Skills",
+      "sublabel": "tela + import .zip (app/app/ai/skills)"
+    },
+    {
+      "id": "skillcatalog",
+      "lane": "skills",
+      "col": 1,
+      "type": "backend",
+      "label": "Skill catalog",
+      "sublabel": "skill_versions + pointers"
+    },
+    {
+      "id": "routerscreen",
+      "lane": "router",
+      "col": 0,
+      "type": "frontend",
+      "label": "Routers",
+      "sublabel": "tela + API (app/app/ai/routers)"
+    },
+    {
+      "id": "routerconfig",
+      "lane": "router",
+      "col": 1,
+      "type": "backend",
+      "label": "ai_routers",
+      "sublabel": "intents + min_confidence + sticky"
+    },
+    {
+      "id": "evolutionscreen",
+      "lane": "evolucao",
+      "col": 0,
+      "type": "frontend",
+      "label": "Evolução da IA",
+      "sublabel": "tela + API (app/app/ai/evolution)"
+    },
+    {
+      "id": "knowledgesearches",
+      "lane": "evolucao",
+      "col": 1,
+      "type": "backend",
+      "label": "Buscas na base",
+      "sublabel": "knowledge_searches: hits + limiar"
+    },
+    {
+      "id": "stagesscreen",
+      "lane": "funil",
+      "col": 0,
+      "type": "frontend",
+      "label": "Etapas",
+      "sublabel": "tela + API: criar · renomear · ganho/perda · arquivar"
+    },
+    {
+      "id": "mappingscreen",
+      "lane": "funil",
+      "col": 2,
+      "type": "frontend",
+      "label": "Mapa do funil",
+      "sublabel": "tela (settings/tenant/pipelines)"
+    },
+    {
+      "id": "stagehint",
+      "lane": "funil",
+      "col": 4,
+      "type": "database",
+      "label": "crm_stages",
+      "sublabel": "agent_stage_hint: passo → etapa"
     }
   ],
   "edges": [
@@ -230,9 +322,153 @@
       "fromSide": "top",
       "toSide": "bottom",
       "route": "drop"
+    },
+    {
+      "id": "skillsscreen-skillcatalog",
+      "from": "skillsscreen",
+      "to": "skillcatalog",
+      "label": "importa .zip / instala do catálogo",
+      "labelAt": [
+        154,
+        903
+      ]
+    },
+    {
+      "id": "skillcatalog-turn",
+      "from": "skillcatalog",
+      "to": "turn",
+      "label": "índice no prefixo + corpo casado no sufixo + read_skill_reference",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "route": "outside-right",
+      "labelDy": 40
+    },
+    {
+      "id": "routerscreen-routerconfig",
+      "from": "routerscreen",
+      "to": "routerconfig",
+      "label": "cria/edita router · testa classificação",
+      "labelDy": 50
+    },
+    {
+      "id": "routerconfig-turn",
+      "from": "routerconfig",
+      "to": "turn",
+      "label": "classifica a intenção e decide o agentConfig do turno",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "route": "outside-right",
+      "labelDy": 60
+    },
+    {
+      "id": "turn-knowledgesearches",
+      "from": "turn",
+      "to": "knowledgesearches",
+      "label": "toda busca na base grava hits · top_score · limiar",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "route": "outside-right",
+      "labelDy": 80
+    },
+    {
+      "id": "knowledgesearches-evolutionscreen",
+      "from": "knowledgesearches",
+      "to": "evolutionscreen",
+      "label": "quantas perguntas a base respondeu (e quais quase acertaram)",
+      "labelDy": 50
+    },
+    {
+      "id": "evolutionscreen-routerscreen",
+      "from": "evolutionscreen",
+      "to": "routerscreen",
+      "label": "lacuna vira ação: cadastrar o assunto",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "drop",
+      "labelDy": 40
+    },
+    {
+      "id": "evolutionscreen-mappingscreen",
+      "from": "evolutionscreen",
+      "to": "mappingscreen",
+      "label": "lacuna vira ação: escolher a etapa que recebe o passo",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelDy": 40,
+      "labelDx": -50
+    },
+    {
+      "id": "stagesscreen-stagehint",
+      "from": "stagesscreen",
+      "to": "stagehint",
+      "label": "cria · renomeia · ganho/perda · arquiva",
+      "fromSide": "top",
+      "toSide": "top",
+      "route": "up-channel",
+      "labelAt": [
+        400,
+        1196
+      ]
+    },
+    {
+      "id": "stagesscreen-mappingscreen",
+      "from": "stagesscreen",
+      "to": "mappingscreen",
+      "label": "arquivar mata o vínculo com o assistente",
+      "labelDy": 44
+    },
+    {
+      "id": "mappingscreen-stagesscreen",
+      "from": "mappingscreen",
+      "to": "stagesscreen",
+      "label": "sem etapa de fechamento, conserta aqui",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "route": "bottom-channel",
+      "labelDy": 0,
+      "channelY": 1276,
+      "labelAt": [
+        190,
+        1288
+      ]
+    },
+    {
+      "id": "mappingscreen-stagehint",
+      "from": "mappingscreen",
+      "to": "stagehint",
+      "label": "grava os 7 passos de uma vez",
+      "labelDy": 50
+    },
+    {
+      "id": "stagehint-turn",
+      "from": "stagehint",
+      "to": "turn",
+      "label": "o card anda para a etapa escolhida (mirrorLeadStageToCrm)",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "route": "outside-right",
+      "labelDy": 100
     }
   ],
   "cards": [
+    {
+      "dot": "amber",
+      "title": "Saídas do painel (Fase 4)",
+      "items": [
+        "Roteador e Mapa do funil são as arestas desenhadas; as outras saem por CTA",
+        "Memória da Org (publicar regra) · Skills (instalar habilidade)",
+        "Base de conhecimento (publicar material que faltou)",
+        "Sem saída o painel seria vitrine: o número existe para virar conserto"
+      ]
+    },
     {
       "dot": "rose",
       "title": "Ordem dos 7 gates (invariante)",

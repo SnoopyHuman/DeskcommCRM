@@ -159,13 +159,18 @@ export async function performHumanHandoff(
 
   // (b) Conversa: silencia o bot para sempre e devolve à fila humana. O status SÓ
   // transiciona 'ai_handling'→'pending' — conversa já claimed/closed/pending fica como
-  // está (nunca rouba do humano nem reabre encerrada).
+  // está (nunca rouba do humano nem reabre encerrada). Fase 3: junto, zera a aderência
+  // ao agente do router — se o bot for reativado, o router decide de novo (não reassume
+  // o mesmo agente por inércia).
   await db.query(
     `update conversations
         set status = case when status = 'ai_handling' then 'pending' else status end,
             bot_silenced_until = $3,
             last_handoff_at = now(),
-            last_handoff_reason = $4
+            last_handoff_reason = $4,
+            active_ai_agent_id = null,
+            active_intent = null,
+            active_agent_set_at = null
       where organization_id = $1 and id = $2`,
     [ids.tenantId, ids.conversationId, SILENCE_INFINITY, opts.reason],
   );

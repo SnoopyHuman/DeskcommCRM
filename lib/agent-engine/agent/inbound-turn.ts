@@ -47,7 +47,7 @@ import {
   type ToolSet,
 } from '../edge/llm/run-model-call';
 import type { ProviderRegistry } from '../edge/llm/providers';
-import { mirrorLeadStageToCrm } from '../edge/crm/move-lead-stage';
+import { MIRROR_WARN_ONLY, mirrorLeadStageToCrm } from '../edge/crm/move-lead-stage';
 import { insertInboxItem } from '../db/repository';
 import { buildNativeMediaParts } from './media-parts';
 import type { JobRow, Queryable } from '../queue/queue';
@@ -72,7 +72,8 @@ import {
 } from './stage-classifier';
 import { loadPlaybook } from './playbook';
 import { composeSystemPrompt, loadOrgMemory, renderOrgMemory } from './org-memory';
-import { loadPublishedAgentConfig, matchesHandoffKeyword } from './agent-config';
+import { matchesHandoffKeyword } from './agent-config';
+import { resolveTurnAgent } from './resolve-turn-agent';
 import {
   hasOpenCaseForContact,
   getCaseAwaitingLead,
@@ -91,6 +92,7 @@ import {
   renderMatchedSkillBodies,
   renderSkillIndex,
 } from './skills';
+import { readSkillReference, skillHasReferences } from './skill-references';
 import { READ_ONLY_TOOLS, wrapToolsWithBreaker, type ToolBreakerThresholds } from './tool-breaker';
 import { runBeforeSend } from '../guardrails/before-send';
 import { sendInBubbles } from './split-message';
@@ -207,6 +209,17 @@ export const AGENT_TOOL_DEFS = {
     // vira erro de ENSINO ao modelo, nunca exceção do SDK nem strip silencioso.
     inputSchema: z.object({
       reason: z.string().optional().describe('por que passar ao humano (curto)'),
+    }).passthrough(),
+  },
+  read_skill_reference: {
+    description:
+      'Lê o conteúdo de UMA reference (arquivo de apoio) do pacote de uma skill situacional que já ' +
+      'CASOU neste turno. Use quando o corpo da skill ativa mencionar uma reference e você precisar do ' +
+      'detalhe completo dela. Só funciona para skills ativas AGORA — pedir skill não ativa ou caminho ' +
+      'fora do manifesto dela volta erro.',
+    inputSchema: z.object({
+      skill_name: z.string().min(1).describe('nome da skill ativa neste turno (como aparece no bloco de skills)'),
+      ref_path: z.string().min(1).describe('caminho da reference dentro do pacote da skill'),
     }).passthrough(),
   },
   open_human_case: {
@@ -577,16 +590,93 @@ export async function runAgentTurn(
     return;
   }
 
-  // Fase 2B: config do agente por PONTEIRO PUBLICADO (tela ai/agents) — lida a
-  // cada turno, zero cache; org/sessão da row do job (fonte confiável). null =
-  // sem agente publicado p/ esta sessão → fallback (playbook + settings + env).
-  const agentConfig = await loadPublishedAgentConfig(pool, tenantId, input.channelSessionId);
+  // Fase 3: stickiness do router — qual agente já atende esta conversa. Leituras
+  // tolerantes a falha (ex.: clone self-host ainda sem a migration 0085 aplicada) —
+  // um erro aqui degrada pro fluxo sem router, nunca derruba o turno (review T5).
+  let sticky: { active_ai_agent_id: string | null; active_intent: string | null } = {
+    active_ai_agent_id: null,
+    active_intent: null,
+  };
+  // Regra 6 do resolver (nunca classifica em follow-up): só busca o sinal em turno
+  // inbound de verdade — um follow-up de dias depois não pode reclassificar sobre a
+  // mensagem antiga que originou a promessa (review T5, finding 1).
+  let routingSignal: string | null = null;
+  try {
+    const { rows: convRows } = await pool.query<{ active_ai_agent_id: string | null; active_intent: string | null }>(
+      'select active_ai_agent_id, active_intent from conversations where organization_id = $1 and id = $2',
+      [tenantId, input.conversationId],
+    );
+    sticky = convRows[0] ?? sticky;
+    if (job.kind === 'inbound_turn') {
+      // O sinal de roteamento (última inbound) ainda não está disponível aqui —
+      // getLeadContext só roda mais abaixo. Leitura direta e barata, só pra alimentar
+      // o classificador. Mesma régua de "última inbound" do resto do turno
+      // (get-lead-context.ts): sent_at (relógio do WhatsApp), não created_at (now() do
+      // insert) — os dois relógios podem divergir (review T5, finding 3).
+      const { rows: sigRows } = await pool.query<{ body: string | null }>(
+        `select body from messages
+         where organization_id = $1 and conversation_id = $2 and direction = 'inbound'
+         order by sent_at desc, id desc limit 1`,
+        [tenantId, input.conversationId],
+      );
+      routingSignal = sigRows[0]?.body ?? null;
+    }
+  } catch (err) {
+    runLog.warn('leitura de sticky/sinal do router falhou — turno segue sem router', {
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
+    });
+  }
+
+  // Fase 2B/3: config do agente por PONTEIRO PUBLICADO (tela ai/agents) — lida a
+  // cada turno, zero cache; org/sessão da row do job (fonte confiável). Sem router
+  // ativo pra sessão, o resolver devolve o mesmo fluxo de hoje (outcome 'no_router').
+  // null = sem agente publicado p/ esta sessão → fallback (playbook + settings + env).
+  const routed = await resolveTurnAgent(
+    pool,
+    deps.llmCfg,
+    {
+      tenantId,
+      leadId,
+      jobId: job.id,
+      channelSessionId: input.channelSessionId,
+      conversationId: input.conversationId,
+      signal: routingSignal,
+      stickyAgentId: sticky.active_ai_agent_id,
+      stickyIntent: sticky.active_intent,
+    },
+    { log: runLog },
+  );
+  const agentConfig = routed.config;
   if (agentConfig !== null) {
     runLog.info('config do agente publicada em uso', {
       agent_id: agentConfig.agentId,
       agent_version_id: agentConfig.versionId,
       model: agentConfig.model,
+      router_outcome: routed.outcome,
+      intent: routed.intentName,
     });
+  }
+  // Fase 3: grava a decisão de roteamento e a aderência da conversa ao agente.
+  // Fire-and-forget — falha de telemetria nunca derruba a resposta ao lead.
+  if (routed.routerId !== null) {
+    try {
+      if (agentConfig !== null) {
+        await pool.query(
+          `update conversations
+           set active_ai_agent_id = $3, active_intent = $4, active_agent_set_at = now()
+           where organization_id = $1 and id = $2`,
+          [tenantId, input.conversationId, agentConfig.agentId, routed.intentName],
+        );
+      }
+      await pool.query(
+        `insert into ai_router_decisions
+           (organization_id, router_id, conversation_id, intent_name, confidence, agent_id, outcome, job_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [tenantId, routed.routerId, input.conversationId, routed.intentName, routed.confidence, agentConfig?.agentId ?? null, routed.outcome, job.id],
+      );
+    } catch (err) {
+      runLog.warn('decisão do router não gravada', { error: (err instanceof Error ? err.message : String(err)).slice(0, 120) });
+    }
   }
   // Knobs por-turno: a versão publicada vence o env; sem ela, env (main.ts).
   const maxSteps = agentConfig?.maxSteps ?? deps.knobs.maxSteps;
@@ -830,6 +920,47 @@ export async function runAgentTurn(
     runError ??= err;
   };
 
+  // Guideline-matching if-then (F3-09): o SINAL do turno (última mensagem inbound) decide
+  // quais skills disparam. Corpos casados vão no SUFIXO da abertura (situacional, por-lead —
+  // depois do prefixo cacheável); situação neutra ⇒ nenhum corpo (economia de tokens). Os
+  // near-misses (probe sem hard-match) viram candidatos ao golden set, gravados por fs em
+  // runtime (não a tool Write) — só se o dir estiver configurado. Calculado AQUI, ANTES de
+  // montar rawTools (Fase 2): o gate de read_skill_reference precisa do resultado do match
+  // para decidir se a tool entra no turno (mesmo padrão de gate de search_knowledge/
+  // request_human_handoff, feito antes do wrapToolsWithBreaker).
+  const skillSignal = latestInboundSignal(effectiveContext.messages);
+  const skillMatch = matchSkills(skills, skillSignal);
+  const matchedSkillsBlock = renderMatchedSkillBodies(skillMatch.matched);
+  if (deps.knobs.goldenCandidatesDir !== undefined) {
+    await recordSkillMissCandidates(
+      deps.knobs.goldenCandidatesDir,
+      { tenantId, leadId, jobId: job.id, signal: skillSignal, candidates: skillMatch.missCandidates },
+      runLog,
+    );
+  }
+  // Fase 2: telemetria de ativação de skill (hard match + near-miss probe).
+  try {
+    const rows: Array<[string, string | null, string]> = [
+      ...skillMatch.matched.map((s) => [s.name, s.versionId, 'hard'] as [string, string | null, string]),
+      ...skillMatch.missCandidates.map((m) => [m.skill, null, 'probe'] as [string, string | null, string]),
+    ];
+    if (rows.length > 0) {
+      const values: string[] = [];
+      const params: unknown[] = [];
+      rows.forEach(([name, verId, trig], i) => {
+        const b = i * 5;
+        values.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5})`);
+        params.push(tenantId, name, verId, trig, job.id);
+      });
+      await pool.query(
+        `insert into skill_activations (organization_id, skill_name, skill_version_id, trigger, job_id) values ${values.join(',')}`,
+        params,
+      );
+    }
+  } catch (err) {
+    runLog.warn('skill_activations não gravadas', { error: (err instanceof Error ? err.message : String(err)).slice(0, 120) });
+  }
+
   const rawTools: ToolSet = {
     get_lead_context: tool({
       ...AGENT_TOOL_DEFS.get_lead_context,
@@ -866,7 +997,8 @@ export async function runAgentTurn(
           query,
           topK: agentConfig.ragTopK,
           threshold: agentConfig.ragSimilarityThreshold,
-        });
+          jobId: job.id,
+        }, { log: runLog });
         if (out.ok && out.results.length > 0) {
           pendingCitations = citationsFromHits(out.results);
         }
@@ -1061,10 +1193,10 @@ export async function runAgentTurn(
             return update; // erro de ensino (payload fora da whitelist / transição inválida)
           }
           if (update.transition !== null) {
-            // Espelho no CRM (surrogates). Falha NUNCA reverte o harness (fonte
-            // da verdade do funil) nem falha o job: humano resolve via inbox_items;
-            // 'not_configured' (tenant sem pareamento/mapa) é só warn — espelho
-            // deliberadamente desligado não é incidente.
+            // Espelho no CRM. Falha NUNCA reverte o harness (fonte da verdade do
+            // funil) nem falha o job: humano resolve via inbox_items. Os motivos
+            // de MIRROR_WARN_ONLY (tenant sem mapa; humano moveu o card antes) são
+            // só warn — estado legítimo do produto não é incidente.
             const mirror = await mirrorLeadStageToCrm(pool, deps.crmCfg, {
               tenantId,
               leadId,
@@ -1076,7 +1208,7 @@ export async function runAgentTurn(
                 to_stage: update.transition.to,
                 reason: mirror.reason,
               });
-              if (mirror.reason !== 'not_configured') {
+              if (!MIRROR_WARN_ONLY.has(mirror.reason)) {
                 await insertInboxItem(pool, tenantId, {
                   kind: 'other',
                   title: 'Espelho de stage no CRM falhou — funil possivelmente inconsistente',
@@ -1209,6 +1341,30 @@ export async function runAgentTurn(
     });
   }
 
+  // Fase 2 (Task 6): read_skill_reference só entra quando alguma skill CASADA neste
+  // turno carrega references no manifesto (Task 3) — sem isso oferecer a tool seria
+  // ruído. Read-only (tool-breaker.ts); tenant/matched skills vêm do closure
+  // (skillMatch, calculado acima), nunca do payload do modelo.
+  if (skillMatch.matched.some((s) => skillHasReferences(s))) {
+    rawTools.read_skill_reference = tool({
+      ...AGENT_TOOL_DEFS.read_skill_reference,
+      execute: async ({ skill_name, ref_path }) => {
+        try {
+          return await readSkillReference(
+            { admin: deps.crmCfg.supabase },
+            { organizationId: tenantId, matchedSkills: skillMatch.matched, skillName: skill_name, refPath: ref_path },
+          );
+        } catch (err) {
+          noteRunError(err instanceof Error ? err : new Error(String(err)));
+          return {
+            ok: false,
+            error: { code: 'internal_error', message: 'erro interno ao ler a reference da skill — encerre o turno agora.' },
+          };
+        }
+      },
+    });
+  }
+
   // Fase 2B: a tela pode DESLIGAR a tool de handoff do modelo (a detecção
   // determinística de pedido de humano continua ativa — guardrail nunca sai).
   if (agentConfig !== null && !agentConfig.handoffToolEnabled) {
@@ -1328,22 +1484,6 @@ export async function runAgentTurn(
     readOnlyTools: READ_ONLY_TOOLS,
     log: runLog, // os warns dos gates do breaker saem carimbados com o run
   });
-
-  // Guideline-matching if-then (F3-09): o SINAL do turno (última mensagem inbound) decide
-  // quais skills disparam. Corpos casados vão no SUFIXO da abertura (situacional, por-lead —
-  // depois do prefixo cacheável); situação neutra ⇒ nenhum corpo (economia de tokens). Os
-  // near-misses (probe sem hard-match) viram candidatos ao golden set, gravados por fs em
-  // runtime (não a tool Write) — só se o dir estiver configurado.
-  const skillSignal = latestInboundSignal(effectiveContext.messages);
-  const skillMatch = matchSkills(skills, skillSignal);
-  const matchedSkillsBlock = renderMatchedSkillBodies(skillMatch.matched);
-  if (deps.knobs.goldenCandidatesDir !== undefined) {
-    await recordSkillMissCandidates(
-      deps.knobs.goldenCandidatesDir,
-      { tenantId, leadId, jobId: job.id, signal: skillSignal, candidates: skillMatch.missCandidates },
-      runLog,
-    );
-  }
 
   // F3-11: stage-classifier auxiliar. Roda ANTES do turno (modelo BARATO pelo seam
   // agnóstico) e sugere o estágio; a sugestão entra como HINT no SUFIXO por-lead — o modelo

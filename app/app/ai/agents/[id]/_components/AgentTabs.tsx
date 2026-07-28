@@ -20,6 +20,7 @@ interface Props {
   versions: AgentVersionRow[];
   credentials: CredentialRow[];
   channelSessions: ChannelSessionLite[];
+  routerMembership?: { routerId: string; routerName: string } | null;
   readOnly?: boolean;
 }
 
@@ -53,6 +54,7 @@ export function AgentTabs(props: Props) {
           published={props.published}
           credentials={props.credentials}
           channelSessions={props.channelSessions}
+          routerMembership={props.routerMembership}
           readOnly={props.readOnly}
         />
       </TabsContent>

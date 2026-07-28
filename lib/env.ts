@@ -60,6 +60,10 @@ const schema = z.object({
    */
   AI_CRED_AES_KEY: required("AI_CRED_AES_KEY"),
 
+  // Postgres direto do Supabase (Settings → Database) — só as rotas de skills
+  // instaláveis (import/install) usam `pg` cru (mesmo pool do agent-engine).
+  SUPABASE_DB_URL: required("SUPABASE_DB_URL"),
+
   // WAHA
   WAHA_API_BASE_URL: required("WAHA_API_BASE_URL"),
   WAHA_API_KEY: required("WAHA_API_KEY"),
@@ -176,7 +180,8 @@ if (!env.AI_GATEWAY_API_KEY && !env.ANTHROPIC_API_KEY) {
 }
 if (!env.OPENAI_API_KEY) {
   console.warn(
-    "[env] No OPENAI_API_KEY set — RAG embedding will be unavailable; bot answers without retrieved context.",
+    "[env] No OPENAI_API_KEY set — RAG embedding unavailable (bot answers without retrieved context) " +
+      "AND voice-note transcription is off (the agent will ask leads to resend audio as text).",
   );
 }
 if (!env.IMPERSONATE_COOKIE_SECRET || env.IMPERSONATE_COOKIE_SECRET.length < 32) {

@@ -3813,7 +3813,7 @@
 
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="map">
-      <svg viewBox="0 0 720 900" role="img" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard">
+      <svg viewBox="0 0 720 1396" role="img" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard">
         <title id="archify-diagram-title">Turno do Agente de IA</title>
         <desc id="archify-diagram-description">do inbound no WhatsApp à resposta aprovada pelos guardrails</desc>
         <!-- Definitions -->
@@ -3859,6 +3859,22 @@
         <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-5-exception" x="46" y="678" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
         <text x="54" y="694" class="t-security" font-size="10" font-weight="600">EX / Config (Memória da Org)</text>
 
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-6" x="40" y="796" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-6-exception" x="46" y="802" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="818" class="t-security" font-size="10" font-weight="600">EX / Skills instaláveis (Fase 2)</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-7" x="40" y="920" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-7-exception" x="46" y="926" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="942" class="t-security" font-size="10" font-weight="600">EX / Intent Router (Fase 3)</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-8" x="40" y="1044" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-8-exception" x="46" y="1050" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="1066" class="t-security" font-size="10" font-weight="600">EX / Evolução da IA (Fase 4)</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-9" x="40" y="1168" width="640" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-9-exception" x="46" y="1174" width="628" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="1190" class="t-security" font-size="10" font-weight="600">EX / Funil: etapas + mapeamento</text>
+
         <!-- Phase headers -->
 
 
@@ -3877,6 +3893,19 @@
         <path data-edge-from="turn" data-edge-to="handoff" data-edge-label="handoff" data-edge-key="8" data-edge-id="turn-handoff" data-composition-points="430,401;430,476;430,476;430,589" d="M 430 401 L 430 476 L 430 476 L 430 589" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="memoryscreen" data-edge-to="orgmemory" data-edge-label="escreve versão/aprendizado" data-edge-key="9" data-edge-id="memoryscreen-orgmemory" data-composition-points="134,739;174,739" d="M 134 739 L 174 739" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="orgmemory" data-edge-to="turn" data-edge-label="injeta no prefixo estável" data-edge-key="10" data-edge-id="orgmemory-turn" data-composition-points="220,713;220,538;430,538;430,401" d="M 220 713 L 220 538 L 430 538 L 430 401" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="skillsscreen" data-edge-to="skillcatalog" data-edge-label="importa .zip / instala do catálogo" data-edge-key="11" data-edge-id="skillsscreen-skillcatalog" data-composition-points="134,863;174,863" d="M 134 863 L 174 863" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="skillcatalog" data-edge-to="turn" data-edge-label="índice no prefixo + corpo casado no sufixo + read_skill_reference" data-edge-key="12" data-edge-id="skillcatalog-turn" data-composition-points="266,863;692,863;692,367;476,367" d="M 266 863 L 692 863 L 692 367 L 476 367" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="routerscreen" data-edge-to="routerconfig" data-edge-label="cria/edita router · testa classificação" data-edge-key="13" data-edge-id="routerscreen-routerconfig" data-composition-points="134,987;174,987" d="M 134 987 L 174 987" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="routerconfig" data-edge-to="turn" data-edge-label="classifica a intenção e decide o agentConfig do turno" data-edge-key="14" data-edge-id="routerconfig-turn" data-composition-points="266,987;692,987;692,367;476,367" d="M 266 987 L 692 987 L 692 367 L 476 367" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="turn" data-edge-to="knowledgesearches" data-edge-label="toda busca na base grava hits · top_score · limiar" data-edge-key="15" data-edge-id="turn-knowledgesearches" data-composition-points="476,367;692,367;692,1111;266,1111" d="M 476 367 L 692 367 L 692 1111 L 266 1111" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="knowledgesearches" data-edge-to="evolutionscreen" data-edge-label="quantas perguntas a base respondeu (e quais quase acertaram)" data-edge-key="16" data-edge-id="knowledgesearches-evolutionscreen" data-composition-points="174,1111;134,1111" d="M 174 1111 L 134 1111" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="evolutionscreen" data-edge-to="routerscreen" data-edge-label="lacuna vira ação: cadastrar o assunto" data-edge-key="17" data-edge-id="evolutionscreen-routerscreen" data-composition-points="88,1085;88,1034;88,1034;88,1013" d="M 88 1085 L 88 1034 L 88 1034 L 88 1013" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="evolutionscreen" data-edge-to="mappingscreen" data-edge-label="lacuna vira ação: escolher a etapa que recebe o passo" data-edge-key="18" data-edge-id="evolutionscreen-mappingscreen" data-composition-points="88,1137;88,1158;300,1158;300,1209" d="M 88 1137 L 88 1158 L 300 1158 L 300 1209" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="stagesscreen" data-edge-to="stagehint" data-edge-label="cria · renomeia · ganho/perda · arquiva" data-edge-key="19" data-edge-id="stagesscreen-stagehint" data-composition-points="88,1209;88,1181;500,1181;500,1209" d="M 88 1209 L 88 1181 L 500 1181 L 500 1209" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="stagesscreen" data-edge-to="mappingscreen" data-edge-label="arquivar mata o vínculo com o assistente" data-edge-key="20" data-edge-id="stagesscreen-mappingscreen" data-composition-points="134,1235;254,1235" d="M 134 1235 L 254 1235" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="mappingscreen" data-edge-to="stagesscreen" data-edge-label="sem etapa de fechamento, conserta aqui" data-edge-key="21" data-edge-id="mappingscreen-stagesscreen" data-composition-points="300,1261;300,1276;88,1276;88,1261" d="M 300 1261 L 300 1276 L 88 1276 L 88 1261" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="mappingscreen" data-edge-to="stagehint" data-edge-label="grava os 7 passos de uma vez" data-edge-key="22" data-edge-id="mappingscreen-stagehint" data-composition-points="346,1235;454,1235" d="M 346 1235 L 454 1235" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="stagehint" data-edge-to="turn" data-edge-label="o card anda para a etapa escolhida (mirrorLeadStageToCrm)" data-edge-key="23" data-edge-id="stagehint-turn" data-composition-points="546,1235;692,1235;692,367;476,367" d="M 546 1235 L 692 1235 L 692 367 L 476 367" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Nodes -->
         <g id="node-inbound" data-node-id="inbound" data-node-label="Msg inbound" tabindex="0" role="button" aria-label="Focus Msg inbound, cliente escreve, Canal (WAHA)" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="cliente escreve" data-node-context="Canal (WAHA)">
@@ -4019,6 +4048,121 @@
           <text data-detail="context" x="220" y="751" class="t-muted" font-size="8" text-anchor="middle">versão + ponteiro + aprendizados</text>
         </g>
 
+        <g id="node-skillsscreen" data-node-id="skillsscreen" data-node-label="Skills" tabindex="0" role="button" aria-label="Focus Skills, tela + import .zip (app/app/ai/skills), Skills instaláveis (Fase 2)" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="tela + import .zip (app/app/ai/skills)" data-node-context="Skills instaláveis (Fase 2)">
+          <title>Skills · tela + import .zip (app/app/ai/skills) · Skills instaláveis (Fase 2)</title>
+          <rect x="42" y="837" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="42" y="837" width="92" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(48 843) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-detail-anchor x="88" y="858" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Skills</text>
+          <text data-detail="context" x="88" y="875" class="t-muted" font-size="8" text-anchor="middle">tela + import .zip (app/app/ai/skills)</text>
+        </g>
+
+        <g id="node-skillcatalog" data-node-id="skillcatalog" data-node-label="Skill catalog" tabindex="0" role="button" aria-label="Focus Skill catalog, skill_versions + pointers, Skills instaláveis (Fase 2)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="skill_versions + pointers" data-node-context="Skills instaláveis (Fase 2)">
+          <title>Skill catalog · skill_versions + pointers · Skills instaláveis (Fase 2)</title>
+          <rect x="174" y="837" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="174" y="837" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(180 843) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="220" y="858" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Skill catalog</text>
+          <text data-detail="context" x="220" y="875" class="t-muted" font-size="8" text-anchor="middle">skill_versions + pointers</text>
+        </g>
+
+        <g id="node-routerscreen" data-node-id="routerscreen" data-node-label="Routers" tabindex="0" role="button" aria-label="Focus Routers, tela + API (app/app/ai/routers), Intent Router (Fase 3)" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="tela + API (app/app/ai/routers)" data-node-context="Intent Router (Fase 3)">
+          <title>Routers · tela + API (app/app/ai/routers) · Intent Router (Fase 3)</title>
+          <rect x="42" y="961" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="42" y="961" width="92" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(48 967) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-detail-anchor x="88" y="982" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Routers</text>
+          <text data-detail="context" x="88" y="999" class="t-muted" font-size="8" text-anchor="middle">tela + API (app/app/ai/routers)</text>
+        </g>
+
+        <g id="node-routerconfig" data-node-id="routerconfig" data-node-label="ai_routers" tabindex="0" role="button" aria-label="Focus ai_routers, intents + min_confidence + sticky, Intent Router (Fase 3)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="intents + min_confidence + sticky" data-node-context="Intent Router (Fase 3)">
+          <title>ai_routers · intents + min_confidence + sticky · Intent Router (Fase 3)</title>
+          <rect x="174" y="961" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="174" y="961" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(180 967) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="220" y="982" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ai_routers</text>
+          <text data-detail="context" x="220" y="999" class="t-muted" font-size="8" text-anchor="middle">intents + min_confidence + sticky</text>
+        </g>
+
+        <g id="node-evolutionscreen" data-node-id="evolutionscreen" data-node-label="Evolução da IA" tabindex="0" role="button" aria-label="Focus Evolução da IA, tela + API (app/app/ai/evolution), Evolução da IA (Fase 4)" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="tela + API (app/app/ai/evolution)" data-node-context="Evolução da IA (Fase 4)">
+          <title>Evolução da IA · tela + API (app/app/ai/evolution) · Evolução da IA (Fase 4)</title>
+          <rect x="42" y="1085" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="42" y="1085" width="92" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(48 1091) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-detail-anchor x="88" y="1106" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Evolução da IA</text>
+          <text data-detail="context" x="88" y="1123" class="t-muted" font-size="8" text-anchor="middle">tela + API (app/app/ai/evolution)</text>
+        </g>
+
+        <g id="node-knowledgesearches" data-node-id="knowledgesearches" data-node-label="Buscas na base" tabindex="0" role="button" aria-label="Focus Buscas na base, knowledge_searches: hits + limiar, Evolução da IA (Fase 4)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="knowledge_searches: hits + limiar" data-node-context="Evolução da IA (Fase 4)">
+          <title>Buscas na base · knowledge_searches: hits + limiar · Evolução da IA (Fase 4)</title>
+          <rect x="174" y="1085" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="174" y="1085" width="92" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(180 1091) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="220" y="1106" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Buscas na base</text>
+          <text data-detail="context" x="220" y="1123" class="t-muted" font-size="8" text-anchor="middle">knowledge_searches: hits + limiar</text>
+        </g>
+
+        <g id="node-stagesscreen" data-node-id="stagesscreen" data-node-label="Etapas" tabindex="0" role="button" aria-label="Focus Etapas, tela + API: criar · renomear · ganho/perda · arquivar, Funil: etapas + mapeamento" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="tela + API: criar · renomear · ganho/perda · arquivar" data-node-context="Funil: etapas + mapeamento">
+          <title>Etapas · tela + API: criar · renomear · ganho/perda · arquivar · Funil: etapas + mapeamento</title>
+          <rect x="42" y="1209" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="42" y="1209" width="92" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(48 1215) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-detail-anchor x="88" y="1230" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Etapas</text>
+          <text data-detail="context" x="88" y="1247" class="t-muted" font-size="8" text-anchor="middle">tela + API: criar · renomear · ganho/perda · arquivar</text>
+        </g>
+
+        <g id="node-mappingscreen" data-node-id="mappingscreen" data-node-label="Mapa do funil" tabindex="0" role="button" aria-label="Focus Mapa do funil, tela (settings/tenant/pipelines), Funil: etapas + mapeamento" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="tela (settings/tenant/pipelines)" data-node-context="Funil: etapas + mapeamento">
+          <title>Mapa do funil · tela (settings/tenant/pipelines) · Funil: etapas + mapeamento</title>
+          <rect x="254" y="1209" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="254" y="1209" width="92" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(260 1215) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-detail-anchor x="300" y="1230" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Mapa do funil</text>
+          <text data-detail="context" x="300" y="1247" class="t-muted" font-size="8" text-anchor="middle">tela (settings/tenant/pipelines)</text>
+        </g>
+
+        <g id="node-stagehint" data-node-id="stagehint" data-node-label="crm_stages" tabindex="0" role="button" aria-label="Focus crm_stages, agent_stage_hint: passo → etapa, Funil: etapas + mapeamento" aria-pressed="false" data-node-kind="database" data-node-sublabel="agent_stage_hint: passo → etapa" data-node-context="Funil: etapas + mapeamento">
+          <title>crm_stages · agent_stage_hint: passo → etapa · Funil: etapas + mapeamento</title>
+          <rect x="454" y="1209" width="92" height="52" rx="6" class="c-mask"/>
+          <rect x="454" y="1209" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(460 1215) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-detail-anchor x="500" y="1230" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">crm_stages</text>
+          <text data-detail="context" x="500" y="1247" class="t-muted" font-size="8" text-anchor="middle">agent_stage_hint: passo → etapa</text>
+        </g>
+
         <!-- Edge labels -->
 
         <g data-detail="context" data-edge-from="ingest" data-edge-to="eventlog" data-edge-label="emite evento" data-edge-key="1" data-edge-id="ingest-eventlog">
@@ -4058,29 +4202,81 @@
           <rect x="260" y="518" width="130" height="14" rx="3" class="c-mask"/>
           <text x="325" y="528" class="t-database" font-size="8" text-anchor="middle">injeta no prefixo estável</text>
         </g>
+        <g data-detail="context" data-edge-from="skillsscreen" data-edge-to="skillcatalog" data-edge-label="importa .zip / instala do catálogo" data-edge-key="11" data-edge-id="skillsscreen-skillcatalog">
+          <rect x="67.4" y="893" width="173.2" height="14" rx="3" class="c-mask"/>
+          <text x="154" y="903" class="t-muted" font-size="8" text-anchor="middle">importa .zip / instala do catálogo</text>
+        </g>
+        <g data-detail="context" data-edge-from="skillcatalog" data-edge-to="turn" data-edge-label="índice no prefixo + corpo casado no sufixo + read_skill_reference" data-edge-key="12" data-edge-id="skillcatalog-turn">
+          <rect x="531" y="635" width="322" height="14" rx="3" class="c-mask"/>
+          <text x="692" y="645" class="t-database" font-size="8" text-anchor="middle">índice no prefixo + corpo casado no sufixo + read_skill_reference</text>
+        </g>
+        <g data-detail="context" data-edge-from="routerscreen" data-edge-to="routerconfig" data-edge-label="cria/edita router · testa classificação" data-edge-key="13" data-edge-id="routerscreen-routerconfig">
+          <rect x="55.400000000000006" y="1017" width="197.2" height="14" rx="3" class="c-mask"/>
+          <text x="154" y="1027" class="t-muted" font-size="8" text-anchor="middle">cria/edita router · testa classificação</text>
+        </g>
+        <g data-detail="context" data-edge-from="routerconfig" data-edge-to="turn" data-edge-label="classifica a intenção e decide o agentConfig do turno" data-edge-key="14" data-edge-id="routerconfig-turn">
+          <rect x="559.8" y="717" width="264.4" height="14" rx="3" class="c-mask"/>
+          <text x="692" y="727" class="t-database" font-size="8" text-anchor="middle">classifica a intenção e decide o agentConfig do turno</text>
+        </g>
+        <g data-detail="context" data-edge-from="turn" data-edge-to="knowledgesearches" data-edge-label="toda busca na base grava hits · top_score · limiar" data-edge-key="15" data-edge-id="turn-knowledgesearches">
+          <rect x="567" y="799" width="250" height="14" rx="3" class="c-mask"/>
+          <text x="692" y="809" class="t-database" font-size="8" text-anchor="middle">toda busca na base grava hits · top_score · limiar</text>
+        </g>
+        <g data-detail="context" data-edge-from="knowledgesearches" data-edge-to="evolutionscreen" data-edge-label="quantas perguntas a base respondeu (e quais quase acertaram)" data-edge-key="16" data-edge-id="knowledgesearches-evolutionscreen">
+          <rect x="5" y="1141" width="298" height="14" rx="3" class="c-mask"/>
+          <text x="154" y="1151" class="t-muted" font-size="8" text-anchor="middle">quantas perguntas a base respondeu (e quais quase acertaram)</text>
+        </g>
+        <g data-detail="context" data-edge-from="evolutionscreen" data-edge-to="routerscreen" data-edge-label="lacuna vira ação: cadastrar o assunto" data-edge-key="17" data-edge-id="evolutionscreen-routerscreen">
+          <rect x="-5.799999999999997" y="1054" width="187.6" height="14" rx="3" class="c-mask"/>
+          <text x="88" y="1064" class="t-backend" font-size="8" text-anchor="middle">lacuna vira ação: cadastrar o assunto</text>
+        </g>
+        <g data-detail="context" data-edge-from="evolutionscreen" data-edge-to="mappingscreen" data-edge-label="lacuna vira ação: escolher a etapa que recebe o passo" data-edge-key="18" data-edge-id="evolutionscreen-mappingscreen">
+          <rect x="11.800000000000011" y="1178" width="264.4" height="14" rx="3" class="c-mask"/>
+          <text x="144" y="1188" class="t-backend" font-size="8" text-anchor="middle">lacuna vira ação: escolher a etapa que recebe o passo</text>
+        </g>
+        <g data-detail="context" data-edge-from="stagesscreen" data-edge-to="stagehint" data-edge-label="cria · renomeia · ganho/perda · arquiva" data-edge-key="19" data-edge-id="stagesscreen-stagehint">
+          <rect x="301.4" y="1186" width="197.2" height="14" rx="3" class="c-mask"/>
+          <text x="400" y="1196" class="t-muted" font-size="8" text-anchor="middle">cria · renomeia · ganho/perda · arquiva</text>
+        </g>
+        <g data-detail="context" data-edge-from="stagesscreen" data-edge-to="mappingscreen" data-edge-label="arquivar mata o vínculo com o assistente" data-edge-key="20" data-edge-id="stagesscreen-mappingscreen">
+          <rect x="93" y="1259" width="202" height="14" rx="3" class="c-mask"/>
+          <text x="194" y="1269" class="t-muted" font-size="8" text-anchor="middle">arquivar mata o vínculo com o assistente</text>
+        </g>
+        <g data-detail="context" data-edge-from="mappingscreen" data-edge-to="stagesscreen" data-edge-label="sem etapa de fechamento, conserta aqui" data-edge-key="21" data-edge-id="mappingscreen-stagesscreen">
+          <rect x="93.8" y="1278" width="192.4" height="14" rx="3" class="c-mask"/>
+          <text x="190" y="1288" class="t-backend" font-size="8" text-anchor="middle">sem etapa de fechamento, conserta aqui</text>
+        </g>
+        <g data-detail="context" data-edge-from="mappingscreen" data-edge-to="stagehint" data-edge-label="grava os 7 passos de uma vez" data-edge-key="22" data-edge-id="mappingscreen-stagehint">
+          <rect x="327.8" y="1265" width="144.4" height="14" rx="3" class="c-mask"/>
+          <text x="400" y="1275" class="t-muted" font-size="8" text-anchor="middle">grava os 7 passos de uma vez</text>
+        </g>
+        <g data-detail="context" data-edge-from="stagehint" data-edge-to="turn" data-edge-label="o card anda para a etapa escolhida (mirrorLeadStageToCrm)" data-edge-key="23" data-edge-id="stagehint-turn">
+          <rect x="550.2" y="881" width="283.59999999999997" height="14" rx="3" class="c-mask"/>
+          <text x="692" y="891" class="t-database" font-size="8" text-anchor="middle">o card anda para a etapa escolhida (mirrorLeadStageToCrm)</text>
+        </g>
 
         <!-- Legend -->
         <g data-legend-bridge>
-          <text x="175" y="800" class="t-primary" font-size="10" font-weight="600">Legend</text>
+          <text x="175" y="1296" class="t-primary" font-size="10" font-weight="600">Legend</text>
         <g data-legend-kind="frontend">
-          <rect x="175" y="812" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-          <text x="195" y="820" class="t-muted" font-size="7">User UI</text>
+          <rect x="175" y="1308" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+          <text x="195" y="1316" class="t-muted" font-size="7">User UI</text>
         </g>
         <g data-legend-kind="backend">
-          <rect x="260" y="812" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-          <text x="280" y="820" class="t-muted" font-size="7">Agent logic</text>
+          <rect x="260" y="1308" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+          <text x="280" y="1316" class="t-muted" font-size="7">Agent logic</text>
         </g>
         <g data-legend-kind="security">
-          <rect x="370" y="812" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-          <text x="390" y="820" class="t-muted" font-size="7">Policy</text>
+          <rect x="370" y="1308" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+          <text x="390" y="1316" class="t-muted" font-size="7">Policy</text>
         </g>
         <g data-legend-kind="messagebus">
-          <rect x="455" y="812" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-          <text x="475" y="820" class="t-muted" font-size="7">Tool action</text>
+          <rect x="455" y="1308" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+          <text x="475" y="1316" class="t-muted" font-size="7">Tool action</text>
         </g>
         <g data-legend-kind="database">
-          <rect x="565" y="812" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-          <text x="585" y="820" class="t-muted" font-size="7">Context / trace</text>
+          <rect x="565" y="1308" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+          <text x="585" y="1316" class="t-muted" font-size="7">Context / trace</text>
         </g>
         </g>
       </svg>
@@ -4247,6 +4443,19 @@
 
     <!-- Info Cards -->
     <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Saídas do painel (Fase 4)</h3>
+        </div>
+        <ul>
+          <li>&bull; Roteador e Mapa do funil são as arestas desenhadas; as outras saem por CTA</li>
+          <li>&bull; Memória da Org (publicar regra) · Skills (instalar habilidade)</li>
+          <li>&bull; Base de conhecimento (publicar material que faltou)</li>
+          <li>&bull; Sem saída o painel seria vitrine: o número existe para virar conserto</li>
+        </ul>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <div class="card-dot rose"></div>

@@ -59,7 +59,7 @@ export default async function AgentEditorPage({
   }
 
   // mcp_agent: busca versions + lookups.
-  const [versionsRes, credentialsRes, channelRes] = await Promise.all([
+  const [versionsRes, credentialsRes, channelRes, routerMemberRes] = await Promise.all([
     supabase
       .from("ai_agent_versions")
       .select(VERSION_COLUMNS)
@@ -74,6 +74,13 @@ export default async function AgentEditorPage({
       .from("channel_sessions")
       .select("id, display_name, status, phone_number, waha_session_name")
       .eq("organization_id", activeOrg.orgId),
+    supabase
+      .from("ai_router_members")
+      .select("router_id, ai_routers(name)")
+      .eq("organization_id", activeOrg.orgId)
+      .eq("agent_id", id)
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   const versions = (versionsRes.data ?? []) as unknown as AgentVersionRow[];
@@ -84,6 +91,10 @@ export default async function AgentEditorPage({
     status: c.status as string,
     phone_number: (c.phone_number as string | null) ?? null,
   }));
+  const routerMemberRow = routerMemberRes.data as { router_id: string; ai_routers: { name: string } | null } | null;
+  const routerMembership = routerMemberRow
+    ? { routerId: routerMemberRow.router_id, routerName: routerMemberRow.ai_routers?.name ?? "roteador" }
+    : null;
 
   const draft =
     versions
@@ -103,6 +114,7 @@ export default async function AgentEditorPage({
         versions={versions}
         credentials={credentials}
         channelSessions={channelSessions}
+        routerMembership={routerMembership}
         readOnly={readOnly}
       />
     </div>

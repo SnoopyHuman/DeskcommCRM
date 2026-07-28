@@ -6,8 +6,10 @@
  * — embeddings are an OpenAI capability and the gateway proxies them).
  */
 
+import { createOpenAI } from "@ai-sdk/openai";
 import { embed } from "ai";
 
+import { env } from "@/lib/env";
 import {
   DEFAULT_EMBEDDING_MODEL,
   gatewayConfig,
@@ -37,11 +39,23 @@ export async function embedText(
   const model = opts.model ?? DEFAULT_EMBEDDING_MODEL;
   const cfg = gatewayConfig();
 
-  // When using the gateway, model string `openai/text-embedding-3-small` is
-  // routed automatically. The SDK reads AI_GATEWAY_API_KEY from process.env.
-  // Headers are still attached for per-tenant observability + ZDR.
+  // COM gateway: a string `openai/text-embedding-3-small` é roteada por ele, que
+  // lê `AI_GATEWAY_API_KEY` do process.env. Headers vão junto p/ observabilidade
+  // por tenant + ZDR.
+  //
+  // SEM gateway: precisa ser o provider OpenAI EXPLÍCITO. Passar a string com
+  // barra aqui não cai no OpenAI direto — no AI SDK, id com barra é resolvido
+  // pelo gateway da Vercel mesmo sem chave, entrando no plano anônimo, cujo teto
+  // devolve `GatewayRateLimitError` e derruba a busca na base de conhecimento.
+  // Este arquivo prometia esse caminho no cabeçalho desde sempre e não o tinha.
+  const resolvido = cfg
+    ? model
+    : createOpenAI({ apiKey: env.OPENAI_API_KEY }).textEmbeddingModel(
+        String(model).replace(/^openai\//, ""),
+      );
+
   const result = await embed({
-    model,
+    model: resolvido,
     value: content,
     headers: cfg ? gatewayHeaders({ organizationId: opts.organizationId }) : undefined,
   });
