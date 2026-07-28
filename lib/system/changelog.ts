@@ -17,7 +17,8 @@ export const CHANGELOG_MAX_BYTES = 64_000;
 
 /** `## [1.1.0] — 2026-08-02` e também `## [Não lançado]`. */
 const VERSION_HEADING = /^##\s+\[([^\]]+)\]/;
-const ATTENTION_HEADING = /^\*{0,2}⚠️?\s*Requer atenção\*{0,2}\s*$/i;
+/** Casa tanto com heading (`### ⚠️ Requer atenção`) quanto com negrito (`**⚠️ Requer atenção**`). */
+const ATTENTION_HEADING = /^(#{2,4}\s+)?(\*{1,2})?⚠️?\s*Requer atenção(\*{1,2})?$/i;
 
 function normalize(version: string): string {
   return version.trim().replace(/^v/i, "");
@@ -45,11 +46,30 @@ export function extractChangelogSection(raw: string, version: string): Changelog
   if (start === -1) return null;
 
   const bodyLines = lines.slice(start, end);
+  const body = cleanBody(bodyLines.join("\n").trim());
   return {
     version: wanted,
-    body: bodyLines.join("\n").trim(),
+    body,
     requiresAttention: extractAttention(bodyLines),
   };
+}
+
+/**
+ * Limpa referências de link do final do corpo (formato `[algo]: http://...`).
+ * Isso evita que o rodapé do arquivo apareça na seção antes do botão "Atualizar".
+ */
+function cleanBody(body: string): string {
+  const lines = body.split("\n");
+  // Remove linhas de referência de link do final: `[algo]: http...`
+  while (lines.length > 0) {
+    const lastLine = lines[lines.length - 1];
+    if (lastLine && /^\[.+\]:\s+https?:\/\//.test(lastLine)) {
+      lines.pop();
+    } else {
+      break;
+    }
+  }
+  return lines.join("\n").trim();
 }
 
 /**
@@ -62,7 +82,8 @@ function extractAttention(bodyLines: string[]): string | null {
   if (start === -1) return null;
 
   const rest = bodyLines.slice(start + 1);
-  const nextHeading = rest.findIndex((line) => /^#{2,4}\s/.test(line) || /^\*\*/.test(line.trim()));
+  // Termina apenas em heading de verdade, não em negrito aleatório no meio do aviso.
+  const nextHeading = rest.findIndex((line) => /^#{2,4}\s/.test(line));
   const block = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
   const text = block.join("\n").trim();
   return text || null;
