@@ -85,6 +85,6 @@ function extractAttention(bodyLines: string[]): string | null {
   // Termina apenas em heading de verdade, não em negrito aleatório no meio do aviso.
   const nextHeading = rest.findIndex((line) => /^#{2,4}\s/.test(line));
   const block = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
-  const text = block.join("\n").trim();
+  const text = cleanBody(block.join("\n").trim());
   return text || null;
 }

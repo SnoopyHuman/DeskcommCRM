@@ -110,15 +110,25 @@ Novo`;
   });
 
   it("lê CHANGELOG.md real e encontra 1.0.0 com requiresAttention", () => {
-    try {
-      const realChangelog = readFileSync(join(process.cwd(), "CHANGELOG.md"), "utf8");
-      const section = extractChangelogSection(realChangelog, "1.0.0");
-      expect(section).not.toBeNull();
-      expect(section?.version).toBe("1.0.0");
-      // No CHANGELOG real, linha 76 tem "### ⚠️ Requer atenção" com conteúdo
-      expect(section?.requiresAttention).not.toBeNull();
-    } catch {
-      // Se CHANGELOG.md não existe no cwd, skip (ex: running em outro contexto)
-    }
+    // Sem try/catch: se falhar, é informação crítica, não ruído.
+    // Usa __dirname do teste, não process.cwd() que é frágil.
+    const realChangelog = readFileSync(join(__dirname, "../../CHANGELOG.md"), "utf8");
+    const section = extractChangelogSection(realChangelog, "1.0.0");
+    expect(section).not.toBeNull();
+    expect(section?.version).toBe("1.0.0");
+    // No CHANGELOG real, linha 76 tem "### ⚠️ Requer atenção" com conteúdo
+    expect(section?.requiresAttention).not.toBeNull();
+  });
+
+  it("remove referencias de link do bloco de atencao (versao ultima com bloco)", () => {
+    // Versão que é a última do arquivo E tem bloco de atenção:
+    // o defeito vaza referências de link em requiresAttention.
+    const raw = `## [1.0.0] — 2026-07-27
+### ⚠️ Requer atenção
+Node 22 é obrigatório.
+[1.0.0]: https://github.com/example/releases/tag/v1.0.0`;
+    const section = extractChangelogSection(raw, "1.0.0");
+    expect(section?.requiresAttention).not.toContain("github.com");
+    expect(section?.requiresAttention).toContain("Node 22");
   });
 });
