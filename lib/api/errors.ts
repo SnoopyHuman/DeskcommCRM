@@ -14,6 +14,7 @@ export const ApiErrorCodes = {
   invalid_cursor: "invalid_cursor",
 
   // 401 — auth
+  unauthorized: "unauthorized", // segredo interno inválido/ausente (rotas host↔app, ex. system/agent)
   unauthenticated: "unauthenticated",
   token_expired: "token_expired",
   token_revoked: "token_revoked",
