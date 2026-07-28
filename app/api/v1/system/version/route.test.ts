@@ -21,12 +21,18 @@ let inserted: Record<string, unknown> | null;
  * índice único parcial `uniq_system_update_runs_dispatched` (migration 0090).
  */
 let insertError: { code: string; message: string } | null;
+/** Erro que a leitura (`maybeSingle`) de `system_version` deve devolver neste caso. */
+let versionSelectError: { message: string } | null;
+/** Erro que a leitura (`maybeSingle`) de `system_update_runs` deve devolver neste caso. */
+let runSelectError: { message: string } | null;
 
 beforeEach(() => {
   vi.clearAllMocks();
   inserted = null;
   runRow = null;
   insertError = null;
+  versionSelectError = null;
+  runSelectError = null;
   versionRow = {
     id: 1,
     current_version: "1.0.0",
@@ -50,7 +56,7 @@ beforeEach(() => {
       // double refletir a query de verdade.
       const maybeSingle = async () => ({
         data: table === "system_version" ? versionRow : runRow,
-        error: null,
+        error: table === "system_version" ? versionSelectError : runSelectError,
       });
       return {
         select: () => ({
@@ -86,7 +92,29 @@ describe("GET /api/v1/system/version", () => {
   it("exige sessão", async () => {
     vi.mocked(loadAuthUser).mockResolvedValue(null as never);
     const { GET } = await import("../version/route");
-    expect((await GET(get())).status).toBe(401);
+    const res = await GET(get());
+    expect(res.status).toBe(401);
+    // `unauthenticated`, não `unauthorized`: o catálogo (lib/api/errors.ts)
+    // reserva `unauthorized` ao segredo interno das rotas host↔app. Um
+    // frontend que decide por `error.code` (ex.: redirecionar pro login só em
+    // `unauthenticated`) não reagiria a um código trocado — a asserção é o
+    // que teria pego essa troca antes da revisão.
+    const body = await res.json();
+    expect(body.error.code).toBe("unauthenticated");
+  });
+
+  it("quando a leitura de system_version falha, devolve 500", async () => {
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    versionSelectError = { message: "conexão caiu" };
+    const { GET } = await import("../version/route");
+    expect((await GET(get())).status).toBe(500);
+  });
+
+  it("quando a leitura do run mais recente falha, devolve 500", async () => {
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    runSelectError = { message: "conexão caiu" };
+    const { GET } = await import("../version/route");
+    expect((await GET(get())).status).toBe(500);
   });
 
   it("entrega só a versão para quem não é dono do servidor", async () => {
@@ -131,10 +159,31 @@ describe("GET /api/v1/system/version", () => {
 });
 
 describe("POST /api/v1/system/update", () => {
+  it("exige sessão", async () => {
+    vi.mocked(loadAuthUser).mockResolvedValue(null as never);
+    const { POST } = await import("../update/route");
+    const res = await POST(post());
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error.code).toBe("unauthenticated");
+  });
+
   it("nega para quem não é dono do servidor", async () => {
     vi.mocked(loadAuthUser).mockResolvedValue(MEMBRO as never);
     const { POST } = await import("../update/route");
     expect((await POST(post())).status).toBe(403);
+    expect(inserted).toBeNull();
+  });
+
+  it("quando a leitura de system_version falha, devolve 500 e não 409", async () => {
+    // Sem checar o erro do select, `current`/`latest` viram "" e o fluxo cai
+    // no 409 otimista de "você já está em dia" — a pior mensagem possível
+    // bem na hora de uma falha de infraestrutura real.
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    versionSelectError = { message: "conexão caiu" };
+    const { POST } = await import("../update/route");
+    const res = await POST(post());
+    expect(res.status).toBe(500);
     expect(inserted).toBeNull();
   });
 

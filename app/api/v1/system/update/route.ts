@@ -19,17 +19,27 @@ const RUN_IN_PROGRESS_MESSAGE = "Já existe uma atualização em andamento.";
 
 export async function POST(_req: NextRequest): Promise<Response> {
   const user = await loadAuthUser();
-  if (!user) return fail("unauthorized", "Faça login para continuar.", 401);
+  // `unauthenticated` (não `unauthorized`): esse último é reservado ao segredo
+  // interno das rotas host↔app (lib/api/errors.ts) — aqui falta é sessão.
+  if (!user) return fail("unauthenticated", "Faça login para continuar.", 401);
   if (!user.is_platform_admin) {
     return fail("forbidden", "Só o dono do servidor pode atualizar o sistema.", 403);
   }
 
   const db = createAdminClient();
-  const { data: version } = await db
+  const { data: version, error: versionError } = await db
     .from("system_version")
     .select("current_version, latest_version")
     .eq("id", 1)
     .maybeSingle();
+
+  // Sem checar o erro, uma falha de leitura (outage, rede) vira `current`/
+  // `latest` vazios — e cai direto no 409 "você já está em dia" abaixo. É a
+  // pior mensagem possível bem na hora de uma falha de infraestrutura.
+  if (versionError) {
+    logger.error("[system/update] leitura de system_version falhou", { error: versionError.message });
+    return fail("internal_error", "Não consegui ler o estado da atualização.", 500);
+  }
 
   const current = version?.current_version ?? "";
   const latest = version?.latest_version ?? "";
