@@ -15,6 +15,9 @@ export const PUBLIC_PATHS: RegExp[] = [
   /^\/api\/v1\/health$/,
   /^\/api\/v1\/webhooks\//,
   /^\/api\/v1\/cron\//,
+  // Heartbeat do agente do host (bearer INTERNAL_SECRET/INTERNAL_CRON_SECRET,
+  // checado dentro da própria rota) — sem cookie de sessão, igual /cron/.
+  /^\/api\/v1\/system\/agent$/,
   /^\/api\/internal\//,
   /^\/api\/mcp(\/.*)?$/,
   /^\/_next\//,
