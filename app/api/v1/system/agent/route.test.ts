@@ -29,23 +29,54 @@ const HEARTBEAT = {
 /** Estado do banco simulado, controlado por caso. */
 let versionRow: Record<string, unknown>;
 let runRow: Record<string, unknown> | null;
-let updated: Record<string, unknown> | null;
+/** Erro a devolver em toda leitura (`maybeSingle`) de `system_update_runs` neste caso. */
+let runReadError: { message: string } | null;
+/** Erro a devolver no `update()` de uma tabela específica neste caso. */
+let updateErrorByTable: Partial<Record<string, { message: string }>>;
+/**
+ * Todo `update()` bem-sucedido, na ordem em que ocorreu — em vez de "a
+ * última chamada global" (que esconde qual das DUAS escritas do run_result
+ * realmente aconteceu quando a ordem entre elas importa).
+ */
+let updates: Array<{ table: string } & Record<string, unknown>>;
+
+function lastUpdate(table: string) {
+  return [...updates].reverse().find((u) => u.table === table) ?? null;
+}
 
 beforeEach(() => {
+  vi.clearAllMocks();
+
   versionRow = { id: 1, update_requested_at: null, update_requested_by: null };
   runRow = null;
-  updated = null;
+  runReadError = null;
+  updateErrorByTable = {};
+  updates = [];
 
   vi.mocked(createAdminClient).mockReturnValue({
-    from: (table: string) => ({
-      select: () => ({
-        eq: () => ({ maybeSingle: async () => ({ data: table === "system_version" ? versionRow : runRow, error: null }) }),
-        order: () => ({ limit: () => ({ maybeSingle: async () => ({ data: runRow, error: null }) }) }),
-      }),
-      update: (patch: Record<string, unknown>) => ({
-        eq: async () => { updated = { table, ...patch }; return { error: null }; },
-      }),
-    }),
+    from: (table: string) => {
+      const maybeSingle = async () => ({
+        data: table === "system_version" ? versionRow : runRow,
+        error: table === "system_update_runs" ? runReadError : null,
+      });
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle,
+            // Composição real usada pelo lookup do run pendente no heartbeat:
+            // select().eq("status","dispatched").order(...).limit(1).maybeSingle().
+            order: () => ({ limit: () => ({ maybeSingle }) }),
+          }),
+        }),
+        update: (patch: Record<string, unknown>) => ({
+          eq: async () => {
+            const error = updateErrorByTable[table] ?? null;
+            if (!error) updates.push({ table, ...patch });
+            return { error };
+          },
+        }),
+      };
+    },
   } as never);
 });
 
@@ -54,26 +85,26 @@ describe("POST /api/v1/system/agent", () => {
     const { POST } = await import("./route");
     const res = await POST(req(HEARTBEAT, "segredo-errado"));
     expect(res.status).toBe(401);
-    expect(updated).toBeNull();
+    expect(updates).toEqual([]);
   });
 
   it("recusa segredo de tamanho diferente sem lançar (timingSafeEqual explode com buffers de tamanho distinto)", async () => {
     const { POST } = await import("./route");
     const res = await POST(req(HEARTBEAT, "x"));
     expect(res.status).toBe(401);
-    expect(updated).toBeNull();
+    expect(updates).toEqual([]);
   });
 
   it("heartbeat grava versão, changelog e o carimbo de vida do agente", async () => {
     const { POST } = await import("./route");
     const res = await POST(req(HEARTBEAT));
     expect(res.status).toBe(200);
-    expect(updated).toMatchObject({
+    expect(lastUpdate("system_version")).toMatchObject({
       table: "system_version",
       current_version: "1.0.0",
       latest_version: "1.1.0",
     });
-    expect(updated?.agent_last_seen_at).toBeTruthy();
+    expect(lastUpdate("system_version")?.agent_last_seen_at).toBeTruthy();
   });
 
   it("heartbeat responde update_requested=false quando ninguém pediu", async () => {
@@ -98,13 +129,29 @@ describe("POST /api/v1/system/agent", () => {
     expect(res.status).toBe(422);
   });
 
+  it("heartbeat quando o lookup do run pendente falha no banco → 500 (nunca 'ninguém pediu')", async () => {
+    versionRow = { id: 1, update_requested_at: new Date().toISOString(), update_requested_by: null };
+    runReadError = { message: "PGRST116: mais de uma linha" };
+    const { POST } = await import("./route");
+    const res = await POST(req(HEARTBEAT));
+    expect(res.status).toBe(500);
+  });
+
   it("run_progress grava o passo sem encerrar o run", async () => {
     runRow = { id: RUN_ID, status: "dispatched", dispatched_at: new Date().toISOString() };
     const { POST } = await import("./route");
     const res = await POST(req({ kind: "run_progress", run_id: RUN_ID, step: "banco" }));
     expect(res.status).toBe(200);
-    expect(updated).toMatchObject({ table: "system_update_runs", last_step: "banco" });
-    expect(updated?.status).toBeUndefined();
+    expect(lastUpdate("system_update_runs")).toMatchObject({ table: "system_update_runs", last_step: "banco" });
+    expect(lastUpdate("system_update_runs")?.status).toBeUndefined();
+  });
+
+  it("run_progress quando o update falha → 500", async () => {
+    runRow = { id: RUN_ID, status: "dispatched", dispatched_at: new Date().toISOString() };
+    updateErrorByTable.system_update_runs = { message: "conexão caiu" };
+    const { POST } = await import("./route");
+    const res = await POST(req({ kind: "run_progress", run_id: RUN_ID, step: "banco" }));
+    expect(res.status).toBe(500);
   });
 
   it("run_result encerra o run, limpa o pedido e audita o desfecho", async () => {
@@ -113,11 +160,29 @@ describe("POST /api/v1/system/agent", () => {
     const { POST } = await import("./route");
     const res = await POST(req({ kind: "run_result", run_id: RUN_ID, status: "success", log_tail: "ok" }));
     expect(res.status).toBe(200);
-    expect(updated).toMatchObject({ table: "system_update_runs", status: "success" });
-    expect(updated?.finished_at).toBeTruthy();
+    expect(lastUpdate("system_update_runs")).toMatchObject({ table: "system_update_runs", status: "success" });
+    expect(lastUpdate("system_update_runs")?.finished_at).toBeTruthy();
+    expect(lastUpdate("system_version")).toMatchObject({
+      table: "system_version",
+      update_requested_at: null,
+      update_requested_by: null,
+    });
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ action: "system.update_finished", resourceId: RUN_ID }),
     );
+  });
+
+  it("run_result quando falha ao finalizar o run → 500, sem limpar o pedido e sem auditoria", async () => {
+    const { audit } = await import("@/lib/audit");
+    runRow = { id: RUN_ID, status: "dispatched", dispatched_at: new Date().toISOString() };
+    updateErrorByTable.system_update_runs = { message: "conexão caiu" };
+    const { POST } = await import("./route");
+    const res = await POST(req({ kind: "run_result", run_id: RUN_ID, status: "success", log_tail: "ok" }));
+    expect(res.status).toBe(500);
+    // Pior caso vira "pedido pendente com run ainda dispatched" (detectável e
+    // auto-curável no próximo heartbeat) — nunca um run órfão invisível.
+    expect(lastUpdate("system_version")).toBeNull();
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it("recusa reescrever um run que já terminou", async () => {
@@ -125,6 +190,7 @@ describe("POST /api/v1/system/agent", () => {
     const { POST } = await import("./route");
     const res = await POST(req({ kind: "run_result", run_id: RUN_ID, status: "failed", log_tail: "" }));
     expect(res.status).toBe(409);
+    expect(updates).toEqual([]);
   });
 
   it("recusa corpo com kind desconhecido", async () => {

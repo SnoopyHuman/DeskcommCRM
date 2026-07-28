@@ -44,4 +44,21 @@ describe("tabelas de instância da atualização self-service", () => {
     const found = rows<{ n: string }>(`select count(*)::text as n from public.system_version`);
     expect(found[0]?.n).toBe("1");
   });
+
+  /**
+   * Fix da Task 4 (review round 1): o índice único parcial
+   * `uniq_system_update_runs_dispatched` (migration 0090) é o que torna real
+   * o invariante "no máximo 1 run dispatched por vez" que a rota
+   * /api/v1/system/agent assume — sem ele é só expectativa de aplicação,
+   * um TOCTOU sob concorrência (dois cliques quase simultâneos criariam 2
+   * runs "dispatched", e o lookup do heartbeat acharia mais de uma linha).
+   */
+  it("no máximo 1 run dispatched por vez (índice único parcial)", () => {
+    sql(`insert into public.system_update_runs (status) values ('dispatched');`);
+    expect(() => sql(`insert into public.system_update_runs (status) values ('dispatched');`)).toThrow();
+    const found = rows<{ n: string }>(
+      `select count(*)::text as n from public.system_update_runs where status = 'dispatched'`,
+    );
+    expect(found[0]?.n).toBe("1");
+  });
 });

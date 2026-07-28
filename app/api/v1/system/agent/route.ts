@@ -100,15 +100,26 @@ export async function POST(req: NextRequest): Promise<Response> {
 
     if (!version?.update_requested_at) return ok({ update_requested: false, run_id: null });
 
-    // No máximo um run "dispatched" por vez (task 5 recusa nova ordem enquanto
-    // uma está em voo) — maybeSingle() sem order/limit é o filtro certo, e
-    // falha alto (em vez de escolher "o mais recente" em silêncio) se esse
-    // invariante for violado.
-    const { data: run } = await db
+    // O índice único parcial `uniq_system_update_runs_dispatched` (migration
+    // 0090) garante no máximo 1 linha "dispatched" — mas o `postgrest-js` NÃO
+    // lança se, apesar disso, o SELECT achar mais de uma linha: devolve
+    // `{ data: null, error: PGRST116 }`. Ler isso como "ninguém pediu" faria o
+    // pedido sumir em silêncio — por isso o erro é checado e vira 500, nunca
+    // um `update_requested: false` otimista.
+    const { data: run, error: runLookupError } = await db
       .from("system_update_runs")
       .select("id, status")
       .eq("status", "dispatched")
+      .order("dispatched_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
+
+    if (runLookupError) {
+      logger.error("[system/agent] heartbeat não conseguiu achar o run pendente", {
+        error: runLookupError.message,
+      });
+      return fail("internal_error", "Não consegui checar o pedido de atualização.", 500);
+    }
 
     return ok({ update_requested: Boolean(run), run_id: run?.id ?? null });
   }
@@ -125,7 +136,14 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (run.status !== "dispatched") {
       return fail("state_conflict", "Esta atualização já terminou.", 409);
     }
-    await db.from("system_update_runs").update({ last_step: payload.step }).eq("id", payload.run_id);
+    const { error } = await db
+      .from("system_update_runs")
+      .update({ last_step: payload.step })
+      .eq("id", payload.run_id);
+    if (error) {
+      logger.error("[system/agent] run_progress falhou", { error: error.message, runId: payload.run_id });
+      return fail("internal_error", "Não consegui gravar o passo.", 500);
+    }
     return ok({ update_requested: false, run_id: payload.run_id });
   }
 
@@ -133,16 +151,36 @@ export async function POST(req: NextRequest): Promise<Response> {
     return fail("invalid_state_transition", "Esta atualização já terminou.", 409);
   }
 
-  // A ordem foi cumprida (bem ou mal): some com o pedido para o botão voltar.
-  await db
-    .from("system_version")
-    .update({ update_requested_at: null, update_requested_by: null })
-    .eq("id", 1);
-
-  await db
+  // Finaliza o run PRIMEIRO. Se essa escrita falhar, nada mais acontece: sobra
+  // um run "dispatched" (estado real, o índice único da migration 0090 impede
+  // ambiguidade) em vez de um pedido limpo com um run que nunca fechou — essa
+  // ordem falha para o lado detectável e auto-curável (o próximo heartbeat
+  // ainda vê o pedido e o run em aberto), nunca para o órfão invisível.
+  const { error: runUpdateError } = await db
     .from("system_update_runs")
     .update({ status: payload.status, log_tail: payload.log_tail, finished_at: new Date().toISOString() })
     .eq("id", payload.run_id);
+
+  if (runUpdateError) {
+    logger.error("[system/agent] run_result falhou ao finalizar o run", {
+      error: runUpdateError.message,
+      runId: payload.run_id,
+    });
+    return fail("internal_error", "Não consegui finalizar a atualização.", 500);
+  }
+
+  // O run já é a fonte da verdade sobre o desfecho. Se ESTA escrita falhar,
+  // o pedido some no próximo heartbeat mesmo assim (não há run "dispatched"
+  // para achar) — só logamos, não derrubamos uma resposta que já é verdadeira.
+  const { error: clearRequestError } = await db
+    .from("system_version")
+    .update({ update_requested_at: null, update_requested_by: null })
+    .eq("id", 1);
+  if (clearRequestError) {
+    logger.error("[system/agent] run_result não conseguiu limpar update_requested_at", {
+      error: clearRequestError.message,
+    });
+  }
 
   await audit({
     action: "system.update_finished",

@@ -8416,3 +8416,21 @@ create index if not exists idx_system_update_runs_dispatched
   on public.system_update_runs (dispatched_at desc);
 alter table public.system_version    enable row level security;
 alter table public.system_update_runs enable row level security;
+
+-- ---- índice único parcial: no máximo 1 run "dispatched" por vez (migration 0090) ----
+--
+-- Dedup defensivo ANTES da constraint (clone com dado inconsistente não pode
+-- quebrar o update.sh): mantém só a linha "dispatched" mais recente, marca
+-- as demais como failed.
+with ranked as (
+  select id, row_number() over (order by dispatched_at desc) as rn
+  from public.system_update_runs
+  where status = 'dispatched'
+)
+update public.system_update_runs
+set status = 'failed', finished_at = coalesce(finished_at, now())
+where id in (select id from ranked where rn > 1);
+
+create unique index if not exists uniq_system_update_runs_dispatched
+  on public.system_update_runs (status)
+  where status = 'dispatched';
