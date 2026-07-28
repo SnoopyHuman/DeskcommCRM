@@ -102,6 +102,20 @@ const PARES: Array<{
     arquivo: "lib/agent-engine/db/repository.ts",
     simbolo: "InboxKind",
   },
+  {
+    tabela: "system_update_runs",
+    coluna: "status",
+    // lib/system/update-run.ts → RunStatus
+    arquivo: "lib/system/update-run.ts",
+    simbolo: "RunStatus",
+  },
+  {
+    tabela: "system_update_runs",
+    coluna: "last_step",
+    // lib/system/update-run.ts → RunStep
+    arquivo: "lib/system/update-run.ts",
+    simbolo: "RunStep",
+  },
 ];
 
 /** Tira um nível de parênteses externos, se ele envolver a expressão inteira. */
