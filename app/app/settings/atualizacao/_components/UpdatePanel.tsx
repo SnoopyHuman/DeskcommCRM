@@ -5,6 +5,7 @@ import { useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import { useSystemVersion } from "@/hooks/system/useSystemVersion";
+import { markdownParaTextoSimples } from "@/lib/system/changelog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -16,17 +17,6 @@ const PASSOS = [
   { chave: "banco", texto: "Atualizando o banco de dados" },
   { chave: "app", texto: "Reiniciando o sistema" },
 ] as const;
-
-/**
- * `notes.body` é a seção crua do CHANGELOG.md (Markdown). Quem lê é alguém que
- * não programa — mostrar `### Adicionado` com os cardinais à mostra é jargão
- * de arquivo de código, não texto. Só limpa os marcadores de heading; o resto
- * (listas com `-`, negrito) é raro o bastante no changelog real pra não valer
- * um parser de Markdown inteiro aqui.
- */
-function semMarcadoresDeHeading(texto: string): string {
-  return texto.replace(/^#{1,6}\s+/gm, "");
-}
 
 export function UpdatePanel() {
   const { data, isError } = useSystemVersion({ refetchInterval: 5_000 });
@@ -97,6 +87,13 @@ export function UpdatePanel() {
           ele. Se quiser desfazer também o banco, use a cópia de segurança feita antes da tentativa
           (<code>bash hostgator-setup-kit/restore.sh</code>).
         </p>
+        {/* Sem isto a pessoa fica presa nesta tela pra sempre, mesmo com uma
+            versão nova esperando — um beco sem saída. */}
+        {data.update_available && (
+          <div className="mt-4">
+            <BotaoAtualizar mutate={() => atualizar.mutate()} isPending={atualizar.isPending} erro={erro} />
+          </div>
+        )}
       </Layout>
     );
   }
@@ -109,6 +106,11 @@ export function UpdatePanel() {
           está funcionando normalmente. Se estiver, provavelmente deu certo — a versão instalada
           aparece aqui: <strong>{versao}</strong>.
         </p>
+        {data.update_available && (
+          <div className="mt-4">
+            <BotaoAtualizar mutate={() => atualizar.mutate()} isPending={atualizar.isPending} erro={erro} />
+          </div>
+        )}
       </Layout>
     );
   }
@@ -147,7 +149,9 @@ export function UpdatePanel() {
       {data.notes?.requires_attention && (
         <div className="mb-4 rounded-md border border-warning bg-warning-bg p-3 text-sm text-warning-fg">
           <p className="mb-1 font-medium">⚠️ Requer atenção</p>
-          <p className="whitespace-pre-line">{data.notes.requires_attention}</p>
+          <p className="whitespace-pre-line">
+            {markdownParaTextoSimples(data.notes.requires_attention)}
+          </p>
         </div>
       )}
 
@@ -155,14 +159,30 @@ export function UpdatePanel() {
         <div className="mb-6">
           <p className="mb-2 text-sm font-medium">O que muda</p>
           <pre className="whitespace-pre-wrap font-sans text-sm text-muted-foreground">
-            {semMarcadoresDeHeading(data.notes.body)}
+            {markdownParaTextoSimples(data.notes.body)}
           </pre>
         </div>
       )}
 
+      <BotaoAtualizar mutate={() => atualizar.mutate()} isPending={atualizar.isPending} erro={erro} />
+    </Layout>
+  );
+}
+
+function BotaoAtualizar({
+  mutate,
+  isPending,
+  erro,
+}: {
+  mutate: () => void;
+  isPending: boolean;
+  erro: string | null;
+}) {
+  return (
+    <>
       <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={() => atualizar.mutate()} disabled={atualizar.isPending}>
-          {atualizar.isPending ? "Iniciando…" : "Atualizar agora"}
+        <Button onClick={mutate} disabled={isPending}>
+          {isPending ? "Iniciando…" : "Atualizar agora"}
         </Button>
         <span className="text-sm text-muted-foreground">
           O sistema sai do ar por cerca de 2 minutos e volta sozinho. Faço uma cópia de segurança
@@ -170,7 +190,7 @@ export function UpdatePanel() {
         </span>
       </div>
       {erro && <p className="mt-3 text-sm text-error-fg">{erro}</p>}
-    </Layout>
+    </>
   );
 }
 

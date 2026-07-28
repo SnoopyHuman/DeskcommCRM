@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-import { extractChangelogSection } from "./changelog";
+import { extractChangelogSection, markdownParaTextoSimples } from "./changelog";
 
 const CHANGELOG = `# Changelog
 
@@ -120,6 +120,22 @@ Novo`;
     expect(section?.requiresAttention).not.toBeNull();
   });
 
+  it("body NÃO contém o texto do bloco de atenção — não pode duplicar na tela", () => {
+    // 1.1.0 no fixture tem o bloco em negrito (**⚠️ Requer atenção**).
+    const section = extractChangelogSection(CHANGELOG, "1.1.0");
+    expect(section?.requiresAttention).toContain("reconecte depois de atualizar");
+    expect(section?.body).not.toContain("reconecte depois de atualizar");
+    expect(section?.body).not.toContain("Requer atenção");
+  });
+
+  it("body NÃO contém o bloco de atenção do CHANGELOG.md real (heading)", () => {
+    const realChangelog = readFileSync(join(__dirname, "../../CHANGELOG.md"), "utf8");
+    const section = extractChangelogSection(realChangelog, "1.0.0");
+    expect(section?.requiresAttention).toContain("Node 22");
+    expect(section?.body).not.toContain("Node 22 é obrigatório");
+    expect(section?.body).not.toContain("Requer atenção");
+  });
+
   it("remove referencias de link do bloco de atencao (versao ultima com bloco)", () => {
     // Versão que é a última do arquivo E tem bloco de atenção:
     // o defeito vaza referências de link em requiresAttention.
@@ -130,5 +146,50 @@ Node 22 é obrigatório.
     const section = extractChangelogSection(raw, "1.0.0");
     expect(section?.requiresAttention).not.toContain("github.com");
     expect(section?.requiresAttention).toContain("Node 22");
+  });
+});
+
+describe("markdownParaTextoSimples", () => {
+  // Contra o CHANGELOG.md REAL, não um fixture inventado — o revisor apontou
+  // com razão que um fixture escrito por quem implementa evita justo os
+  // casos reais (negrito, crase, lista) que o changelog de verdade usa.
+  const realChangelog = readFileSync(join(__dirname, "../../CHANGELOG.md"), "utf8");
+
+  it("limpa negrito e crase do bloco de atenção real, sem sumir com o conteúdo", () => {
+    const section = extractChangelogSection(realChangelog, "1.0.0");
+    const limpo = markdownParaTextoSimples(section!.requiresAttention!);
+    expect(limpo).not.toMatch(/[*`#]/);
+    expect(limpo).toContain("Node 22 é obrigatório para desenvolvimento.");
+    expect(limpo).toContain("WebSocket global");
+    expect(limpo).toMatch(/^•\s/);
+  });
+
+  it("limpa heading e crase do corpo real (várias seções, várias listas)", () => {
+    const section = extractChangelogSection(realChangelog, "1.0.0");
+    const limpo = markdownParaTextoSimples(section!.body);
+    expect(limpo).not.toMatch(/[*`#]/);
+    expect(limpo).toContain("Plataforma");
+    expect(limpo).toContain("fn_user_org_ids()");
+    expect(limpo).toMatch(/•\s+Multi-tenancy/);
+  });
+
+  it("não mexe em texto sem marcação nenhuma", () => {
+    expect(markdownParaTextoSimples("texto normal, sem markdown.")).toBe(
+      "texto normal, sem markdown.",
+    );
+  });
+
+  it("não confunde underscore de identificador com itálico (fn_user_org_ids)", () => {
+    // Achado rodando contra o CHANGELOG real: a primeira versão comia os
+    // "_" internos de nomes de função, virando "fnuserorg_ids()".
+    expect(markdownParaTextoSimples("resolvida por `fn_user_org_ids()`.")).toBe(
+      "resolvida por fn_user_org_ids().",
+    );
+  });
+
+  it("ainda converte itálico de underscore de verdade (delimitado por espaço)", () => {
+    expect(markdownParaTextoSimples("isso é _importante_ para todos")).toBe(
+      "isso é importante para todos",
+    );
   });
 });

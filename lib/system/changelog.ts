@@ -46,12 +46,23 @@ export function extractChangelogSection(raw: string, version: string): Changelog
   if (start === -1) return null;
 
   const bodyLines = lines.slice(start, end);
-  const body = cleanBody(bodyLines.join("\n").trim());
-  return {
-    version: wanted,
-    body,
-    requiresAttention: extractAttention(bodyLines),
-  };
+  const attention = findAttentionRange(bodyLines);
+
+  // `body` é a seção MENOS o bloco de atenção (heading + texto). Sem isto, o
+  // mesmo aviso aparece duas vezes na tela: uma na caixa destacada (que é o
+  // ponto do bloco separado) e outra dentro de "O que muda" — pior ainda,
+  // pra quem precisa agir à mão, porque some a diferença entre "aviso" e
+  // "changelog geral".
+  const bodyWithoutAttention = attention
+    ? [...bodyLines.slice(0, attention.start), ...bodyLines.slice(attention.end)]
+    : bodyLines;
+  const body = cleanBody(bodyWithoutAttention.join("\n").trim());
+
+  const requiresAttention = attention
+    ? cleanBody(bodyLines.slice(attention.start + 1, attention.end).join("\n").trim()) || null
+    : null;
+
+  return { version: wanted, body, requiresAttention };
 }
 
 /**
@@ -73,18 +84,48 @@ function cleanBody(body: string): string {
 }
 
 /**
- * O bloco de atenção vai do heading até o próximo heading de qualquer nível.
- * Separado do corpo porque a tela o mostra ACIMA do botão — quem precisa agir
- * à mão não pode descobrir isso rolando a página depois de já ter clicado.
+ * `body`/`requiresAttention` chegam à tela como Markdown cru (o CHANGELOG.md
+ * real usa heading, negrito, itálico, crase e lista em quase toda linha).
+ * Sem renderizador de Markdown instalado no projeto (checado: sem
+ * `react-markdown`/`marked`/`remark`/`markdown-to-jsx` no `package.json` nem
+ * em uso em nenhuma tela) — instalar um pra meia dúzia de linhas de
+ * changelog seria dependência nova pra pouco ganho. Isto vira texto legível
+ * (não JSX rico): heading e ênfase somem mantendo o conteúdo, lista vira
+ * bullet visível.
  */
-function extractAttention(bodyLines: string[]): string | null {
+export function markdownParaTextoSimples(texto: string): string {
+  return texto
+    .split("\n")
+    .map((linha) => {
+      let l = linha.replace(/^#{1,6}\s+/, "");
+      l = l.replace(/^[-*]\s+/, "• ");
+      l = l.replace(/\*\*([^*]+)\*\*/g, "$1");
+      l = l.replace(/__([^_]+)__/g, "$1");
+      l = l.replace(/`([^`]+)`/g, "$1");
+      // Ênfase de asterisco/underscore só conta fora de palavra — do
+      // contrário identificadores como `fn_user_org_ids()` (comum no
+      // CHANGELOG real, que cita nomes de função) perdem os `_` internos
+      // pra virar "fnuserorg_ids()". Mesma regra do CommonMark: delimitador
+      // não pode colar em letra/dígito por fora.
+      l = l.replace(/(?<!\*)(?<!\w)\*([^*\n]+)\*(?!\*)(?!\w)/g, "$1");
+      l = l.replace(/(?<!_)(?<!\w)_([^_\n]+)_(?!_)(?!\w)/g, "$1");
+      return l;
+    })
+    .join("\n");
+}
+
+/**
+ * Acha onde o bloco de atenção começa (a linha do heading/negrito) e termina
+ * (o próximo heading de verdade, não negrito aleatório no meio do aviso) —
+ * em índices de `bodyLines`, pra quem chama poder tanto extrair o texto
+ * quanto EXCLUIR o intervalo do corpo geral.
+ */
+function findAttentionRange(bodyLines: string[]): { start: number; end: number } | null {
   const start = bodyLines.findIndex((line) => ATTENTION_HEADING.test(line.trim()));
   if (start === -1) return null;
 
   const rest = bodyLines.slice(start + 1);
-  // Termina apenas em heading de verdade, não em negrito aleatório no meio do aviso.
   const nextHeading = rest.findIndex((line) => /^#{2,4}\s/.test(line));
-  const block = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
-  const text = cleanBody(block.join("\n").trim());
-  return text || null;
+  const end = nextHeading === -1 ? bodyLines.length : start + 1 + nextHeading;
+  return { start, end };
 }
