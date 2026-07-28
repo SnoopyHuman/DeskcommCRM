@@ -102,4 +102,6 @@ export {
   PuzzlePiece,
   UploadSimple,
   Signpost,
+  // atualização de versão
+  ArrowCircleUp,
 } from "@phosphor-icons/react/dist/ssr";

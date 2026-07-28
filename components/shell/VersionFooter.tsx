@@ -1,0 +1,53 @@
+"use client";
+import Link from "next/link";
+
+import { ArrowCircleUp } from "@/lib/ui/icons";
+import { useSystemVersion } from "@/hooks/system/useSystemVersion";
+import { cn } from "@/lib/utils";
+
+/**
+ * Versão instalada no rodapé da sidebar. Vira um aviso clicável só para quem
+ * é dono do servidor E tem versão nova — quem não pode atualizar não é
+ * alertado sobre algo que não pode resolver.
+ */
+export function VersionFooter({ collapsed }: { collapsed: boolean }) {
+  const { data } = useSystemVersion();
+  if (!data?.current_version) return null;
+
+  const label = data.current_version.replace(/^v/i, "");
+  const alerta = data.is_owner && (data.update_available || data.off_release);
+
+  if (!alerta) {
+    return (
+      <p
+        className={cn("px-3 py-1 text-[11px] text-muted-foreground/70", collapsed && "px-0 text-center")}
+        title={`Versão ${label}`}
+      >
+        {collapsed ? label.split(".").slice(0, 2).join(".") : `versão ${label}`}
+      </p>
+    );
+  }
+
+  const novo = data.latest_version?.replace(/^v/i, "") ?? "";
+  return (
+    <Link
+      href="/app/settings/atualizacao"
+      title={`Nova versão ${novo} disponível`}
+      className={cn(
+        "flex items-center gap-2 rounded-md px-3 py-2 text-xs text-foreground hover:bg-accent/50",
+        collapsed && "justify-center px-2",
+      )}
+    >
+      <span className="relative flex h-2 w-2 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+      </span>
+      {!collapsed && (
+        <span className="truncate">
+          Nova versão{novo ? ` · ${novo}` : ""}
+        </span>
+      )}
+      {collapsed && <ArrowCircleUp size={16} aria-hidden />}
+    </Link>
+  );
+}

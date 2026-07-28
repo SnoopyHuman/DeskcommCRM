@@ -1,0 +1,32 @@
+"use client";
+import { useQuery } from "@tanstack/react-query";
+
+import { apiClient } from "@/lib/api/client";
+
+export interface SystemVersion {
+  current_version: string;
+  is_owner: boolean;
+  latest_version?: string;
+  update_available?: boolean;
+  off_release?: boolean;
+  agent_online?: boolean;
+  notes?: { body: string; requires_attention: string | null } | null;
+  run?: { id: string; status: string; last_step: string | null } | null;
+}
+
+/**
+ * Estado da versão desta instalação. Fonte única do rodapé da sidebar e da
+ * tela de atualização. Poll folgado (5 min) porque o agente do host só reporta
+ * a cada 5 min — bater mais rápido não traria informação nova.
+ */
+export function useSystemVersion(opts?: { refetchInterval?: number }) {
+  return useQuery({
+    queryKey: ["system-version"],
+    queryFn: async () => {
+      const res = await apiClient.get<{ data: SystemVersion }>("/api/v1/system/version");
+      return res.data;
+    },
+    staleTime: 60_000,
+    refetchInterval: opts?.refetchInterval ?? 5 * 60_000,
+  });
+}
