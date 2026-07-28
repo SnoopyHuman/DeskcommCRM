@@ -86,12 +86,20 @@ função em `_common.sh` que hoje instala o cron do drain).
 2. Resolve **versão atual**: `git describe --tags --exact-match HEAD`; se o HEAD não estiver
    numa tag (instalação fora de release), reporta o SHA curto e marca `off_release: true`.
 3. Resolve **última disponível**: `git tag -l 'v*' --sort=-v:refname | head -1`.
-4. Lê o CHANGELOG **da tag nova**: `git show <tag>:CHANGELOG.md`.
+4. Se há versão nova, lê o CHANGELOG **da tag nova**: `git show <tag>:CHANGELOG.md`. Se não há,
+   o campo vai vazio.
 5. `POST /api/v1/system/agent` com `kind: "heartbeat"`.
 6. Se a resposta trouxer `update_requested: true`, roda sob `flock`:
    `bash update.sh --to <tag>`, capturando a saída num arquivo de log.
-7. Ao terminar, `POST` com `kind: "run_result"` — com retry (backoff até ~2 min), porque o app
-   acabou de reiniciar e pode ainda não estar respondendo.
+7. **Reporta cada passo concluído** (`kind: "run_progress"`) enquanto o app ainda está de pé:
+   `backup`, `codigo`, `banco`. A partir de `app` o container reinicia e os `POST` deixam de
+   passar — é esperado, e a tela cobre esse intervalo com "reiniciando…".
+8. Ao terminar, `POST` com `kind: "run_result"` — com retry (backoff até ~2 min), porque o app
+   acabou de voltar e pode ainda não estar respondendo.
+
+O agente não decide nada além de "há tag nova?". Como os passos lentos (backup do banco e
+re-aplicação do `baseline.sql`) acontecem **antes** do reinício, o progresso que a tela mostra é
+real durante quase todo o tempo de espera — não é barra de progresso decorativa.
 
 O agente não decide nada além de "há tag nova?" — quem interpreta o CHANGELOG e quem autoriza é
 o app.
@@ -108,7 +116,11 @@ Corpo validado por união discriminada em Zod:
   current_sha: string,
   off_release: boolean,
   latest_version: string,
-  changelog: string }           // CHANGELOG.md cru da tag nova, teto de 64 KB
+  changelog: string }           // CHANGELOG.md cru da tag nova (vazio se não há), teto de 64 KB
+
+{ kind: "run_progress",
+  run_id: uuid,
+  step: "backup" | "codigo" | "banco" }
 
 { kind: "run_result",
   run_id: uuid,
@@ -116,7 +128,7 @@ Corpo validado por união discriminada em Zod:
   log_tail: string }            // últimas ~40 linhas, teto de 16 KB
 ```
 
-Resposta em ambos os casos: `{ data: { update_requested: boolean, run_id: uuid | null } }`.
+Resposta nos três casos: `{ data: { update_requested: boolean, run_id: uuid | null } }`.
 
 **`GET /api/v1/system/version`** — sessão + `is_platform_admin`. Devolve o estado para a UI:
 versão atual, disponível, seção do CHANGELOG já extraída, saúde do agente e o run em andamento,
@@ -139,8 +151,8 @@ Migration versionada em `supabase/migrations/` + apêndice idempotente no `supab
 `agent_last_seen_at`, `update_requested_at`, `update_requested_by`.
 
 **`system_update_runs`** — histórico append:
-`id`, `from_version`, `to_version`, `status`, `requested_by`, `dispatched_at`, `finished_at`,
-`log_tail`.
+`id`, `from_version`, `to_version`, `status`, `last_step`, `requested_by`, `dispatched_at`,
+`finished_at`, `log_tail`.
 
 Nenhuma das duas tem `organization_id`: são estado da instância, não do inquilino. **Nenhuma
 policy de RLS é criada**, o que significa que `authenticated` e `anon` não leem nada pelo
@@ -150,11 +162,15 @@ Mesmo padrão de `platform_admins`.
 ### 4.4 Máquina de estados do run
 
 ```
-(sem run) ──POST /update──▶ dispatched ──agent──▶ success
-                                 │                failed
-                                 │                failed_rolled_back
-                                 └──sem notícia por 15 min──▶ unknown
+(sem run) ──POST /update──▶ dispatched ──run_progress──▶ (mesmo estado, last_step avança)
+                                 │       ──run_result──▶ success
+                                 │                       failed
+                                 │                       failed_rolled_back
+                                 └──sem notícia por 15 min──▶ unknown (derivado, não gravado)
 ```
+
+`unknown` não é reportado por ninguém: é derivado na leitura, comparando `dispatched_at` com o
+relógio. Um agente morto não consegue anunciar a própria morte.
 
 O app escreve **apenas** a transição para `dispatched` — é o único instante em que ele sabe com
 certeza que a ordem saiu (ele mesmo acabou de respondê-la). Dali em diante quem escreve é o
@@ -165,7 +181,10 @@ começou. Transição inválida (ex.: `success` → `failed`) é rejeitada pela 
 
 - Aceita `--to <tag>`. Sem argumento, resolve a última tag sozinho — o uso pelo terminal
   continua idêntico ao de hoje.
-- Troca `git pull --ff-only` por checkout da tag.
+- Troca `git pull --ff-only` por checkout da tag. O repositório do host passa a viver em HEAD
+  destacado, o que é correto para uma instalação: ela acompanha releases, não desenvolve.
+  Instalação que hoje está no topo da `main` (`off_release`) é levada para a última tag no
+  primeiro update — a tela explica isso antes do clique.
 - Sobe `APP_IMAGE=ghcr.io/melgarafael/deskcommcrm:<versão>` em vez de `latest`.
 - Antes do `docker compose pull`, guarda o digest da imagem em execução
   (`docker inspect --format '{{.Image}}'`) para permitir a volta.
