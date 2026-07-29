@@ -83,7 +83,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
           </span>
         )}
       </div>
-      <nav className="flex-1 space-y-1 p-2" aria-label="Navegação principal">
+      <nav className="flex-1 space-y-1 overflow-y-auto p-2" aria-label="Navegação principal">
         {NAV_ITEMS.filter((item) => {
           if (item.permission === "lgpd.execute_redact") return canLgpd;
           if (item.permission === "ai.agents.view") return canAiAgents;
