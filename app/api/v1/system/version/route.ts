@@ -41,16 +41,19 @@ export async function GET(_req: NextRequest): Promise<Response> {
 
   const current = version?.current_version ?? "";
 
-  if (!user.is_platform_admin) {
-    return ok({ current_version: current, is_owner: false });
-  }
-
-  const latest = version?.latest_version ?? "";
-  const section = latest ? extractChangelogSection(version?.changelog_raw ?? "", latest) : null;
-
+  // `from_version`/`to_version`/`log_tail` NÃO são enfeite: numa falha, a
+  // versão do `system_version` é o `git describe` do HOST, e o checkout já
+  // aconteceu — ela nomeia a versão que QUEBROU, não a que está no ar. Quem
+  // sabe disso é o run (de onde saiu, para onde tentou ir). E o log é o único
+  // diagnóstico que o dono tem sem abrir um terminal, que é justamente o que
+  // esta feature existe para eliminar.
+  //
+  // Lido ANTES da bifurcação por papel de propósito: o rodapé da sidebar (que
+  // todo mundo vê) e esta tela precisam falar da MESMA versão — a que está
+  // rodando.
   const { data: run, error: runError } = await db
     .from("system_update_runs")
-    .select("id, status, last_step, dispatched_at")
+    .select("id, status, last_step, dispatched_at, from_version, to_version, log_tail")
     .order("dispatched_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -63,11 +66,25 @@ export async function GET(_req: NextRequest): Promise<Response> {
   const now = new Date();
   const lastSeen = version?.agent_last_seen_at ? Date.parse(version.agent_last_seen_at) : NaN;
 
+  // A versão que a tela mostra é a do APP QUE ESTÁ RODANDO. Depois de um
+  // rollback, o host reporta a versão nova (o `git checkout` deu certo; quem
+  // não subiu foi o container), então `current_version` nomearia justamente a
+  // versão que quebrou. Quem sabe qual imagem voltou ao ar é o run.
+  const running =
+    run?.status === "failed_rolled_back" && run.from_version ? run.from_version : current;
+
+  if (!user.is_platform_admin) {
+    return ok({ current_version: running, is_owner: false });
+  }
+
+  const latest = version?.latest_version ?? "";
+  const section = latest ? extractChangelogSection(version?.changelog_raw ?? "", latest) : null;
+
   return ok({
-    current_version: current,
+    current_version: running,
     is_owner: true,
     latest_version: latest,
-    update_available: Boolean(latest) && latest !== current,
+    update_available: Boolean(latest) && latest !== running,
     off_release: version?.off_release ?? false,
     agent_online: !Number.isNaN(lastSeen) && now.getTime() - lastSeen < AGENT_OFFLINE_AFTER_MS,
     notes: section ? { body: section.body, requires_attention: section.requiresAttention } : null,
@@ -81,6 +98,9 @@ export async function GET(_req: NextRequest): Promise<Response> {
               ? ("unknown" as const)
               : (run.status as RunStatus),
           last_step: (run.last_step as RunStep | null) ?? null,
+          from_version: run.from_version ?? "",
+          to_version: run.to_version ?? "",
+          log_tail: run.log_tail ?? "",
         }
       : null,
   });

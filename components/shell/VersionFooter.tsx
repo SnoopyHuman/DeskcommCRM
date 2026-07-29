@@ -15,7 +15,11 @@ export function VersionFooter({ collapsed }: { collapsed: boolean }) {
   if (!data?.current_version) return null;
 
   const label = data.current_version.replace(/^v/i, "");
-  const alerta = data.is_owner && (data.update_available || data.off_release);
+  // Só acende quando existe versão nova de verdade. `off_release` sozinho não
+  // conta: uma instalação de desenvolvimento sem versão publicada mais nova
+  // ficava com o ponto pulsando pra sempre, e o texto "Nova versão · " com o
+  // número vazio, apontando para uma tela que não tem o que oferecer.
+  const alerta = data.is_owner && data.update_available;
 
   if (!alerta) {
     return (

@@ -102,7 +102,12 @@ interface HeartbeatResponse {
 /** Simula um ciclo do `agent.sh` real: mesmo endpoint, mesmo bearer. */
 async function heartbeat(
   request: APIRequestContext,
-  opts: { latest_version: string; current_version?: string; changelog?: string },
+  opts: {
+    latest_version: string;
+    current_version?: string;
+    changelog?: string;
+    off_release?: boolean;
+  },
 ): Promise<HeartbeatResponse> {
   const res = await request.post("/api/v1/system/agent", {
     headers: { Authorization: `Bearer ${SECRET}` },
@@ -110,13 +115,32 @@ async function heartbeat(
       kind: "heartbeat",
       current_version: opts.current_version ?? "1.0.0",
       current_sha: "abc1234",
-      off_release: false,
+      off_release: opts.off_release ?? false,
       latest_version: opts.latest_version,
       changelog: opts.changelog ?? "",
     },
   });
   expect(res.status()).toBe(200);
   return res.json();
+}
+
+/** Desfecho reportado pelo agente, como o `agent.sh` faz ao fim do update.sh. */
+async function runResult(
+  request: APIRequestContext,
+  runId: string,
+  status: "success" | "failed" | "failed_rolled_back",
+  logTail = "",
+): Promise<void> {
+  const res = await request.post("/api/v1/system/agent", {
+    headers: { Authorization: `Bearer ${SECRET}` },
+    data: { kind: "run_result", run_id: runId, status, log_tail: logTail },
+  });
+  expect(res.status()).toBe(200);
+}
+
+/** Volta o estado da instalação ao zero (sem run nenhum), como um seed. */
+function resetEstado(): void {
+  execFileSync("npx", ["tsx", "scripts/seed-e2e-system-update.ts"], { stdio: "inherit" });
 }
 
 test("o dono vê a versão nova na sidebar e atualiza pela tela", async ({ page, request }) => {
@@ -171,6 +195,102 @@ test("o dono vê a versão nova na sidebar e atualiza pela tela", async ({ page,
   await page.reload();
   await expect(page.getByRole("heading", { name: /você está na versão 1\.1\.0/i })).toBeVisible();
   await page.screenshot({ path: ".superpowers/evidence/task9-3-em-dia.png" });
+});
+
+test("quando a atualização falha, a tela nomeia a versão certa, mostra o log e dá saída", async ({
+  page,
+  request,
+}) => {
+  // Duas falhas encadeadas num só percurso — é o mesmo dono, na mesma sessão,
+  // vendo o pior dia da instalação dele.
+  test.setTimeout(120_000);
+  resetEstado();
+  await heartbeat(request, { current_version: "1.0.0", latest_version: "1.1.0" });
+  await loginWithTotp(page, creds.users.admin!.email, creds.admin_totp!.secret);
+  await page.goto("/app/settings/atualizacao");
+  await page.getByRole("button", { name: /atualizar agora/i }).click();
+  await expect(page.getByRole("heading", { name: /atualizando para a versão 1\.1\.0/i })).toBeVisible();
+
+  // ── Falha COM rollback ─────────────────────────────────────────────────────
+  const primeiro = await heartbeat(request, { latest_version: "1.1.0" });
+  await runResult(
+    request,
+    primeiro.data.run_id!,
+    "failed_rolled_back",
+    "▶ Conferindo se o app voltou no ar\n⚠ Atualizei, mas o app não respondeu 'ok'.",
+  );
+  // O host reporta o `git describe` DEPOIS do checkout: para ele, a versão
+  // instalada é a 1.1.0 — a que acabou de quebrar. É esta mentira que a tela
+  // repetia ("Voltei para a versão anterior (1.1.0)") e que o run desfaz.
+  await heartbeat(request, { current_version: "1.1.0", latest_version: "1.1.0" });
+  await page.reload();
+
+  await expect(
+    page.getByRole("heading", { name: /a atualização para a versão 1\.1\.0 não deu certo/i }),
+  ).toBeVisible();
+  await expect(page.getByText(/Voltei o sistema para a versão 1\.0\.0/)).toBeVisible();
+
+  // O log só existe se der pra ler: recolhido, mas presente e abrível.
+  const detalhes = page.getByText(/Detalhes técnicos/);
+  await expect(detalhes).toBeVisible();
+  await expect(page.getByText(/o app não respondeu 'ok'/)).toBeHidden();
+  await detalhes.click();
+  await expect(page.getByText(/o app não respondeu 'ok'/)).toBeVisible();
+
+  // O aviso da sidebar só acende porque o app sabe que está rodando a 1.0.0 —
+  // se ele tivesse acreditado no "1.1.0" que o host reportou, `update_available`
+  // seria falso e o rodapé mostraria "versão 1.1.0" como instalada, que é
+  // justamente a versão que quebrou.
+  await expect(page.getByRole("link", { name: /nova versão/i })).toBeVisible();
+
+  // Saída garantida: o botão NÃO aparece (um novo pedido faria o servidor
+  // responder "já estou na 1.1.0" e reportar sucesso sem trocar imagem
+  // nenhuma) — quem resolve ali é o comando com --force, sempre presente.
+  await expect(page.getByRole("button", { name: /atualizar agora/i })).toHaveCount(0);
+  await expect(page.getByText("bash hostgator-setup-kit/update.sh --force")).toBeVisible();
+  await page.screenshot({ path: ".superpowers/evidence/final-1-falha-com-rollback.png" });
+
+  // ── Falha SEM rollback: a tela não pode prometer que voltou ────────────────
+  resetEstado();
+  await heartbeat(request, { current_version: "1.1.0", latest_version: "1.2.0" });
+  await page.reload();
+  await page.getByRole("button", { name: /atualizar agora/i }).click();
+  await expect(page.getByRole("heading", { name: /atualizando para a versão 1\.2\.0/i })).toBeVisible();
+
+  const segundo = await heartbeat(request, { current_version: "1.1.0", latest_version: "1.2.0" });
+  expect(segundo.data.update_requested).toBe(true);
+  await runResult(request, segundo.data.run_id!, "failed", "✖ rollback não foi possível");
+  await heartbeat(request, { current_version: "1.2.0", latest_version: "1.2.0" });
+  await page.reload();
+
+  await expect(
+    page.getByRole("heading", { name: /a atualização para a versão 1\.2\.0 não deu certo/i }),
+  ).toBeVisible();
+  await expect(page.getByText(/não consegui/i)).toBeVisible();
+  await expect(page.getByText(/Voltei o sistema para a versão/)).toHaveCount(0);
+  await expect(page.getByText("bash hostgator-setup-kit/update.sh --force")).toBeVisible();
+  await page.screenshot({ path: ".superpowers/evidence/final-2-falha-sem-rollback.png" });
+});
+
+test("instalação fora de uma versão publicada não vira tela quebrada", async ({ page, request }) => {
+  // `off_release` com `latest_version` vazio: clone raso sem as marcas de
+  // versão, ou código à frente da última publicada (o agente deixa de anunciar
+  // uma tag que já está contida no HEAD, porque instalá-la seria retroceder).
+  resetEstado();
+  await heartbeat(request, { current_version: "abc1234", latest_version: "", off_release: true });
+  await loginWithTotp(page, creds.users.admin!.email, creds.admin_totp!.secret);
+
+  await page.goto("/app/inbox");
+  await expect(page.getByRole("link", { name: /nova versão/i })).toHaveCount(0);
+  await expect(page.getByText("versão abc1234")).toBeVisible();
+
+  await page.goto("/app/settings/atualizacao");
+  await expect(
+    page.getByRole("heading", { name: /instalação fora de uma versão publicada/i }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /atualizar agora/i })).toHaveCount(0);
+  await expect(page.getByText("bash hostgator-setup-kit/update.sh")).toBeVisible();
+  await page.screenshot({ path: ".superpowers/evidence/final-3-fora-de-release.png" });
 });
 
 test("quem não é dono do servidor não vê o botão", async ({ page, request }) => {

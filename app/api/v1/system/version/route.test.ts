@@ -22,6 +22,11 @@ let inserted: Record<string, unknown> | null;
  */
 let runUpdatePatch: Record<string, unknown> | null;
 /**
+ * Patch aplicado por um `.update(...)` em `system_version` — usado para provar
+ * que o POST NÃO mantém um segundo estado de "alguém pediu" fora do run.
+ */
+let versionUpdatePatch: Record<string, unknown> | null;
+/**
  * Erro que o INSERT em `system_update_runs` deve devolver neste caso — usado
  * para simular a corrida entre dois cliques quase simultâneos batendo no
  * índice único parcial `uniq_system_update_runs_dispatched` (migration 0090).
@@ -37,6 +42,7 @@ beforeEach(() => {
   inserted = null;
   runRow = null;
   runUpdatePatch = null;
+  versionUpdatePatch = null;
   insertError = null;
   versionSelectError = null;
   runSelectError = null;
@@ -91,6 +97,7 @@ beforeEach(() => {
             eq: () => chain,
             then: (onFulfilled, onRejected) => {
               if (table === "system_update_runs") runUpdatePatch = patch;
+              if (table === "system_version") versionUpdatePatch = patch;
               return Promise.resolve({ error: null }).then(onFulfilled, onRejected);
             },
           };
@@ -164,6 +171,53 @@ describe("GET /api/v1/system/version", () => {
     expect(body.data.agent_online).toBe(false);
   });
 
+  it("entrega as versões do run e o log da tentativa (o diagnóstico da falha)", async () => {
+    // `current_version` é o `git describe` do HOST e, numa falha, já aponta
+    // para a versão que QUEBROU (o checkout acontece antes de o app subir).
+    // Quem sabe de onde saiu e para onde tentou ir é o run — e o log é o
+    // único diagnóstico que o dono tem sem abrir um terminal.
+    versionRow.current_version = "1.1.0";
+    runRow = {
+      id: "55555555-5555-4555-8555-555555555555",
+      status: "failed_rolled_back",
+      last_step: "banco",
+      dispatched_at: new Date().toISOString(),
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      log_tail: "✖ o app não respondeu ok",
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.run.from_version).toBe("1.0.0");
+    expect(body.data.run.to_version).toBe("1.1.0");
+    expect(body.data.run.log_tail).toContain("não respondeu ok");
+    // A versão exibida é a do APP que está no ar (a que voltou), não o
+    // checkout do host — que aponta para a que acabou de quebrar.
+    expect(body.data.current_version).toBe("1.0.0");
+    expect(body.data.update_available).toBe(true);
+  });
+
+  it("depois de um rollback, quem não é dono também vê a versão que está no ar", async () => {
+    versionRow.current_version = "1.1.0";
+    runRow = {
+      id: "55555555-5555-4555-8555-555555555555",
+      status: "failed_rolled_back",
+      last_step: "banco",
+      dispatched_at: new Date().toISOString(),
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      log_tail: "",
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(MEMBRO as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    // O rodapé da sidebar é o mesmo componente para todo mundo: se as duas
+    // respostas divergissem, dois usuários da mesma instalação leriam versões
+    // diferentes na mesma tela.
+    expect(body.data.current_version).toBe("1.0.0");
+  });
+
   it("deriva unknown num run parado há muito tempo", async () => {
     runRow = {
       id: "55555555-5555-4555-8555-555555555555",
@@ -207,11 +261,21 @@ describe("POST /api/v1/system/update", () => {
     expect(inserted).toBeNull();
   });
 
-  it("cria o run, marca o pedido e audita", async () => {
+  it("cria o run como ÚNICA ordem — sem um segundo estado em system_version", async () => {
+    // O run insere e o flag `update_requested_at` marcava a mesma coisa em
+    // outra tabela, sem transação e sem checar erro: falhando o segundo write,
+    // a rota respondia 200, a tela mostrava a barra de passos e o agente nunca
+    // pegava o pedido. Quem pediu e quando vive no run e no audit log.
     vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
     const { POST } = await import("../update/route");
     expect((await POST(post())).status).toBe(200);
-    expect(inserted).toMatchObject({ from_version: "1.0.0", to_version: "1.1.0", status: "dispatched" });
+    expect(inserted).toMatchObject({
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      status: "dispatched",
+      requested_by: OWNER.id,
+    });
+    expect(versionUpdatePatch).toBeNull();
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "system.update_requested" }));
   });
 

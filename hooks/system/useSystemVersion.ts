@@ -11,7 +11,17 @@ export interface SystemVersion {
   off_release?: boolean;
   agent_online?: boolean;
   notes?: { body: string; requires_attention: string | null } | null;
-  run?: { id: string; status: string; last_step: string | null } | null;
+  run?: {
+    id: string;
+    status: string;
+    last_step: string | null;
+    /** Versão que estava instalada quando o run começou. */
+    from_version: string;
+    /** Versão que o run tentou instalar. */
+    to_version: string;
+    /** Últimas linhas da saída do update.sh — o diagnóstico da falha. */
+    log_tail: string;
+  } | null;
 }
 
 /**
