@@ -27,8 +27,11 @@ ERRLOG="${PROJECT_DIR}/.update-agent.log"
 # ali mesmo, sem imprimir nada — pior ainda depois de responder ao app que vai
 # executar (run "dispatched"): o agente morre, nunca reporta, e o run fica
 # travado pra sempre (o índice único da migration 0090 recusa qualquer novo
-# pedido). Por isso TODA substituição abaixo termina em "|| true" e trata valor
-# vazio explicitamente — nunca deixamos o `-e` decidir por nós.
+# pedido). Regra seguida abaixo: NENHUMA substituição pode derrubar o script —
+# ou o comando dentro dela já tem seu próprio "|| true"/"|| echo" (git
+# describe/rev-parse), ou a atribuição inteira termina em "|| true" — e valor
+# vazio resultante é sempre tratado explicitamente, nunca deixado para o `-e`
+# decidir por nós.
 log_err() {  # log_err <mensagem> — grava com timestamp, corta pra ~200 linhas
   printf '%s [agent] %s\n' "$(date -u +%FT%TZ)" "$1" >> "$ERRLOG" || true
   { tail -n 200 "$ERRLOG" > "${ERRLOG}.tmp" && mv "${ERRLOG}.tmp" "$ERRLOG"; } 2>/dev/null || true
@@ -73,12 +76,23 @@ json_field() {  # json_field <corpo> <campo> — sem jq, que pode não existir n
 #    quebras de linha com um separador acrescentado SEMPRE, inclusive depois
 #    do último registro — isso inventava um "\n" a mais quando o texto não
 #    termina em quebra de linha real, ex.: truncamento no meio de uma linha).
+#
+# `LC_ALL=C` em CADA estágio: sob locale UTF-8 (o padrão em Debian/Ubuntu,
+# inclusive via cron), `tr`/`sed` validam a entrada como texto multibyte e
+# ABORTAM com "Illegal byte sequence" ao encontrar um byte inválido — e byte
+# inválido é exatamente o que sobra quando `head -c` corta no meio de um
+# caractere UTF-8 (achado reproduzindo de propósito: o mesmo bug do item 1a,
+# por uma porta que só aparece sob locale UTF-8 — funciona na máquina de quem
+# testa em LC_ALL=C e morre na VPS do cliente, que roda UTF-8 por padrão). Com
+# `LC_ALL=C`, essas ferramentas tratam a entrada como bytes crus: nunca
+# validam multibyte, então nunca têm como abortar por sequência ilegal, em
+# nenhum host.
 esc() {
   printf '%s' "$1" \
-    | tr -d '\000-\010\013\014\015\016-\037\177' \
-    | tr '\t\n' '\002\001' \
-    | sed 's/\\/\\\\/g; s/"/\\"/g' \
-    | sed $'s/\002/\\\\t/g; s/\001/\\\\n/g'
+    | LC_ALL=C tr -d '\000-\010\013\014\015\016-\037\177' \
+    | LC_ALL=C tr '\t\n' '\002\001' \
+    | LC_ALL=C sed 's/\\/\\\\/g; s/"/\\"/g' \
+    | LC_ALL=C sed $'s/\002/\\\\t/g; s/\001/\\\\n/g'
 }
 
 # ── 1. Que versão está instalada e qual é a última publicada? ────────────────
@@ -116,7 +130,10 @@ if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT" ]; then
   fi
 fi
 
-BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"changelog\":\"$(esc "$CHANGELOG")\"}"
+# Cinto e suspensório: o "LC_ALL=C" acima já torna esc() incapaz de abortar
+# por sequência inválida, mas a morte do agente é grave o bastante (run
+# travado pra sempre) pra justificar a redundância explícita do "|| true".
+BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"changelog\":\"$(esc "$CHANGELOG")\"}" || true
 RESP="$(post "$BODY")"
 
 [ "$(json_field "$RESP" update_requested)" = "true" ] || exit 0
@@ -172,7 +189,7 @@ if [ $RC -ne 0 ]; then
   fi
 fi
 
-TAIL="$(esc "$(tail -40 "$LOG" || true)")"
+TAIL="$(esc "$(tail -40 "$LOG" || true)")" || true
 
 # O app acabou de reiniciar: insiste por ~2 min antes de desistir.
 for _ in $(seq 1 12); do
