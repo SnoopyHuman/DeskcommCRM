@@ -4,12 +4,16 @@ import { useState } from "react";
 
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
+import { copyToClipboard } from "@/lib/clipboard";
 import { useSystemVersion } from "@/hooks/system/useSystemVersion";
 import { markdownParaTextoSimples } from "@/lib/system/changelog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
-const COMANDO_MANUAL = "cd DeskcommCRM && bash hostgator-setup-kit/update.sh";
+// Sem `cd <pasta>`: o instalador não fixa o nome da pasta do clone
+// (REPO_DIR é configurável, default "deskcommcrm" minúsculo) — quem tem
+// acesso ao servidor já sabe entrar na pasta onde instalou.
+const COMANDO_MANUAL = "bash hostgator-setup-kit/update.sh";
 
 const PASSOS = [
   { chave: "backup", texto: "Guardando uma cópia de segurança dos seus dados" },
@@ -120,8 +124,8 @@ export function UpdatePanel() {
       <Layout titulo="Atualização automática indisponível">
         <p className="text-sm">
           Não estou conseguindo falar com o servidor onde o sistema está instalado, então não posso
-          atualizar sozinho. Quem tem acesso ao servidor pode rodar este comando uma vez — depois
-          disso o botão passa a funcionar:
+          atualizar sozinho. Quem tem acesso ao servidor pode entrar na pasta onde o sistema foi
+          instalado e rodar este comando uma vez — depois disso o botão passa a funcionar:
         </p>
         <Comando />
         <p className="mt-3 text-sm text-muted-foreground">Versão instalada: {versao}.</p>
@@ -228,7 +232,7 @@ function Comando() {
         variant="outline"
         size="sm"
         onClick={async () => {
-          await navigator.clipboard.writeText(COMANDO_MANUAL);
+          await copyToClipboard(COMANDO_MANUAL);
           setCopiado(true);
           setTimeout(() => setCopiado(false), 2000);
         }}
