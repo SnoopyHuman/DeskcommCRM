@@ -14,15 +14,30 @@ import { Card } from "@/components/ui/card";
 // (REPO_DIR é configurável, default "deskcommcrm" minúsculo) — quem tem
 // acesso ao servidor já sabe entrar na pasta onde instalou.
 const COMANDO_MANUAL = "bash hostgator-setup-kit/update.sh";
-// Depois de uma tentativa que falhou, o código do servidor JÁ está na versão
-// nova (a troca acontece antes de o app subir) — sem `--force`, o script
-// responde "você já está na versão mais recente" e não faz nada, deixando o
-// sistema parado no que quebrou.
-const COMANDO_APOS_FALHA = "bash hostgator-setup-kit/update.sh --force";
 
 /** Tira o "v" das versões: a tela fala "1.1.0", não "v1.1.0". */
 function semV(versao: string | undefined): string {
   return (versao ?? "").replace(/^v/i, "");
+}
+
+/**
+ * O comando que RESOLVE depois de uma tentativa fracassada — e resolver aqui é
+ * voltar para a versão que funcionava, não reinstalar a que acabou de quebrar.
+ *
+ * O código do servidor já está na versão nova (a troca acontece antes de o app
+ * subir): sem `--force` o script responde "você já está na versão mais recente"
+ * e não faz nada, e sem `--to` ele reinstalaria exatamente a release ruim —
+ * caminho sem volta se o problema for a release, e não um azar de rede.
+ *
+ * Só aponta para trás quando sabe para onde: `from_version` pode ser uma marca
+ * de desenvolvimento (instalação fora de release), e aí não existe imagem
+ * publicada com esse nome para puxar — nesse caso, só `--force`.
+ */
+function comandoDeVolta(fromVersion: string | undefined): string {
+  const anterior = semV(fromVersion);
+  return /^\d+\.\d+\.\d+/.test(anterior)
+    ? `bash hostgator-setup-kit/update.sh --to v${anterior} --force`
+    : "bash hostgator-setup-kit/update.sh --force";
 }
 
 const PASSOS = [
@@ -115,14 +130,33 @@ export function UpdatePanel() {
           mutate={() => atualizar.mutate()}
           isPending={atualizar.isPending}
           erro={erro}
-          texto="Se quiser tentar de novo, quem tem acesso ao servidor pode rodar:"
-          comando={COMANDO_APOS_FALHA}
+          texto={`Se quiser tentar de novo, ou deixar o servidor todo de volta na ${anterior}, quem tem acesso pode rodar:`}
+          comando={comandoDeVolta(data.run.from_version)}
         />
       </Layout>
     );
   }
 
   if (data.run?.status === "failed") {
+    // Nenhum passo concluído = o servidor recusou a atualização ANTES de tocar
+    // em qualquer coisa (ex.: o alvo era mais antigo que o instalado). Dizer
+    // "pode estar rodando com defeito" aqui seria assustar por nada.
+    // ponytail: o sinal é `last_step`, não um estado próprio no banco — o teto
+    // é o caso raro do agente morrer sem conseguir reportar nem o primeiro
+    // passo; um status próprio (migration + baseline + MANIFEST) é o upgrade
+    // se isso algum dia doer.
+    if (!data.run.last_step) {
+      return (
+        <Layout titulo="A atualização não chegou a começar">
+          <p className="text-sm">
+            O servidor recusou a atualização antes de mexer em qualquer coisa, então{" "}
+            <strong>nada mudou</strong>: você continua na versão {anterior}, com os mesmos dados de
+            sempre. O motivo está logo abaixo, em detalhes técnicos.
+          </p>
+          <DetalhesTecnicos texto={data.run.log_tail} />
+        </Layout>
+      );
+    }
     return (
       <Layout titulo={`A atualização para a versão ${alvo} não deu certo`}>
         <p className="text-sm">
@@ -136,8 +170,8 @@ export function UpdatePanel() {
           mutate={() => atualizar.mutate()}
           isPending={atualizar.isPending}
           erro={erro}
-          texto="Para colocar o sistema de volta no ar, quem tem acesso ao servidor precisa rodar:"
-          comando={COMANDO_APOS_FALHA}
+          texto={`Para colocar o sistema de volta no ar na versão ${anterior}, quem tem acesso ao servidor precisa rodar:`}
+          comando={comandoDeVolta(data.run.from_version)}
         />
       </Layout>
     );
@@ -186,24 +220,25 @@ export function UpdatePanel() {
     );
   }
 
-  // Fora de uma versão publicada e sem nenhuma versão nova para oferecer: ou o
-  // servidor está com código à frente da última publicada, ou o clone veio sem
-  // as marcas de versão (o instalador clona raso e a busca por marcas pode
-  // falhar em silêncio). Nos dois casos não existe "atualizar para" — sem esta
-  // tela, a de baixo renderizava "Versão  disponível", com o número vazio, e um
-  // botão que a API recusa.
+  // Sem nenhuma versão nova para oferecer numa instalação que não está numa
+  // versão publicada: o servidor está À FRENTE da última publicada. Não é
+  // defeito — ninguém do nosso público escolheu isso, veio da forma como foi
+  // instalado — e a tela não pode tratar como se fosse. Sem este bloco, a tela
+  // de baixo renderizava "Versão  disponível", com o número vazio, e um botão
+  // que a API recusa com 409.
   if (!nova) {
     return (
-      <Layout titulo="Instalação fora de uma versão publicada">
+      <Layout titulo="Você está à frente da versão publicada">
         <p className="text-sm">
-          O código deste servidor não corresponde a nenhuma versão publicada — ele veio direto do
-          desenvolvimento (marca <strong>{versao}</strong>). Como não há uma versão publicada mais
-          nova para comparar, não posso atualizar sozinho, e nada aqui está quebrado por causa
-          disso.
+          Seu sistema roda uma versão mais nova do que a última publicada, então{" "}
+          <strong>não há nada a atualizar</strong>. É assim mesmo quando a instalação acompanha o
+          desenvolvimento, e nada aqui está errado por causa disso — a marca da sua versão é{" "}
+          <strong>{versao}</strong>.
         </p>
         <p className="mt-3 text-sm">
-          Quem tem acesso ao servidor pode conferir com o comando abaixo — ele explica o que dá para
-          fazer e não muda nada sem avisar:
+          Quando sair uma versão publicada mais nova que a sua, ela aparece aqui sozinha. Quem tem
+          acesso ao servidor pode conferir a qualquer momento com o comando abaixo — ele não muda
+          nada sem avisar:
         </p>
         <Comando comando={COMANDO_MANUAL} />
       </Layout>

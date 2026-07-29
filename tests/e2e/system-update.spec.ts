@@ -138,6 +138,19 @@ async function runResult(
   expect(res.status()).toBe(200);
 }
 
+/** Passo concluído, como o `report()` do update.sh faz enquanto o app está de pé. */
+async function runProgress(
+  request: APIRequestContext,
+  runId: string,
+  step: "backup" | "codigo" | "banco",
+): Promise<void> {
+  const res = await request.post("/api/v1/system/agent", {
+    headers: { Authorization: `Bearer ${SECRET}` },
+    data: { kind: "run_progress", run_id: runId, step },
+  });
+  expect(res.status()).toBe(200);
+}
+
 /** Volta o estado da instalação ao zero (sem run nenhum), como um seed. */
 function resetEstado(): void {
   execFileSync("npx", ["tsx", "scripts/seed-e2e-system-update.ts"], { stdio: "inherit" });
@@ -213,6 +226,7 @@ test("quando a atualização falha, a tela nomeia a versão certa, mostra o log 
 
   // ── Falha COM rollback ─────────────────────────────────────────────────────
   const primeiro = await heartbeat(request, { latest_version: "1.1.0" });
+  await runProgress(request, primeiro.data.run_id!, "banco");
   await runResult(
     request,
     primeiro.data.run_id!,
@@ -247,7 +261,11 @@ test("quando a atualização falha, a tela nomeia a versão certa, mostra o log 
   // responder "já estou na 1.1.0" e reportar sucesso sem trocar imagem
   // nenhuma) — quem resolve ali é o comando com --force, sempre presente.
   await expect(page.getByRole("button", { name: /atualizar agora/i })).toHaveCount(0);
-  await expect(page.getByText("bash hostgator-setup-kit/update.sh --force")).toBeVisible();
+  // E o comando leva de volta para a versão que FUNCIONAVA — reinstalar a 1.1.0,
+  // que acabou de quebrar, não é saída nenhuma se o problema for a release.
+  await expect(
+    page.getByText("bash hostgator-setup-kit/update.sh --to v1.0.0 --force"),
+  ).toBeVisible();
   await page.screenshot({ path: ".superpowers/evidence/final-1-falha-com-rollback.png" });
 
   // ── Falha SEM rollback: a tela não pode prometer que voltou ────────────────
@@ -259,6 +277,7 @@ test("quando a atualização falha, a tela nomeia a versão certa, mostra o log 
 
   const segundo = await heartbeat(request, { current_version: "1.1.0", latest_version: "1.2.0" });
   expect(segundo.data.update_requested).toBe(true);
+  await runProgress(request, segundo.data.run_id!, "banco");
   await runResult(request, segundo.data.run_id!, "failed", "✖ rollback não foi possível");
   await heartbeat(request, { current_version: "1.2.0", latest_version: "1.2.0" });
   await page.reload();
@@ -268,14 +287,46 @@ test("quando a atualização falha, a tela nomeia a versão certa, mostra o log 
   ).toBeVisible();
   await expect(page.getByText(/não consegui/i)).toBeVisible();
   await expect(page.getByText(/Voltei o sistema para a versão/)).toHaveCount(0);
-  await expect(page.getByText("bash hostgator-setup-kit/update.sh --force")).toBeVisible();
+  await expect(
+    page.getByText("bash hostgator-setup-kit/update.sh --to v1.1.0 --force"),
+  ).toBeVisible();
   await page.screenshot({ path: ".superpowers/evidence/final-2-falha-sem-rollback.png" });
+
+  // ── Recusa: o servidor não fez nada, e a tela não pode dizer que fez ───────
+  // O update.sh recusa alvos que seriam retrocesso ANTES de tocar em qualquer
+  // coisa; o run volta "failed" sem nenhum passo concluído. Dizer "pode estar
+  // rodando com defeito" aqui assustaria por nada.
+  resetEstado();
+  await heartbeat(request, { current_version: "1.1.0", latest_version: "1.2.0" });
+  await page.reload();
+  await page.getByRole("button", { name: /atualizar agora/i }).click();
+  // Espera a tela confirmar o pedido antes de bater o heartbeat: sem isso, o
+  // agente simulado corre com o POST do clique e não acha run nenhum.
+  await expect(page.getByRole("heading", { name: /atualizando para a versão 1\.2\.0/i })).toBeVisible();
+  const terceiro = await heartbeat(request, { current_version: "1.1.0", latest_version: "1.2.0" });
+  await runResult(
+    request,
+    terceiro.data.run_id!,
+    "failed",
+    "✖ A versão v1.2.0 é ANTERIOR à que já está instalada neste servidor.",
+  );
+  await page.reload();
+
+  await expect(page.getByRole("heading", { name: /não chegou a começar/i })).toBeVisible();
+  await expect(page.getByText(/nada mudou/i)).toBeVisible();
+  await expect(page.getByText(/não deu certo/i)).toHaveCount(0);
+  await page.getByText(/Detalhes técnicos/).click();
+  await expect(page.getByText(/é ANTERIOR à que já está instalada/)).toBeVisible();
+  await page.screenshot({ path: ".superpowers/evidence/final-4-recusa-sem-tocar.png" });
 });
 
-test("instalação fora de uma versão publicada não vira tela quebrada", async ({ page, request }) => {
-  // `off_release` com `latest_version` vazio: clone raso sem as marcas de
-  // versão, ou código à frente da última publicada (o agente deixa de anunciar
-  // uma tag que já está contida no HEAD, porque instalá-la seria retroceder).
+test("instalação à frente da versão publicada não vira tela quebrada nem alarme", async ({
+  page,
+  request,
+}) => {
+  // `off_release` com `latest_version` vazio: o agente não anuncia uma tag que
+  // já está contida no HEAD (instalá-la seria retroceder) nem uma que ele não
+  // consegue comparar. Não é defeito — e a tela não pode tratar como se fosse.
   resetEstado();
   await heartbeat(request, { current_version: "abc1234", latest_version: "", off_release: true });
   await loginWithTotp(page, creds.users.admin!.email, creds.admin_totp!.secret);
@@ -286,11 +337,12 @@ test("instalação fora de uma versão publicada não vira tela quebrada", async
 
   await page.goto("/app/settings/atualizacao");
   await expect(
-    page.getByRole("heading", { name: /instalação fora de uma versão publicada/i }),
+    page.getByRole("heading", { name: /você está à frente da versão publicada/i }),
   ).toBeVisible();
+  await expect(page.getByText(/não há nada a atualizar/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /atualizar agora/i })).toHaveCount(0);
   await expect(page.getByText("bash hostgator-setup-kit/update.sh")).toBeVisible();
-  await page.screenshot({ path: ".superpowers/evidence/final-3-fora-de-release.png" });
+  await page.screenshot({ path: ".superpowers/evidence/final-3-a-frente-da-publicada.png" });
 });
 
 test("quem não é dono do servidor não vê o botão", async ({ page, request }) => {
