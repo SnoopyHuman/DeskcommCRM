@@ -5,7 +5,8 @@
 #   bash hostgator-setup-kit/update.sh
 #
 # Flags:
-#   --force        atualiza mesmo se o git disser que já está na última versão
+#   --force        instala a versão pedida mesmo que ela seja igual ou ANTERIOR
+#                  à que já está aqui (é o jeito explícito de voltar no tempo)
 #   --skip-backup  pula o backup automático (não recomendado)
 #   --to <tag>     instala essa tag em vez da mais recente publicada
 source "$(dirname "$0")/_common.sh"
@@ -21,15 +22,39 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# ── 0. Liga o agente da tela ANTES de qualquer decisão de versão ─────────────
+# Instalar o cron aqui, e não no fim, é o que faz o bootstrap ter fim: os
+# caminhos "já está na versão mais recente" e "essa versão é anterior à sua"
+# saem do script mais abaixo, e se o cron dependesse deles a atualização pela
+# tela nunca ligaria justamente em quem já está em dia. É idempotente.
+setup_update_agent_cron
+
 # ── 1. Tem atualização mesmo? ────────────────────────────────────────────────
 step "Procurando atualizações"
 git fetch --tags --quiet origin 2>/dev/null || c_ylw "⚠ não consegui falar com o GitHub — sigo com o código que já está aqui."
 [ -n "$TARGET_TAG" ] || TARGET_TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)"
 [ -n "$TARGET_TAG" ] || die "Não encontrei nenhuma versão publicada para instalar."
+git rev-parse --verify --quiet "${TARGET_TAG}^{commit}" >/dev/null \
+  || die "Não conheço a versão $TARGET_TAG aqui. Confira o nome (ex.: v1.1.0) ou tente de novo quando o servidor conseguir falar com o GitHub."
 CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 if [ "$CURRENT_TAG" = "$TARGET_TAG" ] && [ -z "$FORCE" ]; then
   c_grn "✓ Você já está na versão mais recente ($TARGET_TAG). Nada a atualizar."
   exit 0
+fi
+
+# Alvo que JÁ está contido no que roda aqui = andar pra trás, não pra frente.
+# Numa instalação que segue a `main`, `git describe --exact-match` é vazio: a
+# comparação de tags acima passa batido e, sem esta guarda, o script instalaria
+# alegremente uma versão MAIS VELHA que a instalada — desligando o que o dono
+# já tem (foi assim que este próprio botão se autodestruiria, voltando pra uma
+# imagem que não conhece o agente de atualização). Recusar é o padrão; voltar
+# no tempo continua possível, mas só quando alguém pede de propósito.
+if [ -z "$FORCE" ] && git merge-base --is-ancestor "$TARGET_TAG" HEAD 2>/dev/null; then
+  die "A versão $TARGET_TAG é ANTERIOR à que já está instalada neste servidor.
+     Instalar ela seria voltar no tempo e desligar coisas que você já tem.
+     Não mexi em nada: nem no banco, nem no app — está tudo como estava.
+     Se você REALMENTE quer voltar para a $TARGET_TAG, rode:
+       bash hostgator-setup-kit/update.sh --to $TARGET_TAG --force"
 fi
 c_ylw "Vou atualizar para a versão $TARGET_TAG com segurança."
 
@@ -90,8 +115,11 @@ fi
 # ── 5. App novo ──────────────────────────────────────────────────────────────
 step "Baixando a versão nova do app e reiniciando"
 # Imagem da TAG publicada (não "latest" solto): garante que o código (checkout
-# acima) e a imagem do container sejam sempre da mesma versão.
+# acima) e a imagem do container sejam sempre da mesma versão. Gravada no .env,
+# não só exportada: o compose lê a imagem de lá, e um `up -d` rodado à mão
+# depois voltaria pro ":latest" do install — desfazendo a atualização.
 export APP_IMAGE="ghcr.io/melgarafael/deskcommcrm:${TARGET_TAG#v}"
+set_env_var .env APP_IMAGE "$APP_IMAGE"
 docker compose -f "$COMPOSE" pull
 docker compose -f "$COMPOSE" up -d
 
@@ -116,8 +144,7 @@ else
   exit 1
 fi
 
-# ── 7. Automações (cron do drain de eventos + agente de atualização) ────────
+# ── 7. Automações (cron do drain de eventos; o da tela já subiu no bloco 0) ──
 step "Conferindo as automações"
 ensure_encryption_key .env
 setup_event_log_drain_cron
-setup_update_agent_cron

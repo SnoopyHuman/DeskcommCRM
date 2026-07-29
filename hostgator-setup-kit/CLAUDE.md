@@ -143,10 +143,20 @@ Se mesmo assim aparecerem, aqui está o diagnóstico pronto:
   conversas bagunçadas de versões antigas). Re-aplicar gera muitos avisos "já existe" /
   "multiple primary keys" — **é esperado e inofensivo**; o script filtra esse ruído e só
   alerta sobre erros de verdade. (5) puxa a imagem nova do app e confere a saúde no fim.
-  Flags: `--force` (atualiza mesmo já estando na última) e `--skip-backup`.
+  Flags: `--force` (instala mesmo que a versão pedida seja igual ou anterior à instalada)
+  e `--skip-backup`.
 - **O alvo agora é a última tag publicada** (`v1.2.3`), não mais o topo da branch
   `main` — atualizar sempre leva pra uma versão marcada e descrita no `CHANGELOG.md`,
-  nunca pra um commit não testado.
+  nunca pra um commit não testado. O script **recusa** instalar uma versão anterior à que
+  já está no servidor (isso desligaria coisas que a pessoa já tem); voltar no tempo só com
+  `--force`, de propósito. Numa instalação que ainda segue a `main`, é normal ver essa
+  recusa: o código dela está *à frente* da última versão publicada.
+- **A imagem da versão instalada fica gravada no `.env`** (`APP_IMAGE`). Não troque isso
+  pra `latest` na mão: seria app do topo da `main` rodando sobre o banco da versão
+  instalada — exatamente o que a atualização por tag existe pra evitar.
+- **Numa instalação que ainda não tem o agente da tela**, rodar `bash update.sh` **duas
+  vezes** liga o botão: a primeira execução ainda é a do script antigo (que baixa o novo,
+  mas não conhece o agente); a segunda instala o cron do agente.
 - **Backup** (importante! o Supabase grátis não faz sozinho): `bash backup.sh`,
   e sugira agendar um backup diário no cron. O `update.sh` já roda um backup sozinho
   antes de cada atualização.

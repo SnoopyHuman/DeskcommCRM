@@ -30,6 +30,12 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      # Scripts do kit self-host num repo git descartável (docker/crontab
+      # dublados). É o único gate que exercita o update.sh — um erro aqui
+      # rebobina a instalação de quem hospeda, e nenhum teste TS o veria.
+      - name: Kit self-host (bash)
+        run: pnpm test:shell
+
   # Gate de isolamento multi-tenant + invariantes de governança.
   # Job separado de propósito: roda em paralelo ao verify (não atrasa o feedback
   # rápido) e vira um check nomeado, que é o que a doutrina de RLS exige provar.

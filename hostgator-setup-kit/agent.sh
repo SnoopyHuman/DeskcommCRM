@@ -108,6 +108,16 @@ else
   CURRENT="$CURRENT_SHA";  OFF_RELEASE=true
 fi
 
+# Tag que já está CONTIDA no que roda aqui não é atualização — é retrocesso, e
+# o update.sh recusa instalar (sem --force). Anunciá-la mesmo assim acenderia
+# na tela um botão que o agente é obrigado a recusar depois: o mesmo teste de
+# ancestralidade nas duas pontas é o que impede o app de prometer o que o host
+# não vai cumprir. Sem tag anunciada, a tela mostra o estado "instalação fora
+# de uma versão publicada", que ensina o caminho manual.
+if [ -n "$LATEST_TAG" ] && git merge-base --is-ancestor "$LATEST_TAG" HEAD 2>/dev/null; then
+  LATEST_TAG=""
+fi
+
 CHANGELOG=""
 if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT" ]; then
   # Corta em 30000 bytes CRUS, não 60000: o teto do Zod (CHANGELOG_MAX_BYTES,
@@ -171,11 +181,17 @@ fi
 # 422 "Invalid UUID" — RUN_ID chegava vazio no filho). `declare -f` também
 # precisa incluir post, não só report.
 export API SECRET ERRLOG RUN_ID
+# Sem tag anunciada (instalação à frente da última publicada, ou sem tags),
+# roda sem --to: o update.sh resolve o alvo sozinho e recusa em português o
+# que não for atualização de verdade — o motivo chega à tela pelo log_tail,
+# em vez de o run sumir sem explicação.
+UPDATE_ARGS=()
+[ -n "$LATEST_TAG" ] && UPDATE_ARGS=(--to "$LATEST_TAG")
 set +e
 DESKCOMM_AGENT_REPORT=1 \
 DESKCOMM_AGENT_PREV_IMAGE="$PREV_IMAGE" \
 DESKCOMM_AGENT_REPORT_CMD="$(declare -f post report log_err); report" \
-  bash "$(dirname "$0")/update.sh" --to "$LATEST_TAG" >"$LOG" 2>&1
+  bash "$(dirname "$0")/update.sh" "${UPDATE_ARGS[@]+"${UPDATE_ARGS[@]}"}" >"$LOG" 2>&1
 RC=$?
 set -e
 
@@ -184,8 +200,17 @@ STATUS="success"
 if [ $RC -ne 0 ]; then
   STATUS="failed"
   if [ -n "$PREV_IMAGE" ]; then
-    APP_IMAGE="$PREV_IMAGE" APP_PULL_POLICY=missing \
-      docker compose -f "$COMPOSE" up -d app >>"$LOG" 2>&1 && STATUS="failed_rolled_back"
+    if APP_IMAGE="$PREV_IMAGE" APP_PULL_POLICY=missing \
+         docker compose -f "$COMPOSE" up -d app >>"$LOG" 2>&1; then
+      STATUS="failed_rolled_back"
+      # Persiste a volta: o update.sh já gravou a imagem NOVA (quebrada) no
+      # .env antes do pull. Sem reescrever aqui, o próximo `up -d` — o do
+      # cliente, semanas depois — traria o app quebrado de volta e desfaria o
+      # rollback em silêncio. PREV_IMAGE é um ID local (não uma tag no
+      # registro), então a política de pull precisa ir junto.
+      set_env_var .env APP_IMAGE "$PREV_IMAGE"
+      set_env_var .env APP_PULL_POLICY missing
+    fi
   fi
 fi
 

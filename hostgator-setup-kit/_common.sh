@@ -23,6 +23,27 @@ enter_project() {
 # psql efêmero via container (não exige psql no host).
 psql_run() { docker run --rm -i postgres:17-alpine psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 "$@"; }
 
+# Grava (ou reescreve) uma chave no .env — sem duplicar linha se ela já existe.
+#   set_env_var .env APP_IMAGE ghcr.io/…:1.1.0
+#
+# É o que faz uma escolha SOBREVIVER ao processo que a fez. `export APP_IMAGE=…`
+# vale só enquanto o script roda: o docker-compose.prod.yml lê a imagem do .env,
+# então um `docker compose up -d` rodado à mão pelo dono semanas depois (comando
+# documentado no README) voltaria pro APP_IMAGE gravado no install (":latest") e
+# DESFARIA a atualização — app do topo da main sobre o banco da versão
+# instalada, exatamente o modo de falha pelo qual o Watchtower foi descartado.
+set_env_var() {
+  local envfile="$1" key="$2" value="$3" tmp
+  [ -f "$envfile" ] || return 0
+  tmp="${envfile}.tmp.$$"
+  # "|| true": com pipefail, grep -v que filtra TODAS as linhas (arquivo de uma
+  # linha só) sai 1 e derrubaria o script por set -e antes do append.
+  { grep -vE "^${key}=" "$envfile" || true; } > "$tmp"
+  printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  chmod 600 "$tmp"   # o .env tem segredos: o tmp nasce com o mesmo rigor
+  mv "$tmp" "$envfile"
+}
+
 # Resolve o UUID de um usuário pelo e-mail (admin API do Supabase).
 owner_id_by_email() {
   local email="$1"
@@ -82,7 +103,11 @@ setup_update_agent_cron() {
   [ -n "$secret" ] || { c_ylw "⚠ falta INTERNAL_SECRET — não ativei o agente de atualização."; return 0; }
   [ -n "${NEXT_PUBLIC_APP_URL:-}" ] || { c_ylw "⚠ falta NEXT_PUBLIC_APP_URL — não ativei o agente de atualização."; return 0; }
 
-  local cron_line="*/5 * * * * bash ${PROJECT_DIR}/hostgator-setup-kit/agent.sh >/dev/null 2>&1"
+  # `cd` explícito: o agent.sh chama enter_project(), que acha o projeto pelo
+  # DIRETÓRIO CORRENTE. No cron o CWD é o home do dono do crontab — sem o cd,
+  # a linha só funciona por acidente (instalação padrão em /root/deskcommcrm) e
+  # morre calada a cada 5 minutos em qualquer REPO_DIR customizado ou /opt.
+  local cron_line="*/5 * * * * cd ${PROJECT_DIR} && bash hostgator-setup-kit/agent.sh >/dev/null 2>&1"
   # "|| true": com pipefail, grep -v sem match sai 1 e derrubaria o subshell.
   ( crontab -l 2>/dev/null | grep -v 'hostgator-setup-kit/agent.sh' || true; echo "$cron_line" ) | crontab -
   c_grn "✓ atualização pela tela ativa (agente a cada 5 minutos)"

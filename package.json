@@ -21,6 +21,7 @@
     "test:e2e": "playwright test",
     "test:unit": "vitest run",
     "test:db": "bash scripts/test-db.sh",
+    "test:shell": "bash tests/shell/update-guard.test.sh",
     "test:invariants": "bash scripts/test-db.sh",
     "gov:verify": "pnpm typecheck && pnpm lint && pnpm test:unit",
     "worker": "tsx --env-file=.env --env-file=.env.local workers/agent-worker/main.ts",
