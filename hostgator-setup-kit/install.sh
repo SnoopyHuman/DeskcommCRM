@@ -312,6 +312,7 @@ done
 step "Ativando as automações"
 ensure_encryption_key .env
 setup_event_log_drain_cron
+setup_update_agent_cron
 
 # ── Final ───────────────────────────────────────────────────────────────────
 cat <<DONE

@@ -70,6 +70,24 @@ setup_event_log_drain_cron() {
   fi
 }
 
+# Ativa (idempotente) o cron do agente de atualização: a cada 5 minutos ele
+# avisa o app da versão instalada e, se alguém clicou em "Atualizar agora" na
+# tela, roda o update.sh sozinho. É o que faz o botão da tela existir de
+# verdade — sem cron, a tela mostra "atualização automática indisponível" pra
+# sempre. Chamada por install.sh e update.sh (bloco 7) — re-rodar não duplica
+# a linha do crontab.
+setup_update_agent_cron() {
+  command -v crontab >/dev/null 2>&1 || { c_ylw "⚠ 'crontab' não encontrado — o botão de atualizar pela tela não vai funcionar."; return 0; }
+  local secret="${INTERNAL_CRON_SECRET:-${INTERNAL_SECRET:-}}"
+  [ -n "$secret" ] || { c_ylw "⚠ falta INTERNAL_SECRET — não ativei o agente de atualização."; return 0; }
+  [ -n "${NEXT_PUBLIC_APP_URL:-}" ] || { c_ylw "⚠ falta NEXT_PUBLIC_APP_URL — não ativei o agente de atualização."; return 0; }
+
+  local cron_line="*/5 * * * * bash ${PROJECT_DIR}/hostgator-setup-kit/agent.sh >/dev/null 2>&1"
+  # "|| true": com pipefail, grep -v sem match sai 1 e derrubaria o subshell.
+  ( crontab -l 2>/dev/null | grep -v 'hostgator-setup-kit/agent.sh' || true; echo "$cron_line" ) | crontab -
+  c_grn "✓ atualização pela tela ativa (agente a cada 5 minutos)"
+}
+
 # Garante a chave de cifra dos segredos (webhooks/Nuvemshop) e a semeia no
 # banco (private.app_secrets, migration 0041). Idempotente: reusa a chave do
 # .env se existir (trocá-la invalidaria dados já cifrados); gera se ausente e
