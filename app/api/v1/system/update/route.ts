@@ -113,10 +113,12 @@ export async function POST(_req: NextRequest): Promise<Response> {
     return fail("internal_error", "Não consegui registrar o pedido de atualização.", 500);
   }
 
-  await db
-    .from("system_version")
-    .update({ update_requested_at: new Date().toISOString(), update_requested_by: user.id })
-    .eq("id", 1);
+  // O run criado acima é a ordem — e é a ÚNICA. Havia aqui um segundo write
+  // (`update_requested_at/by` em `system_version`) que respondia à mesma
+  // pergunta sem transação e sem checar erro: falhando ele, a rota respondia
+  // 200, a tela mostrava a barra de passos e o agente nunca pegava o pedido.
+  // Quem pediu e quando já vive no próprio run (`requested_by`,
+  // `dispatched_at`) e no audit log abaixo.
 
   await audit({
     action: "system.update_requested",

@@ -115,7 +115,20 @@ describe("POST /api/v1/system/agent", () => {
   });
 
   it("heartbeat responde a ordem pendente e devolve o run", async () => {
-    versionRow = { id: 1, update_requested_at: new Date().toISOString(), update_requested_by: null };
+    runRow = { id: RUN_ID, status: "dispatched", dispatched_at: new Date().toISOString() };
+    const { POST } = await import("./route");
+    const body = await (await POST(req(HEARTBEAT))).json();
+    expect(body.data.update_requested).toBe(true);
+    expect(body.data.run_id).toBe(RUN_ID);
+  });
+
+  it("o run em 'dispatched' basta como pedido — nenhum flag em system_version porteia", async () => {
+    // Havia DUAS fontes de verdade para "alguém pediu": o run e o flag
+    // `update_requested_at`, escrito por um segundo write sem transação e sem
+    // checagem de erro no POST /update. Falhando esse write, a rota respondia
+    // 200, a tela mostrava a barra de passos por 15 minutos e o agente nunca
+    // via o pedido. Este caso é exatamente esse estado: run criado, flag não.
+    versionRow = { id: 1, update_requested_at: null, update_requested_by: null };
     runRow = { id: RUN_ID, status: "dispatched", dispatched_at: new Date().toISOString() };
     const { POST } = await import("./route");
     const body = await (await POST(req(HEARTBEAT))).json();
@@ -130,7 +143,6 @@ describe("POST /api/v1/system/agent", () => {
   });
 
   it("heartbeat quando o lookup do run pendente falha no banco → 500 (nunca 'ninguém pediu')", async () => {
-    versionRow = { id: 1, update_requested_at: new Date().toISOString(), update_requested_by: null };
     runReadError = { message: "PGRST116: mais de uma linha" };
     const { POST } = await import("./route");
     const res = await POST(req(HEARTBEAT));
@@ -154,7 +166,7 @@ describe("POST /api/v1/system/agent", () => {
     expect(res.status).toBe(500);
   });
 
-  it("run_result encerra o run, limpa o pedido e audita o desfecho", async () => {
+  it("run_result encerra o run e audita o desfecho, sem tocar em system_version", async () => {
     const { audit } = await import("@/lib/audit");
     runRow = { id: RUN_ID, status: "dispatched", dispatched_at: new Date().toISOString() };
     const { POST } = await import("./route");
@@ -162,14 +174,29 @@ describe("POST /api/v1/system/agent", () => {
     expect(res.status).toBe(200);
     expect(lastUpdate("system_update_runs")).toMatchObject({ table: "system_update_runs", status: "success" });
     expect(lastUpdate("system_update_runs")?.finished_at).toBeTruthy();
-    expect(lastUpdate("system_version")).toMatchObject({
-      table: "system_version",
-      update_requested_at: null,
-      update_requested_by: null,
-    });
+    // Fechar o run É o fim do pedido: não existe segundo estado para limpar.
+    expect(lastUpdate("system_version")).toBeNull();
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ action: "system.update_finished", resourceId: RUN_ID }),
     );
+  });
+
+  it("quando a leitura do run falha no banco → 500, nunca 404", async () => {
+    // Erro de leitura não é "esse run não existe": virando 404, o agente
+    // desistiria de reportar um desfecho que aconteceu de verdade.
+    runReadError = { message: "conexão caiu" };
+    const { POST } = await import("./route");
+    const res = await POST(req({ kind: "run_result", run_id: RUN_ID, status: "success", log_tail: "ok" }));
+    expect(res.status).toBe(500);
+    expect(updates).toEqual([]);
+  });
+
+  it("run_progress quando a leitura do run falha no banco → 500, nunca 404", async () => {
+    runReadError = { message: "conexão caiu" };
+    const { POST } = await import("./route");
+    const res = await POST(req({ kind: "run_progress", run_id: RUN_ID, step: "banco" }));
+    expect(res.status).toBe(500);
+    expect(updates).toEqual([]);
   });
 
   it("run_result quando falha ao finalizar o run → 500, sem limpar o pedido e sem auditoria", async () => {

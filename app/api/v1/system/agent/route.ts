@@ -92,14 +92,13 @@ export async function POST(req: NextRequest): Promise<Response> {
       return fail("internal_error", "Não consegui gravar o estado.", 500);
     }
 
-    const { data: version } = await db
-      .from("system_version")
-      .select("update_requested_at")
-      .eq("id", 1)
-      .maybeSingle();
-
-    if (!version?.update_requested_at) return ok({ update_requested: false, run_id: null });
-
+    // "Há pedido?" tem UMA fonte de verdade: o run em `dispatched`. O flag
+    // `update_requested_at` respondia a mesma pergunta por outro caminho — e
+    // como os dois writes do POST /update não são uma transação, bastava o
+    // segundo falhar para o app responder 200, a tela mostrar a barra de
+    // passos por 15 minutos e o agente nunca ver o pedido. Um estado só, o que
+    // o agente executa, não pode divergir do que a tela mostra.
+    //
     // O índice único parcial `uniq_system_update_runs_dispatched` (migration
     // 0090) garante no máximo 1 linha "dispatched" — mas o `postgrest-js` NÃO
     // lança se, apesar disso, o SELECT achar mais de uma linha: devolve
@@ -124,11 +123,22 @@ export async function POST(req: NextRequest): Promise<Response> {
     return ok({ update_requested: Boolean(run), run_id: run?.id ?? null });
   }
 
-  const { data: run } = await db
+  // Erro de leitura ≠ "não existe": sem checar, uma falha de banco viraria 404
+  // e o agente trataria o run como inexistente — o mesmo defeito que reprovou
+  // o lookup do heartbeat acima.
+  const { data: run, error: runReadError } = await db
     .from("system_update_runs")
     .select("id, status")
     .eq("id", payload.run_id)
     .maybeSingle();
+
+  if (runReadError) {
+    logger.error("[system/agent] leitura do run falhou", {
+      error: runReadError.message,
+      runId: payload.run_id,
+    });
+    return fail("internal_error", "Não consegui ler a atualização.", 500);
+  }
 
   if (!run) return fail("not_found", "Atualização não encontrada.", 404);
 
@@ -169,18 +179,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     return fail("internal_error", "Não consegui finalizar a atualização.", 500);
   }
 
-  // O run já é a fonte da verdade sobre o desfecho. Se ESTA escrita falhar,
-  // o pedido some no próximo heartbeat mesmo assim (não há run "dispatched"
-  // para achar) — só logamos, não derrubamos uma resposta que já é verdadeira.
-  const { error: clearRequestError } = await db
-    .from("system_version")
-    .update({ update_requested_at: null, update_requested_by: null })
-    .eq("id", 1);
-  if (clearRequestError) {
-    logger.error("[system/agent] run_result não conseguiu limpar update_requested_at", {
-      error: clearRequestError.message,
-    });
-  }
+  // Nada a "limpar" além disto: fechar o run É o fim do pedido, porque o run
+  // é a única fonte da verdade sobre haver pedido (ver o heartbeat acima).
 
   await audit({
     action: "system.update_finished",
