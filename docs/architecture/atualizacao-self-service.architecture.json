@@ -59,7 +59,11 @@
         "system_version/system_update_runs são de INSTÂNCIA — sem organization_id, sem RLS por tenant",
         "uniq_system_update_runs_dispatched (migration 0090) é quem garante 1 run por vez, não o check-then-insert da rota",
         "run 'dispatched' vencido (>15min) é auto-expirado pelo POST seguinte — sem isso o botão morreria travado para sempre",
-        "esc() do agent.sh roda sob LC_ALL=C em cada estágio — sem isso, um byte truncado de UTF-8 mata o heartbeat sob locale do host"
+        "esc() do agent.sh roda sob LC_ALL=C em cada estágio — sem isso, um byte truncado de UTF-8 mata o heartbeat sob locale do host",
+        "update.sh recusa alvo já contido no HEAD (merge-base --is-ancestor) ANTES do backup; --force é a saída explícita de quem quer mesmo voltar. O agent.sh aplica o MESMO teste e deixa de anunciar a tag — as duas pontas concordam, e a tela nunca promete o que o host vai recusar",
+        "APP_IMAGE/APP_PULL_POLICY são GRAVADOS no .env (na atualização e no rollback): export morre com o processo e o compose lê do .env — sem isso o próximo `up -d` do dono desfaz a atualização",
+        "o run em 'dispatched' é a ÚNICA fonte de 'há pedido?' — não existe flag paralelo em system_version",
+        "num rollback, a versão exibida vem do run (from_version), não do git describe do host — esse aponta para a versão que quebrou"
       ]
     },
     {

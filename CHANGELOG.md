@@ -14,10 +14,19 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
   e, quando há versão nova, atualiza com um clique — sem abrir terminal. A tela mostra o que muda,
   avisa quanto tempo o sistema fica fora do ar e faz uma cópia de segurança antes.
 
+### Alterado
+
+- **A atualização passa a instalar a última versão publicada, não o topo do código em
+  desenvolvimento.** O `update.sh` recusa instalar uma versão anterior à que já está no servidor
+  (voltar no tempo continua possível com `--force`) e grava a imagem escolhida no `.env` — assim um
+  `docker compose up -d` rodado depois não traz o app de volta para a `latest`.
+
 **⚠️ Requer atenção**
 
-Quem já tem o CRM instalado precisa rodar `bash hostgator-setup-kit/update.sh` **uma vez** pelo
-terminal para ativar o botão. A partir daí, nunca mais.
+Quem já tem o CRM instalado precisa rodar `bash hostgator-setup-kit/update.sh` **duas vezes** pelo
+terminal para ativar o botão. Não é engano: a primeira execução ainda é a do programa antigo, que
+baixa o novo mas não sabe ligar o agente da tela; a segunda já roda o programa atualizado e liga.
+Depois disso, nunca mais é preciso o terminal.
 
 ## [1.0.0] — 2026-07-27
 
