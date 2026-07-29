@@ -151,6 +151,12 @@ Se mesmo assim aparecerem, aqui está o diagnóstico pronto:
   já está no servidor (isso desligaria coisas que a pessoa já tem); voltar no tempo só com
   `--force`, de propósito. Numa instalação que ainda segue a `main`, é normal ver essa
   recusa: o código dela está *à frente* da última versão publicada.
+- **Clone raso:** o `install.sh` clona com `--depth 1`, e num repositório raso o git não
+  sabe responder o que é mais novo. O `update.sh` completa a história (`git fetch
+  --unshallow`) antes de decidir; se o servidor não conseguir falar com o GitHub nessa
+  hora, ele **recusa e explica** em vez de arriscar instalar uma versão anterior. Não é
+  travamento: basta tentar de novo com internet. Recusa desse tipo sai com código 3 — o
+  agente da tela usa isso pra saber que **nada foi tocado** e não tentar "desfazer" nada.
 - **A imagem da versão instalada fica gravada no `.env`** (`APP_IMAGE`). Não troque isso
   pra `latest` na mão: seria app do topo da `main` rodando sobre o banco da versão
   instalada — exatamente o que a atualização por tag existe pra evitar.

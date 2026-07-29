@@ -112,10 +112,14 @@ fi
 # o update.sh recusa instalar (sem --force). Anunciá-la mesmo assim acenderia
 # na tela um botão que o agente é obrigado a recusar depois: o mesmo teste de
 # ancestralidade nas duas pontas é o que impede o app de prometer o que o host
-# não vai cumprir. Sem tag anunciada, a tela mostra o estado "instalação fora
-# de uma versão publicada", que ensina o caminho manual.
-if [ -n "$LATEST_TAG" ] && git merge-base --is-ancestor "$LATEST_TAG" HEAD 2>/dev/null; then
-  LATEST_TAG=""
+# não vai cumprir. Sem tag anunciada, a tela diz que a instalação está à frente
+# da versão publicada.
+#
+# Na dúvida (repositório raso que não deu pra completar), também NÃO anuncia:
+# oferecer o botão seria oferecer o que o update.sh vai recusar do outro lado.
+if [ -n "$LATEST_TAG" ]; then
+  is_already_in_head "$LATEST_TAG" && CONTIDA=0 || CONTIDA=$?
+  [ "$CONTIDA" = 1 ] || LATEST_TAG=""   # 0 = retrocesso, 2 = não sei: nos dois, não anuncia
 fi
 
 CHANGELOG=""
@@ -197,7 +201,14 @@ set -e
 
 # ── 3. O app voltou? Se não, volta a imagem anterior. ───────────────────────
 STATUS="success"
-if [ $RC -ne 0 ]; then
+if [ $RC -eq "$REFUSED_RC" ]; then
+  # O update.sh recusou ANTES de tocar em qualquer coisa (alvo anterior ao
+  # instalado, ou impossível ter certeza). Não há nada a desfazer: reiniciar o
+  # container e reescrever o .env aqui seria inventar um estrago — e reportar
+  # "voltei para a versão anterior" seria a mentira que esta feature passou uma
+  # onda inteira consertando. O motivo em português já está no log.
+  STATUS="failed"
+elif [ $RC -ne 0 ]; then
   STATUS="failed"
   if [ -n "$PREV_IMAGE" ]; then
     if APP_IMAGE="$PREV_IMAGE" APP_PULL_POLICY=missing \

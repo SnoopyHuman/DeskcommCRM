@@ -10,6 +10,38 @@ c_ylw() { printf '\033[33m%s\033[0m\n' "$*"; }
 die()   { c_red "✖ $*"; exit 1; }
 step()  { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
 
+# Código de saída de quem RECUSOU antes de tocar em qualquer coisa — distinto
+# de "falhei no meio" (1). O agent.sh usa isso para não desfazer uma
+# atualização que nunca começou: reiniciar o container e reescrever o .env
+# "voltando" de uma mudança que não houve é estrago inventado do nada.
+REFUSED_RC=3
+refuse() { c_red "✖ $*"; exit "$REFUSED_RC"; }
+
+# Instalar <ref> seria voltar no tempo? 0 = sim (já está contido no HEAD),
+# 1 = não, 2 = NÃO SEI. "Não sei" nunca vira "pode".
+#
+# O install.sh clona com `--depth 1`, e num repositório raso o
+# `merge-base --is-ancestor` responde 1 (não-ancestral) para QUALQUER coisa
+# fora do único commit baixado — inclusive para uma tag velha que, na história
+# real, está muito atrás. Ou seja: a resposta que libera é exatamente a que o
+# raso dá de graça, e `git fetch --tags` não desfaz o raso (conferido: depois
+# do fetch, is-shallow-repository continua true). Por isso completamos a
+# história ANTES de perguntar, e, se não der, devolvemos 2 — o chamador
+# recusa. Falhar fechado é o certo num script que roda como root na máquina de
+# quem não sabe consertar.
+is_already_in_head() {
+  local ref="$1"
+  if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo unknown)" = "true" ]; then
+    git fetch --unshallow --tags --quiet origin 2>/dev/null || true
+  fi
+  case "$(git rev-parse --is-shallow-repository 2>/dev/null || echo unknown)" in
+    false) : ;;
+    *) return 2 ;;   # ainda raso, ou nem é repositório git: não dá pra saber
+  esac
+  git merge-base --is-ancestor "$ref" HEAD 2>/dev/null && return 0
+  return 1
+}
+
 # Vai pro diretório do projeto (onde está o compose) e carrega o .env.
 enter_project() {
   if [ -f "$COMPOSE" ]; then :;

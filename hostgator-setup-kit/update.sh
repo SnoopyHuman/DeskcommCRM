@@ -49,12 +49,22 @@ fi
 # já tem (foi assim que este próprio botão se autodestruiria, voltando pra uma
 # imagem que não conhece o agente de atualização). Recusar é o padrão; voltar
 # no tempo continua possível, mas só quando alguém pede de propósito.
-if [ -z "$FORCE" ] && git merge-base --is-ancestor "$TARGET_TAG" HEAD 2>/dev/null; then
-  die "A versão $TARGET_TAG é ANTERIOR à que já está instalada neste servidor.
+if [ -z "$FORCE" ]; then
+  is_already_in_head "$TARGET_TAG" && CONTIDA=0 || CONTIDA=$?
+  case "$CONTIDA" in
+    0) refuse "A versão $TARGET_TAG é ANTERIOR à que já está instalada neste servidor.
      Instalar ela seria voltar no tempo e desligar coisas que você já tem.
      Não mexi em nada: nem no banco, nem no app — está tudo como estava.
      Se você REALMENTE quer voltar para a $TARGET_TAG, rode:
-       bash hostgator-setup-kit/update.sh --to $TARGET_TAG --force"
+       bash hostgator-setup-kit/update.sh --to $TARGET_TAG --force" ;;
+    2) refuse "Não consegui ter CERTEZA de que a versão $TARGET_TAG é mais nova que a instalada
+     aqui — a cópia do código neste servidor veio abreviada e eu não consegui completá-la
+     (o servidor precisa conseguir falar com o GitHub para isso).
+     Prefiro não mexer a arriscar te levar para uma versão anterior sem querer.
+     Não mexi em nada. Tente de novo em alguns minutos; se insistir, confira a internet do
+     servidor. Para instalar assim mesmo, por sua conta:
+       bash hostgator-setup-kit/update.sh --to $TARGET_TAG --force" ;;
+  esac
 fi
 c_ylw "Vou atualizar para a versão $TARGET_TAG com segurança."
 
@@ -120,6 +130,12 @@ step "Baixando a versão nova do app e reiniciando"
 # depois voltaria pro ":latest" do install — desfazendo a atualização.
 export APP_IMAGE="ghcr.io/melgarafael/deskcommcrm:${TARGET_TAG#v}"
 set_env_var .env APP_IMAGE "$APP_IMAGE"
+# Devolve a política padrão: um rollback anterior deixou "missing" no .env
+# (porque a imagem de volta é um ID local, que não se puxa do registro), e
+# ninguém desfazia isso — o `up -d` manual do dono parava de puxar imagem para
+# sempre. Aqui o alvo é uma tag do registro de novo, então "always" volta a ser
+# o certo.
+set_env_var .env APP_PULL_POLICY always
 docker compose -f "$COMPOSE" pull
 docker compose -f "$COMPOSE" up -d
 
