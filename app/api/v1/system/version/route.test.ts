@@ -16,6 +16,12 @@ let versionRow: Record<string, unknown>;
 let runRow: Record<string, unknown> | null;
 let inserted: Record<string, unknown> | null;
 /**
+ * Patch aplicado por um `.update(...)` em `system_update_runs` — usado para
+ * provar que um run "dispatched" vencido (agente morto no meio) é fechado
+ * como `failed` pelo PRÓPRIO POST, em vez de travar o botão pra sempre.
+ */
+let runUpdatePatch: Record<string, unknown> | null;
+/**
  * Erro que o INSERT em `system_update_runs` deve devolver neste caso — usado
  * para simular a corrida entre dois cliques quase simultâneos batendo no
  * índice único parcial `uniq_system_update_runs_dispatched` (migration 0090).
@@ -30,6 +36,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   inserted = null;
   runRow = null;
+  runUpdatePatch = null;
   insertError = null;
   versionSelectError = null;
   runSelectError = null;
@@ -75,7 +82,20 @@ beforeEach(() => {
             },
           }),
         }),
-        update: () => ({ eq: async () => ({ error: null }) }),
+        // Encadeável (`.update(patch).eq(...).eq(...)`, quantas vezes for) e
+        // "thenable" só no fim — reflete a query real de expirar um run
+        // ("...eq('id', x).eq('status','dispatched')") sem exigir um double
+        // por chamada.
+        update: (patch: Record<string, unknown>) => {
+          const chain: { eq: () => typeof chain; then: Promise<{ error: null }>["then"] } = {
+            eq: () => chain,
+            then: (onFulfilled, onRejected) => {
+              if (table === "system_update_runs") runUpdatePatch = patch;
+              return Promise.resolve({ error: null }).then(onFulfilled, onRejected);
+            },
+          };
+          return chain;
+        },
       };
     },
   } as never);
@@ -204,6 +224,26 @@ describe("POST /api/v1/system/update", () => {
     vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
     const { POST } = await import("../update/route");
     expect((await POST(post())).status).toBe(409);
+    // Run recente: não é expirado — nenhum UPDATE de expiração deve rolar.
+    expect(runUpdatePatch).toBeNull();
+  });
+
+  it("expira um run 'dispatched' abandonado (agente morto há mais de 15min) e aceita o pedido novo", async () => {
+    // Sem isto, o botão travaria PRA SEMPRE: o índice único parcial (migration
+    // 0090) recusa qualquer novo run enquanto existir um "dispatched", e nada
+    // nunca expirava um sozinho — só o agente reportando (que é justamente
+    // quem morreu) fechava o run.
+    runRow = {
+      id: "55555555-5555-4555-8555-555555555555",
+      status: "dispatched",
+      dispatched_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1h atrás > 15min (RUN_STALE_AFTER_MS)
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { POST } = await import("../update/route");
+    const res = await POST(post());
+    expect(res.status).toBe(200);
+    expect(runUpdatePatch).toMatchObject({ status: "failed" });
+    expect(inserted).toMatchObject({ from_version: "1.0.0", to_version: "1.1.0", status: "dispatched" });
   });
 
   it("recusa quando já está na última versão", async () => {

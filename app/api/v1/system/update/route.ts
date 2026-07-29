@@ -12,6 +12,7 @@ import { audit } from "@/lib/audit";
 import { loadAuthUser } from "@/lib/auth/server";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isRunStale } from "@/lib/system/update-run";
 
 export const dynamic = "force-dynamic";
 
@@ -50,14 +51,42 @@ export async function POST(_req: NextRequest): Promise<Response> {
 
   const { data: running } = await db
     .from("system_update_runs")
-    .select("id, status")
+    .select("id, status, dispatched_at")
     .eq("status", "dispatched")
     .order("dispatched_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (running) {
-    return fail("state_conflict", RUN_IN_PROGRESS_MESSAGE, 409);
+    if (!isRunStale(running.dispatched_at, new Date())) {
+      return fail("state_conflict", RUN_IN_PROGRESS_MESSAGE, 409);
+    }
+    // Run "dispatched" vencido (>15min, RUN_STALE_AFTER_MS): o agente do host
+    // morreu no meio (crash, VPS reiniciada, bug) sem nunca reportar o
+    // desfecho. Sem isto, o índice único parcial (migration 0090) + o 409
+    // acima travariam QUALQUER novo pedido pra sempre — o botão morreria em
+    // silêncio até alguém abrir o banco à mão. Fechamos como `failed` (não é
+    // o agente reportando via run_result; é o PRÓPRIO app declarando
+    // inconclusivo) e seguimos com o pedido novo. `.eq("status","dispatched")`
+    // faz a escrita só valer se ainda estiver "dispatched" nesse instante —
+    // se o agente reportar o desfecho real bem nesse meio-tempo, esta escrita
+    // não pega nada e o run real prevalece.
+    const { error: staleError } = await db
+      .from("system_update_runs")
+      .update({
+        status: "failed",
+        finished_at: new Date().toISOString(),
+        log_tail: "Run abandonado: o agente do host não reportou o desfecho a tempo (agente parado ou travado).",
+      })
+      .eq("id", running.id)
+      .eq("status", "dispatched");
+    if (staleError) {
+      logger.error("[system/update] não consegui expirar o run travado", {
+        error: staleError.message,
+        runId: running.id,
+      });
+      return fail("internal_error", "Não consegui liberar a atualização travada.", 500);
+    }
   }
 
   const { data: run, error } = await db

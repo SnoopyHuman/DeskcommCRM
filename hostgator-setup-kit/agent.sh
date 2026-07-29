@@ -15,22 +15,34 @@ SECRET="${INTERNAL_CRON_SECRET:-${INTERNAL_SECRET:-}}"
 API="${NEXT_PUBLIC_APP_URL}/api/v1/system/agent"
 LOCK="${PROJECT_DIR}/.update.lock"
 LOG="${PROJECT_DIR}/.update.log"
-# Log PERSISTENTE (append) de falha de comunicação com o app — distinto do
+# Log PERSISTENTE (append) de falha de comunicação/execução — distinto do
 # .update.log acima, que é sobrescrito a cada corrida do update.sh. Um POST que
 # falha em silêncio é o pior modo de falha desta feature (o sintoma vira "o
-# botão não aparece" e ninguém sabe por quê); tudo que não for 2xx cai aqui.
+# botão não aparece" e ninguém sabe por quê); tudo que não for 2xx (ou uma
+# falha de comando que a gente escolheu não deixar matar o script) cai aqui.
 ERRLOG="${PROJECT_DIR}/.update-agent.log"
+
+# _common.sh liga `set -e -o pipefail`. Com pipefail, QUALQUER substituição de
+# comando/pipe cujo status não seja explicitamente neutralizado mata o script
+# ali mesmo, sem imprimir nada — pior ainda depois de responder ao app que vai
+# executar (run "dispatched"): o agente morre, nunca reporta, e o run fica
+# travado pra sempre (o índice único da migration 0090 recusa qualquer novo
+# pedido). Por isso TODA substituição abaixo termina em "|| true" e trata valor
+# vazio explicitamente — nunca deixamos o `-e` decidir por nós.
+log_err() {  # log_err <mensagem> — grava com timestamp, corta pra ~200 linhas
+  printf '%s [agent] %s\n' "$(date -u +%FT%TZ)" "$1" >> "$ERRLOG" || true
+  { tail -n 200 "$ERRLOG" > "${ERRLOG}.tmp" && mv "${ERRLOG}.tmp" "$ERRLOG"; } 2>/dev/null || true
+}
 
 post() {  # post <json> → corpo da resposta em 2xx; VAZIO em qualquer falha
   # (quem chama, ex. o laço de retry do run_result, usa "saiu vazio" como sinal
-  # de falha — por isso o corpo só é impresso no ramo de sucesso). Falha
-  # (não-2xx OU erro de rede) vai inteira, com timestamp, pro $ERRLOG.
+  # de falha — por isso o corpo só é impresso no ramo de sucesso).
   local out http_code body
   out="$(curl -sS -X POST "$API" \
     -H "Authorization: Bearer ${SECRET}" \
     -H 'Content-Type: application/json' \
     --max-time 20 -d "$1" \
-    -w $'\n%{http_code}' 2>&1)"
+    -w $'\n%{http_code}' 2>&1)" || true
   http_code="${out##*$'\n'}"
   body="${out%$'\n'*}"
   case "$http_code" in
@@ -38,12 +50,7 @@ post() {  # post <json> → corpo da resposta em 2xx; VAZIO em qualquer falha
       printf '%s' "$body"
       ;;
     *)
-      # "|| true": com set -e (herdado do _common.sh), um erro aqui (disco
-      # cheio, permissão) não pode derrubar o script — perder só o log é
-      # melhor que abortar a atualização por causa do PRÓPRIO log de erro.
-      printf '%s [agent] POST %s -> %s\n' "$(date -u +%FT%TZ)" "$API" "$out" >> "$ERRLOG" || true
-      # mantém só as últimas ~200 linhas: falha persistente não deve encher o disco
-      { tail -n 200 "$ERRLOG" > "${ERRLOG}.tmp" && mv "${ERRLOG}.tmp" "$ERRLOG"; } 2>/dev/null || true
+      log_err "POST ${API} -> ${out}"
       ;;
   esac
 }
@@ -52,12 +59,34 @@ json_field() {  # json_field <corpo> <campo> — sem jq, que pode não existir n
   printf '%s' "$1" | tr ',' '\n' | grep -o "\"$2\":[^,}]*" | head -1 | cut -d: -f2- | tr -d '" '
 }
 
+# Escapa texto pra caber dentro de uma string JSON, sem depender de jq:
+# 1) remove controle C0 cru (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F) e DEL — cobre
+#    inclusive sequências ANSI (ESC=0x1B), que o PRÓPRIO update.sh emite via
+#    c_grn/c_ylw/c_red e que por isso aparecem de verdade em log_tail, não só
+#    em teoria; \t e \n ficam de fora do -d porque viram placeholder abaixo.
+# 2) troca tab/newline reais por bytes-placeholder (0x02/0x01 — já removidos
+#    do texto pelo passo 1, então não colidem com conteúdo real).
+# 3) escapa barra invertida e aspas do conteúdo ORIGINAL (antes de reintroduzir
+#    qualquer barra invertida nova).
+# 4) troca os placeholders pelas sequências JSON de verdade (\t, \n) — via
+#    tr/sed sobre o STREAM inteiro, nunca por registro (awk 'ORS=...' junta
+#    quebras de linha com um separador acrescentado SEMPRE, inclusive depois
+#    do último registro — isso inventava um "\n" a mais quando o texto não
+#    termina em quebra de linha real, ex.: truncamento no meio de uma linha).
+esc() {
+  printf '%s' "$1" \
+    | tr -d '\000-\010\013\014\015\016-\037\177' \
+    | tr '\t\n' '\002\001' \
+    | sed 's/\\/\\\\/g; s/"/\\"/g' \
+    | sed $'s/\002/\\\\t/g; s/\001/\\\\n/g'
+}
+
 # ── 1. Que versão está instalada e qual é a última publicada? ────────────────
 git fetch --tags --quiet origin 2>/dev/null || true
 
 CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 CURRENT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
-LATEST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+LATEST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)" || true
 
 if [ -n "$CURRENT_TAG" ]; then
   CURRENT="$CURRENT_TAG"; OFF_RELEASE=false
@@ -67,29 +96,31 @@ fi
 
 CHANGELOG=""
 if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT" ]; then
-  # iconv -c: `head -c` corta em byte fixo, e o CHANGELOG tem emoji/acento
-  # multi-byte (UTF-8) — um corte no meio de um caractere quebraria o JSON de
-  # um jeito bem mais difícil de rastrear. -c descarta o byte incompleto do
-  # final, sem depender de o corte cair "certo".
-  CHANGELOG="$(git show "${LATEST_TAG}:CHANGELOG.md" 2>/dev/null \
-    | head -c 60000 \
-    | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+  # Corta em 30000 bytes CRUS, não 60000: o teto do Zod (CHANGELOG_MAX_BYTES,
+  # lib/system/changelog.ts) é 64000 e vale sobre a string JÁ ESCAPADA — cada
+  # aspas/barra/tab/quebra de linha dobra de tamanho no esc() acima. Cortar
+  # cru em 60000 dava só 6,7% de folga: um changelog técnico (trechos de
+  # código, regex) passaria de 64000 escapado sem nunca bater 60000 cru, e o
+  # HEARTBEAT INTEIRO morreria com 422 — sem short-circuit, isso morre calado.
+  # 30000 cru garante ≤60000 escapado mesmo no pior caso (100% do texto
+  # escapando 2x), com folga sobre o teto de 64000.
+  CHANGELOG="$(git show "${LATEST_TAG}:CHANGELOG.md" 2>/dev/null | head -c 30000 || true)"
+  # `head -c` corta em byte fixo, e o CHANGELOG tem emoji/acento multi-byte
+  # (UTF-8) — um corte no meio de um caractere quebraria o JSON de um jeito
+  # difícil de rastrear. `iconv -c` descarta o byte incompleto do final sem
+  # depender do corte cair "certo". Guardado por `command -v`: se faltar no
+  # host, pulamos a limpeza (o changelog fica como está, cru) em vez de o
+  # changelog inteiro sumir em silêncio por causa de uma dependência ausente.
+  if command -v iconv >/dev/null 2>&1; then
+    CHANGELOG="$(printf '%s' "$CHANGELOG" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+  fi
 fi
-
-# Escapa para JSON sem depender de jq: barra invertida, aspas, \r (CRLF vira
-# LF), tab (viraria um caractere de controle cru dentro da string — JSON
-# proíbe) e quebra de linha real (\n literal, via ORS do awk).
-esc() {
-  printf '%s' "$1" \
-    | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' \
-    | awk 'BEGIN{ORS="\\n"}{gsub(/\t/,"\\t"); print}'
-}
 
 BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"changelog\":\"$(esc "$CHANGELOG")\"}"
 RESP="$(post "$BODY")"
 
 [ "$(json_field "$RESP" update_requested)" = "true" ] || exit 0
-RUN_ID="$(json_field "$RESP" run_id)"
+RUN_ID="$(json_field "$RESP" run_id)" || true
 [ -n "$RUN_ID" ] || exit 0
 
 # ── 2. Alguém pediu. Uma atualização por vez. ────────────────────────────────
@@ -99,8 +130,20 @@ flock -n 9 || exit 0
 report() { post "{\"kind\":\"run_progress\",\"run_id\":\"${RUN_ID}\",\"step\":\"$1\"}" >/dev/null; }
 
 # Guarda a imagem em execução ANTES de puxar a nova: é por onde a gente volta
-# se o app novo não subir.
-PREV_IMAGE="$(docker compose -f "$COMPOSE" images -q app 2>/dev/null | head -1)"
+# se o app novo não subir. `docker compose images -q` pode sair != 0 sempre
+# que o daemon soluça, o app não estiver de pé, ou houver problema de
+# permissão — coisas normais numa VPS rodando isso a cada 5 minutos, pra
+# sempre; sem o "|| true" isso já derrubava o agente ANTES de sequer chamar o
+# update.sh (achado só rodando de propósito com o comando falhando).
+PREV_IMAGE="$(docker compose -f "$COMPOSE" images -q app 2>/dev/null | head -1)" || true
+if [ -z "$PREV_IMAGE" ]; then
+  # Registrado, não ignorado: sem imagem anterior conhecida, se o update.sh
+  # falhar mais adiante NÃO HÁ como voltar — o status vai sair "failed", nunca
+  # "failed_rolled_back", e é importante um humano conseguir saber o porquê
+  # (docker fora do ar? primeira execução, sem stack de pé ainda? etc.)
+  # olhando o log em vez de adivinhar.
+  log_err "PREV_IMAGE vazio (docker compose images -q app não devolveu nada) — rollback não será possível se a atualização falhar"
+fi
 
 # update.sh roda num processo bash SEPARADO (via `bash arquivo`, não `source`).
 # report() chama post(), que por sua vez lê $API/$SECRET/$ERRLOG, e o próprio
@@ -114,7 +157,7 @@ export API SECRET ERRLOG RUN_ID
 set +e
 DESKCOMM_AGENT_REPORT=1 \
 DESKCOMM_AGENT_PREV_IMAGE="$PREV_IMAGE" \
-DESKCOMM_AGENT_REPORT_CMD="$(declare -f post report); report" \
+DESKCOMM_AGENT_REPORT_CMD="$(declare -f post report log_err); report" \
   bash "$(dirname "$0")/update.sh" --to "$LATEST_TAG" >"$LOG" 2>&1
 RC=$?
 set -e
@@ -129,7 +172,7 @@ if [ $RC -ne 0 ]; then
   fi
 fi
 
-TAIL="$(tail -40 "$LOG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' | awk 'BEGIN{ORS="\\n"}{gsub(/\t/,"\\t"); print}')"
+TAIL="$(esc "$(tail -40 "$LOG" || true)")"
 
 # O app acabou de reiniciar: insiste por ~2 min antes de desistir.
 for _ in $(seq 1 12); do
