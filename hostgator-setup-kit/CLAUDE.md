@@ -129,7 +129,14 @@ Se mesmo assim aparecerem, aqui está o diagnóstico pronto:
 
 ## Depois de instalado
 
-- **Atualizar** para uma versão nova: `bash update.sh` (um comando só). Ele já:
+- **Atualizar para uma versão nova é pelo próprio CRM, sem terminal.** O `install.sh`
+  já deixa um agente rodando no servidor (via cron) que avisa quando existe uma versão
+  nova. A pessoa vê no menu → rodapé → **"Nova versão"** e clica em **"Atualizar
+  agora"** — a tela mostra o que muda, faz backup sozinha e volta no ar em ~2 minutos,
+  tudo sem abrir terminal.
+- **`bash update.sh` continua existindo** como caminho manual — use se o agente
+  estiver fora do ar (a tela avisa "Atualização automática indisponível" e mostra este
+  mesmo comando) ou se preferir operar por SSH. Continua fazendo tudo sozinho:
   (1) checa se há mesmo versão nova (se não, sai na hora); (2) **faz backup do banco
   antes** de mexer em qualquer coisa; (3) puxa o código novo; (4) atualiza o banco
   re-aplicando o `baseline.sql` — que é idempotente e **auto-curativo** (conserta
@@ -137,6 +144,9 @@ Se mesmo assim aparecerem, aqui está o diagnóstico pronto:
   "multiple primary keys" — **é esperado e inofensivo**; o script filtra esse ruído e só
   alerta sobre erros de verdade. (5) puxa a imagem nova do app e confere a saúde no fim.
   Flags: `--force` (atualiza mesmo já estando na última) e `--skip-backup`.
+- **O alvo agora é a última tag publicada** (`v1.2.3`), não mais o topo da branch
+  `main` — atualizar sempre leva pra uma versão marcada e descrita no `CHANGELOG.md`,
+  nunca pra um commit não testado.
 - **Backup** (importante! o Supabase grátis não faz sozinho): `bash backup.sh`,
   e sugira agendar um backup diário no cron. O `update.sh` já roda um backup sozinho
   antes de cada atualização.

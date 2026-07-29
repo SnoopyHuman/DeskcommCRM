@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Atualização self-service — o botão que substitui o SSH",
+    "subtitle": "agent.sh puxa, nunca o app empurra: o host decide o que roda",
+    "output": "atualizacao-self-service.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "host", "label": "VPS (fora do app)" },
+    { "id": "app", "label": "App — rota do agente e da UI" },
+    { "id": "banco", "label": "Banco (instância, sem organization_id)" },
+    { "id": "humano", "label": "O que o dono vê" }
+  ],
+  "mainPath": ["agentsh", "agentroute", "systemversion", "footer", "painel", "updateroute", "runs"],
+  "nodes": [
+    { "id": "agentsh", "lane": "host", "col": 0, "type": "service", "label": "agent.sh", "sublabel": "cron 5min · flock · esc() byte-safe (LC_ALL=C)" },
+    { "id": "updatesh", "lane": "host", "col": 1, "type": "service", "label": "update.sh --to <tag>", "sublabel": "backup → checkout da tag → baseline → imagem → healthcheck" },
+
+    { "id": "agentroute", "lane": "app", "col": 0, "type": "api", "label": "POST /api/v1/system/agent", "sublabel": "bearer INTERNAL_CRON_SECRET · heartbeat/run_progress/run_result" },
+    { "id": "versionroute", "lane": "app", "col": 2, "type": "api", "label": "GET /api/v1/system/version", "sublabel": "só is_platform_admin vê o operacional" },
+    { "id": "updateroute", "lane": "app", "col": 3, "type": "api", "label": "POST /api/v1/system/update", "sublabel": "cria o run — nunca executa nada" },
+
+    { "id": "systemversion", "lane": "banco", "col": 1, "type": "database", "label": "system_version", "sublabel": "singleton id=1 · current/latest/changelog_raw" },
+    { "id": "runs", "lane": "banco", "col": 3, "type": "database", "label": "system_update_runs", "sublabel": "índice único: no máx. 1 'dispatched'" },
+
+    { "id": "footer", "lane": "humano", "col": 2, "type": "frontend", "label": "Rodapé da sidebar", "sublabel": "aviso só se is_owner E update_available" },
+    { "id": "painel", "lane": "humano", "col": 3, "type": "frontend", "label": "/app/settings/atualizacao", "sublabel": "4 estados · atenção ANTES do botão" }
+  ],
+  "edges": [
+    { "id": "e1", "from": "agentsh", "to": "agentroute", "label": "heartbeat: versão instalada + changelog cru" },
+    { "id": "e2", "from": "agentroute", "to": "systemversion", "label": "grava current/latest/changelog_raw" },
+    { "id": "e3", "from": "systemversion", "to": "versionroute", "label": "leitura para a tela" },
+    { "id": "e4", "from": "versionroute", "to": "footer", "label": "update_available + is_owner" },
+    { "id": "e5", "from": "footer", "to": "painel", "label": "clique no aviso 'Nova versão'" },
+    { "id": "e6", "from": "painel", "to": "updateroute", "label": "clique em 'Atualizar agora'" },
+    { "id": "e7", "from": "updateroute", "to": "runs", "label": "insert status='dispatched'" },
+    { "id": "e8", "from": "agentroute", "to": "runs", "label": "heartbeat seguinte: update_requested=true" },
+    { "id": "e9", "from": "agentsh", "to": "updatesh", "label": "dispara o script local — nunca um comando vindo do app", "route": "highlight" },
+    { "id": "e10", "from": "updatesh", "to": "agentroute", "label": "report() em 3 pontos: backup/código/banco", "route": "highlight" },
+    { "id": "e11", "from": "agentroute", "to": "runs", "label": "run_result fecha success/failed/failed_rolled_back" },
+    { "id": "e12", "from": "runs", "to": "painel", "label": "polling 5s — progresso e desfecho" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "A fronteira que a forma não mostra: pull, nunca push",
+      "items": [
+        "o app NUNCA alcança o host — quem inicia toda troca é o agent.sh, por cron (e9)",
+        "o que atravessa em update_requested é um BOOLEANO, nunca um comando: app comprometido não escolhe o que roda",
+        "e9/e10 são fora de qualquer request HTTP do usuário — só existem quando alguém está de fato na VPS rodando o cron"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Invariantes que a forma não mostra",
+      "items": [
+        "system_version/system_update_runs são de INSTÂNCIA — sem organization_id, sem RLS por tenant",
+        "uniq_system_update_runs_dispatched (migration 0090) é quem garante 1 run por vez, não o check-then-insert da rota",
+        "run 'dispatched' vencido (>15min) é auto-expirado pelo POST seguinte — sem isso o botão morreria travado para sempre",
+        "esc() do agent.sh roda sob LC_ALL=C em cada estágio — sem isso, um byte truncado de UTF-8 mata o heartbeat sob locale do host"
+      ]
+    },
+    {
+      "dot": "sky",
+      "title": "Fronteiras deliberadas",
+      "items": [
+        "quem não é is_platform_admin não vê o aviso nem a rota — 404, não uma tela de 'sem permissão'",
+        "o bloco 'Requer atenção' é EXCLUÍDO de 'O que muda' (não duplicado) e sempre acima do botão",
+        "o alvo do update.sh é a última TAG publicada, nunca o topo da main — atualizar não pode levar a um commit não testado"
+      ]
+    }
+  ]
+}

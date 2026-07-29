@@ -8,6 +8,17 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Atualização pela própria tela.** O dono da instalação vê a versão instalada no rodapé do menu
+  e, quando há versão nova, atualiza com um clique — sem abrir terminal. A tela mostra o que muda,
+  avisa quanto tempo o sistema fica fora do ar e faz uma cópia de segurança antes.
+
+**⚠️ Requer atenção**
+
+Quem já tem o CRM instalado precisa rodar `bash hostgator-setup-kit/update.sh` **uma vez** pelo
+terminal para ativar o botão. A partir daí, nunca mais.
+
 ## [1.0.0] — 2026-07-27
 
 Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publicamente desde abril de 2026 sem tags; esta release estabelece o ponto a partir do qual toda mudança passa a ser versionada e descrita — porque quem hospeda o próprio sistema precisa saber o que muda antes de atualizar.
