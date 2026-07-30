@@ -103,6 +103,13 @@ CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 CURRENT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
 LATEST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)" || true
 
+# Guardado ANTES de qualquer zeragem abaixo: "vi uma tag" e "não anunciei"
+# são coisas diferentes. Sem isto, um fork sem NENHUMA tag `v*` chega ao app
+# com a mesma combinação de uma instalação que já contém a última publicada
+# (LATEST_TAG zerado, compare_failed=false) — e a tela não tem como saber se
+# está à frente de uma release real ou se nunca houve release nenhuma.
+if [ -n "$LATEST_TAG" ]; then HAS_KNOWN_RELEASE=true; else HAS_KNOWN_RELEASE=false; fi
+
 if [ -n "$CURRENT_TAG" ]; then
   CURRENT="$CURRENT_TAG"; OFF_RELEASE=false
 else
@@ -158,7 +165,7 @@ fi
 # Cinto e suspensório: o "LC_ALL=C" acima já torna esc() incapaz de abortar
 # por sequência inválida, mas a morte do agente é grave o bastante (run
 # travado pra sempre) pra justificar a redundância explícita do "|| true".
-BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"compare_failed\":${COMPARE_FAILED},\"changelog\":\"$(esc "$CHANGELOG")\"}" || true
+BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"compare_failed\":${COMPARE_FAILED},\"has_known_release\":${HAS_KNOWN_RELEASE},\"changelog\":\"$(esc "$CHANGELOG")\"}" || true
 RESP="$(post "$BODY")"
 
 [ "$(json_field "$RESP" update_requested)" = "true" ] || exit 0

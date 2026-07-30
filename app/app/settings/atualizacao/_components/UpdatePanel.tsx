@@ -231,12 +231,34 @@ export function UpdatePanel() {
   }
 
   // Sem nenhuma versão nova para oferecer numa instalação que não está numa
-  // versão publicada: o servidor está À FRENTE da última publicada. Não é
-  // defeito — ninguém do nosso público escolheu isso, veio da forma como foi
-  // instalado — e a tela não pode tratar como se fosse. Sem este bloco, a tela
-  // de baixo renderizava "Versão  disponível", com o número vazio, e um botão
-  // que a API recusa com 409.
+  // versão publicada, há duas explicações bem diferentes — e afirmar a
+  // errada é a frase tranquilizadora sem base que este produto proíbe:
+  //
+  // 1. O servidor está À FRENTE da última publicada (existe release, e o
+  //    HEAD já a contém). Não é defeito — veio da forma como foi instalado.
+  // 2. Este fork NUNCA teve nenhuma release publicada. Dizer "à frente da
+  //    publicada" aqui afirmaria a existência de algo que não existe.
+  //
+  // Sem distinguir os dois, a tela de baixo renderizava "Versão  disponível",
+  // com o número vazio, e um botão que a API recusa com 409.
   if (!nova) {
+    if (!data.has_known_release) {
+      return (
+        <Layout titulo="Ainda não há nenhuma versão publicada">
+          <p className="text-sm">
+            Este projeto ainda não tem nenhuma versão publicada para comparar com a sua instalação
+            — normal em um fork novo ou recém-criado a partir do código-fonte.{" "}
+            <strong>Não há nada a atualizar agora</strong>, e isso não é um problema.
+          </p>
+          <p className="mt-3 text-sm">
+            Quando sair a primeira versão publicada, ela aparece aqui sozinha. Quem tem acesso ao
+            servidor pode conferir a qualquer momento com o comando abaixo — ele não muda nada sem
+            avisar:
+          </p>
+          <Comando comando={COMANDO_MANUAL} />
+        </Layout>
+      );
+    }
     return (
       <Layout titulo="Você está à frente da versão publicada">
         <p className="text-sm">

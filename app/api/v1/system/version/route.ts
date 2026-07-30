@@ -29,7 +29,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
   const { data: version, error: versionError } = await db
     .from("system_version")
     .select(
-      "current_version, latest_version, off_release, compare_failed, changelog_raw, agent_last_seen_at",
+      "current_version, latest_version, off_release, compare_failed, has_known_release, changelog_raw, agent_last_seen_at",
     )
     .eq("id", 1)
     .maybeSingle();
@@ -92,6 +92,12 @@ export async function GET(_req: NextRequest): Promise<Response> {
     // e uma instalação atrasada cujo host não conseguiu comparar é informada de
     // que está atualizada, em silêncio.
     compare_failed: version?.compare_failed ?? false,
+    // Só importa quando `off_release` e sem `latest_version` — distingue "à
+    // frente da última publicada" (existe release, já contida no HEAD) de
+    // "este fork nunca teve release nenhuma". Default `true`: preserva "à
+    // frente da publicada" para quem nunca gravou este campo (linha ainda
+    // não tocada por nenhum heartbeat, coluna com o default da migration).
+    has_known_release: version?.has_known_release ?? true,
     agent_online: !Number.isNaN(lastSeen) && now.getTime() - lastSeen < AGENT_OFFLINE_AFTER_MS,
     notes: section ? { body: section.body, requires_attention: section.requiresAttention } : null,
     run: run

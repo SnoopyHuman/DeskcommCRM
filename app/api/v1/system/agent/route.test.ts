@@ -154,6 +154,24 @@ describe("POST /api/v1/system/agent", () => {
     expect(lastUpdate("system_version")).toMatchObject({ compare_failed: false });
   });
 
+  it("heartbeat grava has_known_release quando o host nunca viu tag publicada", async () => {
+    const { POST } = await import("./route");
+    const res = await POST(req({ ...HEARTBEAT, off_release: true, latest_version: "", has_known_release: false }));
+    expect(res.status).toBe(200);
+    expect(lastUpdate("system_version")).toMatchObject({ has_known_release: false });
+  });
+
+  it("aceita heartbeat de agente ANTIGO, sem o campo has_known_release (preserva 'à frente da publicada')", async () => {
+    // Mesmo raciocínio do compare_failed: um agente que ainda não foi
+    // atualizado não manda este campo, e o default precisa preservar o
+    // comportamento ANTERIOR ("à frente da publicada"), não virar
+    // silenciosamente "nunca houve release" para toda instalação existente.
+    const { POST } = await import("./route");
+    const res = await POST(req(HEARTBEAT));
+    expect(res.status).toBe(200);
+    expect(lastUpdate("system_version")).toMatchObject({ has_known_release: true });
+  });
+
   it("recusa changelog acima do teto", async () => {
     const { POST } = await import("./route");
     const res = await POST(req({ ...HEARTBEAT, changelog: "x".repeat(70_000) }));

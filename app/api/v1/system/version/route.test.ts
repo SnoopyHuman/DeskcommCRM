@@ -175,6 +175,24 @@ describe("GET /api/v1/system/version", () => {
     expect(body.data.update_available).toBe(false);
   });
 
+  it("entrega has_known_release=false para distinguir 'nunca houve release' de 'à frente da publicada'", async () => {
+    versionRow.latest_version = "";
+    versionRow.off_release = true;
+    versionRow.has_known_release = false;
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.has_known_release).toBe(false);
+  });
+
+  it("has_known_release default true quando a coluna nunca foi tocada por um heartbeat", async () => {
+    delete versionRow.has_known_release;
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.has_known_release).toBe(true);
+  });
+
   it("marca o agente como offline quando o heartbeat é velho", async () => {
     versionRow.agent_last_seen_at = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
     vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);

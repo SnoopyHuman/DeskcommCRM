@@ -18,11 +18,19 @@
 #      o projeto pelo diretório corrente, e no cron o CWD é o home).
 #   5. Mesmo quando o update é recusado, o agente da tela fica instalado — é o
 #      que faz o bootstrap pelo terminal ter fim.
+#   6. `compare_failed` no heartbeat tem DUAS linhas independentes em
+#      agent.sh que podem acendê-lo (CONTIDA=2 vindo do `is_already_in_head`,
+#      e o fallback de "nenhuma tag conhecida + fetch falhou") — casos 8 e 9
+#      isolam cada uma, provado por sabotagem cirúrgica de cada linha.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# git de verdade, resolvido ANTES de $WORK/bin entrar no PATH (senão o shim
+# abaixo se acharia a si mesmo e recursaria pra sempre).
+REAL_GIT="$(command -v git)"
 
 FAILS=0
 check() {  # check <descrição> <comando de verificação...>
@@ -72,7 +80,25 @@ case "$payload" in
   *)           printf '{"data":{}}\n200' ;;
 esac
 STUB
-chmod +x "$WORK/bin/docker" "$WORK/bin/crontab" "$WORK/bin/flock" "$WORK/bin/curl"
+# `git` de verdade para tudo, EXCETO `fetch --unshallow` quando
+# FORCE_UNSHALLOW_FAIL=1 estiver no ambiente — é o que isola o caso 8 (a
+# comparação genuinamente NÃO SABE porque o unshallow falhou) de um fetch
+# --tags comum, que continua funcionando contra a origin de verdade. Fora
+# desse gate (a maioria das chamadas do arquivo inteiro, casos 1-7 incluídos)
+# o dublê é 100% transparente.
+cat > "$WORK/bin/git" <<STUB
+#!/usr/bin/env bash
+if [ "\${FORCE_UNSHALLOW_FAIL:-0}" = "1" ]; then
+  for a in "\$@"; do
+    if [ "\$a" = "--unshallow" ]; then
+      echo "fatal: simulated unshallow failure" >&2
+      exit 1
+    fi
+  done
+fi
+exec "$REAL_GIT" "\$@"
+STUB
+chmod +x "$WORK/bin/docker" "$WORK/bin/crontab" "$WORK/bin/flock" "$WORK/bin/curl" "$WORK/bin/git"
 export DOCKER_LOG="$WORK/docker.log" CURL_LOG="$WORK/curl.log"
 export FAKE_CRONTAB="$WORK/crontab.txt"
 export PATH="$WORK/bin:$PATH"
@@ -235,25 +261,44 @@ check "não reportou rollback nenhum" test -z "$(grep -F 'failed_rolled_back' "$
 check "o motivo em português chegou no log que a tela mostra" \
   grep -qi 'anterior' "$CURL_LOG"
 
-echo "── 8. Instalação atrasada que não deu pra comparar: o agente diz que NÃO SABE"
-# Fixture do defeito: instalação numa release antiga (v0.9.0), com a v1.1.0
-# genuinamente mais nova conhecida localmente, num clone raso que não consegue
-# completar a história. Se o agente só omitir a tag, o app lê o silêncio como
-# "está em dia" e a instalação nunca fica sabendo da atualização.
+echo "── 8. CONTIDA=2 (unshallow falhou) SOZINHO já acende compare_failed, mesmo com fetch --tags OK"
+# Isola a linha `[ "$CONTIDA" = 2 ] && COMPARE_FAILED=true`. O modo de falha
+# mais provável numa VPS fraca é exatamente este: um `fetch --tags` é barato e
+# passa (FETCH_OK=1), mas o `--unshallow` (que baixa a história inteira) é caro
+# e falha — origin continua alcançável o tempo todo, ao contrário do caso 9.
 echo mid > "$SRC/mid.txt"; git -C "$SRC" add -A; git -C "$SRC" commit --quiet -m "depois da 0.9.0"
 echo nova > "$SRC/nova.txt"; git -C "$SRC" add -A; git -C "$SRC" commit --quiet -m "release nova"
 git -C "$SRC" tag v1.1.0
-ATRASADO="$WORK/atrasado"
-git -c advice.detachedHead=false clone --depth 1 --branch v0.9.0 --quiet "file://$SRC" "$ATRASADO"
-cp "$RASO/.env" "$ATRASADO/.env"; chmod 600 "$ATRASADO/.env"
-cd "$ATRASADO" || exit 1
-git fetch --tags --quiet origin                # conhece a v1.1.0…
-git remote set-url origin "$WORK/nao-existe"   # …mas não consegue completar a história
+CONTIDA2="$WORK/contida2"
+git -c advice.detachedHead=false clone --depth 1 --branch v0.9.0 --quiet "file://$SRC" "$CONTIDA2"
+cp "$RASO/.env" "$CONTIDA2/.env"; chmod 600 "$CONTIDA2/.env"
+cd "$CONTIDA2" || exit 1
+check "fixture: ainda é raso, e a origin CONTINUA alcançável (nada quebrado)" \
+  test "$(git rev-parse --is-shallow-repository)" = "true"
 : > "$CURL_LOG"
-bash hostgator-setup-kit/agent.sh > "$WORK/agente2.out" 2>&1
-check "o heartbeat diz explicitamente que não conseguiu comparar" \
+FORCE_UNSHALLOW_FAIL=1 bash hostgator-setup-kit/agent.sh > "$WORK/agente-contida2.out" 2>&1
+check "o heartbeat diz explicitamente que não conseguiu comparar (CONTIDA=2 isolado)" \
   grep -q '"compare_failed":true' "$CURL_LOG"
-check "e não anuncia versão nenhuma (seria oferecer o que o update.sh recusa)" \
+check "e não anuncia a tag que não conseguiu confirmar" \
+  grep -q '"latest_version":""' "$CURL_LOG"
+
+echo "── 9. Sem NENHUMA tag conhecida + fetch --tags falhou: fallback isolado"
+# Isola a linha `[ -z "$LATEST_TAG" ] && [ "$FETCH_OK" = 0 ]`. Diferente do
+# caso 8: aqui a origin fica INALCANÇÁVEL desde o primeiro fetch (FETCH_OK=0),
+# e o CONTIDA nunca chega a ser calculado porque não há tag nenhuma conhecida
+# localmente (`--no-tags` no clone) — só este fallback pode acender
+# compare_failed neste cenário.
+SEM_TAG="$WORK/sem-tag"
+git clone --depth 1 --no-tags --quiet "file://$SRC" "$SEM_TAG"
+cp "$RASO/.env" "$SEM_TAG/.env"; chmod 600 "$SEM_TAG/.env"
+cd "$SEM_TAG" || exit 1
+check "fixture: nenhuma tag v* conhecida localmente" test -z "$(git tag -l 'v*')"
+git remote set-url origin "$WORK/nao-existe"   # fetch --tags vai falhar (FETCH_OK=0)
+: > "$CURL_LOG"
+bash hostgator-setup-kit/agent.sh > "$WORK/agente-sem-tag.out" 2>&1
+check "sem tag nenhuma conhecida e sem conseguir buscar, o heartbeat diz que não sabe (fallback isolado)" \
+  grep -q '"compare_failed":true' "$CURL_LOG"
+check "e não anuncia versão nenhuma" \
   grep -q '"latest_version":""' "$CURL_LOG"
 
 echo

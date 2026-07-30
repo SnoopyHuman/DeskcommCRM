@@ -11,6 +11,8 @@ export interface SystemVersion {
   off_release?: boolean;
   /** O host não conseguiu comparar a versão instalada com a última publicada. */
   compare_failed?: boolean;
+  /** O host já viu ao menos uma tag `v*` publicada neste repositório. */
+  has_known_release?: boolean;
   agent_online?: boolean;
   notes?: { body: string; requires_attention: string | null } | null;
   run?: {

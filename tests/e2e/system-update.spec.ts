@@ -108,6 +108,7 @@ async function heartbeat(
     changelog?: string;
     off_release?: boolean;
     compare_failed?: boolean;
+    has_known_release?: boolean;
   },
 ): Promise<HeartbeatResponse> {
   const res = await request.post("/api/v1/system/agent", {
@@ -119,6 +120,7 @@ async function heartbeat(
       off_release: opts.off_release ?? false,
       latest_version: opts.latest_version,
       compare_failed: opts.compare_failed ?? false,
+      has_known_release: opts.has_known_release ?? true,
       changelog: opts.changelog ?? "",
     },
   });
@@ -375,6 +377,32 @@ test("instalação à frente da versão publicada não vira tela quebrada nem al
   await expect(page.getByRole("button", { name: /atualizar agora/i })).toHaveCount(0);
   await expect(page.getByText("bash hostgator-setup-kit/update.sh")).toBeVisible();
   await page.screenshot({ path: ".superpowers/evidence/final-3-a-frente-da-publicada.png" });
+});
+
+test("fork sem nenhuma release publicada não afirma 'à frente' sem base", async ({ page, request }) => {
+  // Mesma combinação bruta do teste anterior (off_release=true, latest_version
+  // vazio, compare_failed=false) — a diferença é `has_known_release: false`:
+  // o agente NUNCA viu nenhuma tag `v*` neste repositório (fork sem releases),
+  // então "à frente da publicada" seria afirmar a existência de algo que não
+  // existe. Achado real da revisão: a tela dizia isso mesmo sem base nenhuma.
+  resetEstado();
+  await heartbeat(request, {
+    current_version: "abc1234",
+    latest_version: "",
+    off_release: true,
+    has_known_release: false,
+  });
+  await loginWithTotp(page, creds.users.admin!.email, creds.admin_totp!.secret);
+
+  await page.goto("/app/settings/atualizacao");
+  await expect(
+    page.getByRole("heading", { name: /ainda não há nenhuma versão publicada/i }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: /à frente da versão publicada/i })).toHaveCount(0);
+  await expect(page.getByText(/não há nada a atualizar agora/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /atualizar agora/i })).toHaveCount(0);
+  await expect(page.getByText("bash hostgator-setup-kit/update.sh")).toBeVisible();
+  await page.screenshot({ path: ".superpowers/evidence/minors-1-sem-release-publicada.png" });
 });
 
 test("quem não é dono do servidor não vê o botão", async ({ page, request }) => {

@@ -8454,3 +8454,15 @@ alter table public.system_version
   add column if not exists compare_failed boolean not null default false;
 comment on column public.system_version.compare_failed is
   'true quando o agente do host não conseguiu comparar a versão instalada com a última publicada (ex.: clone raso sem conseguir completar a história). A tela mostra "não consegui checar", nunca "você está em dia".';
+
+-- ---- distingue "à frente da publicada" de "nunca houve publicada" (migration 0094) ----
+--
+-- Sem esta coluna, um fork sem nenhuma tag `v*` recebia a MESMA combinação
+-- (off_release=true, latest_version='', compare_failed=false) de uma
+-- instalação que já contém a última tag publicada — e a tela afirmava "você
+-- está à frente da versão publicada" sem versão publicada nenhuma existir.
+-- Default `true` preserva o comportamento anterior para agentes antigos.
+alter table public.system_version
+  add column if not exists has_known_release boolean not null default true;
+comment on column public.system_version.has_known_release is
+  'false quando o agente do host nunca viu nenhuma tag v* no repositório (fork sem releases). Default true preserva o comportamento anterior para agentes antigos que ainda não enviam este campo.';

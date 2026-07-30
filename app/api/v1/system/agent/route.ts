@@ -35,6 +35,13 @@ const heartbeat = z.object({
   // — ele voltaria a ficar mudo, que é o defeito que este campo existe para
   // impedir.
   compare_failed: z.boolean().optional().default(false),
+  // "não anunciei tag" ≠ "nunca houve tag publicada" — a mesma dúvida do
+  // campo acima, mas para distinguir "à frente da última publicada" de
+  // "este fork nunca teve release nenhuma". Default `true` (não `false`) por
+  // compatibilidade: um agente antigo sem este campo preserva o comportamento
+  // anterior ("à frente da publicada"), em vez de virar silenciosamente
+  // "nunca houve release" para todo mundo.
+  has_known_release: z.boolean().optional().default(true),
   changelog: z.string().max(CHANGELOG_MAX_BYTES),
 });
 
@@ -89,6 +96,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         off_release: payload.off_release,
         latest_version: payload.latest_version,
         compare_failed: payload.compare_failed,
+        has_known_release: payload.has_known_release,
         changelog_raw: payload.changelog,
         agent_last_seen_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
