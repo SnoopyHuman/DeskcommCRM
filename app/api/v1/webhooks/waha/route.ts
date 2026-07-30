@@ -16,7 +16,8 @@ import type { NextRequest, NextResponse } from "next/server";
 import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { dispatchWahaEvent, verifyHmacSha512, type WahaEnvelope } from "@/lib/waha/ingest";
+import { dispatchWahaEvent, type WahaEnvelope } from "@/lib/waha/ingest";
+import { authenticateWahaWebhook } from "@/lib/waha/webhook-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,31 +61,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // HMAC — pula em dev quando o secret é o placeholder.
+  // Autenticação fail-closed — regras e o porquê em lib/waha/webhook-auth.ts.
   const sigHeader = req.headers.get("x-webhook-hmac") ?? req.headers.get("X-Webhook-Hmac");
-  let validSignature = false;
-  let hmacSkipped = false;
+  let sessionSecret: string | null = null;
   try {
     const dec = await admin.rpc("fn_decrypt_oauth", {
       ciphertext: session.webhook_secret_encrypted,
     });
-    if (dec.error || !dec.data || (typeof dec.data === "string" && dec.data.length < 4)) {
-      hmacSkipped = true;
-    } else {
-      validSignature = verifyHmacSha512(rawBody, sigHeader, dec.data as string);
-    }
+    if (!dec.error && typeof dec.data === "string") sessionSecret = dec.data;
   } catch {
-    hmacSkipped = true;
+    sessionSecret = null;
   }
 
-  if (!hmacSkipped && !validSignature) {
+  const auth = authenticateWahaWebhook({ rawBody, signatureHeader: sigHeader, sessionSecret });
+  if (!auth.ok) {
     await audit({
-      action: "nuvemshop.webhook_invalid_signature",
+      action: "webhook.hmac_invalid",
       organizationId: session.organization_id,
-      metadata: { provider: "waha", session: session.waha_session_name, event: envelope.event },
+      metadata: {
+        provider: "waha",
+        session: session.waha_session_name,
+        event: envelope.event,
+        reason: auth.reason,
+        had_signature: Boolean(sigHeader),
+      },
     });
-    return fail("unauthenticated", "invalid_signature", 401, { requestId });
+    return fail("unauthenticated", auth.reason, 401, { requestId });
   }
+  const validSignature = auth.signatureVerified;
 
   const eventType = envelope.event ?? "unknown";
   const externalId = envelope.payload?.id ?? null;
@@ -105,7 +109,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     raw_body: rawBody,
     payload_parsed: envelope as unknown as Record<string, unknown>,
     signature_header: sigHeader ?? null,
-    valid_signature: validSignature || hmacSkipped,
+    valid_signature: validSignature,
     event_type: eventType,
     external_id: externalId,
     status: "received",

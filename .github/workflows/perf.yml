@@ -17,7 +17,9 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # 22 como o job `ci` e o `.nvmrc`. Buildar numa versão que o
+          # `engines` (>=22) não suporta esconde quebra ou inventa falha.
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile

@@ -10,9 +10,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Tag, Receipt, Users, ArrowRight } from "@/lib/ui/icons";
 import { apiClient } from "@/lib/api/client";
+import { toast } from "sonner";
 import type { ConversationWithContact } from "@/hooks/inbox/useConversationsRealtime";
 import { activityLabel, actorLabel, actorShape } from "@/lib/leads/activity-vocabulary";
 import { ConversationTagsEditor } from "./ConversationTagsEditor";
+import { ContactTagsEditor } from "./ContactTagsEditor";
+import { useDefaultPipeline } from "@/hooks/pipelines/useDefaultPipeline";
+import { NewLeadDialog } from "@/components/kanban/NewLeadDialog";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -113,6 +117,17 @@ export function CRMSidePanel({ conversation }: Props) {
   const [erro, setErro] = useState(false);
   const [tentativa, setTentativa] = useState(0);
 
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const [leadDialogOpen, setLeadDialogOpen] = useState(false);
+  const defaultPipeline = useDefaultPipeline(leadDialogOpen);
+
+  useEffect(() => {
+    if (leadDialogOpen && defaultPipeline.isError) {
+      toast.error("Nenhum funil configurado nesta organização.");
+      setLeadDialogOpen(false);
+    }
+  }, [leadDialogOpen, defaultPipeline.isError]);
+
   useEffect(() => {
     if (!contactId) {
       setLeads(null);
@@ -201,11 +216,25 @@ export function CRMSidePanel({ conversation }: Props) {
             </div>
           )}
           <div className="flex flex-wrap gap-2 pt-1">
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              disabled={!contactId}
+              aria-pressed={tagEditorOpen}
+              onClick={() => setTagEditorOpen((v) => !v)}
+            >
               <Tag size={12} className="mr-1" weight="regular" aria-hidden /> Tag
             </Button>
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
-              <Users size={12} className="mr-1" weight="regular" aria-hidden /> Lead
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              disabled={!contactId || (leadDialogOpen && defaultPipeline.isLoading)}
+              onClick={() => setLeadDialogOpen(true)}
+            >
+              <Users size={12} className="mr-1" weight="regular" aria-hidden />
+              {leadDialogOpen && defaultPipeline.isLoading ? "Carregando…" : "Lead"}
             </Button>
             {contactId && (
               <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-xs">
@@ -216,8 +245,19 @@ export function CRMSidePanel({ conversation }: Props) {
               </Button>
             )}
           </div>
+          {tagEditorOpen && contactId && <ContactTagsEditor contactId={contactId} tags={tags} />}
         </Card>
       </section>
+
+      {contactId && defaultPipeline.data && (
+        <NewLeadDialog
+          open={leadDialogOpen}
+          onOpenChange={setLeadDialogOpen}
+          pipelineId={defaultPipeline.data.pipeline.id}
+          stages={defaultPipeline.data.stages}
+          contactId={contactId}
+        />
+      )}
 
       <Separator />
 

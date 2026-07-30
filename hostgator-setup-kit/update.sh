@@ -102,6 +102,19 @@ step "Baixando a versão nova do app e reiniciando"
 docker compose -f "$COMPOSE" pull
 docker compose -f "$COMPOSE" up -d
 
+# O Caddyfile entra no container por bind mount de UM ARQUIVO, e bind mount de
+# arquivo fica preso ao inode. O `git pull` não edita o arquivo: escreve outro e
+# renomeia, gerando inode novo — o container continua lendo o antigo, para
+# sempre. Medido nesta VPS: host inode 3283869, container 3271833, com o
+# conteúdo velho lá dentro.
+#
+# Sem este force-recreate, TODA mudança de proxy enviada numa atualização
+# (inclusive correção de segurança na borda) some em silêncio: o update diz
+# "concluída" e a configuração antiga segue valendo.
+docker compose -f "$COMPOSE" up -d --force-recreate --no-deps caddy >/dev/null 2>&1 \
+  && c_grn "✓ proxy recarregado com a configuração desta versão" \
+  || c_ylw "⚠ não consegui recriar o proxy — rode: docker compose -f $COMPOSE up -d --force-recreate caddy"
+
 # ── 6. O app voltou no ar? ───────────────────────────────────────────────────
 step "Conferindo se o app voltou no ar"
 ok=""

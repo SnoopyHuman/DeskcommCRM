@@ -481,6 +481,10 @@ envq() { printf "%s='%s'\n" "$1" "$(printf '%s' "${2-}" | sed "s/'/'\\\\''/g")";
   envq WAHA_API_KEY "$WAHA_API_KEY"
   envq WAHA_API_KEY_SHA512 "$WAHA_API_KEY_SHA512"
   envq WAHA_HMAC_SECRET "$WAHA_HMAC_SECRET"
+  printf '# "true" exige assinatura em todo webhook do WAHA. O WAHA Core NÃO assina,\n'
+  printf '# então ligar isto sem um WAHA Plus (ou proxy que assine) para a ingestão\n'
+  printf '# de mensagens. A rota global já não é publicada na internet (ver Caddyfile).\n'
+  envq WAHA_WEBHOOK_REQUIRE_SIGNATURE "${WAHA_WEBHOOK_REQUIRE_SIGNATURE:-false}"
   envq WAHA_IMAGE "${WAHA_IMAGE:-devlikeapro/waha}"
   envq WAHA_DEFAULT_ENGINE "${WAHA_DEFAULT_ENGINE:-NOWEB}"
   envq UPSTASH_REDIS_REST_URL "http://srh:80"

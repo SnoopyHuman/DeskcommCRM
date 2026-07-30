@@ -40,7 +40,10 @@ export const contactCreateSchema = z.object({
     .regex(PHONE_REGEX, "Telefone deve estar em formato E.164 (+5511999998888)")
     .optional(),
   cpf: z.string().refine(isValidCpf, "CPF inválido").optional(),
-  birthdate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  birthdate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   tags: z.array(z.string()).optional(),
   source: z.string().min(1).default("manual"),
   source_metadata: z.record(z.string(), z.unknown()).optional(),
@@ -48,7 +51,9 @@ export const contactCreateSchema = z.object({
 });
 export type ContactCreate = z.infer<typeof contactCreateSchema>;
 
-export const contactPatchSchema = contactCreateSchema.partial();
+export const contactPatchSchema = contactCreateSchema.partial().extend({
+  source: z.string().min(1).optional(),
+});
 export type ContactPatch = z.infer<typeof contactPatchSchema>;
 
 export const contactListQuerySchema = z.object({
