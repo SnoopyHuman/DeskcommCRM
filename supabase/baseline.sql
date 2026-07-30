@@ -697,10 +697,10 @@ begin
       ('Carrinho abandonado',  'carrinho_abandonado',  false, false),
       ('Aguardando pagamento', 'aguardando_pagamento', false, false),
       ('Pago',                 'pago',                 true,  false),
-      ('Em separacao',         'em_separacao',         false, false),
+      ('Em separação',        'em_separacao',         false, false),
       ('Enviado',              'enviado',              false, false),
       ('Entregue',             'entregue',             false, false),
-      ('Pos-venda',            'pos_venda',            false, false),
+      ('Pós-venda',           'pos_venda',            false, false),
       ('Cancelado',            'cancelado',            false, true)
     ) as t(stage_name, stage_slug, won, lost)
   loop
@@ -8434,6 +8434,15 @@ where id in (select id from ranked where rn > 1);
 create unique index if not exists uniq_system_update_runs_dispatched
   on public.system_update_runs (status)
   where status = 'dispatched';
+
+-- ---- acentos nas etapas padrão do funil (migration 0092) ----
+-- O seed do funil "Pedidos" criava "Em separacao" e "Pos-venda" sem acento —
+-- nomes visíveis no quadro principal, a tela mais usada do CRM. O seed acima já
+-- nasce corrigido; este bloco cura quem instalou antes. Idempotente e seguro:
+-- só casa com o nome padrão intacto, então tenant que renomeou a etapa não é
+-- tocado.
+update public.crm_stages set name = 'Em separação' where name = 'Em separacao';
+update public.crm_stages set name = 'Pós-venda'    where name = 'Pos-venda';
 
 -- ---- "não consegui comparar" não é "está em dia" (migration 0093) ----
 --

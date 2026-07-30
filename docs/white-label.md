@@ -84,7 +84,7 @@ O `reset-mfa.sh` é o que você mais vai usar: a verificação em duas etapas é
 
 ## Requisitos por instalação
 
-2 GB de RAM, portas 80 e 443, Docker Compose v2 e um domínio com registro A apontando para o IP. A VPS não compila nada — baixa uma imagem pronta. O certificado HTTPS é emitido automaticamente no primeiro acesso.
+**4 GB de RAM recomendados** (a stack sobe com 2 GB, mas opera no limite — o WAHA usa ~150 MB por sessão de WhatsApp), portas 80 e 443, Docker Compose v2 e um domínio com registro A apontando para o IP. A VPS não compila nada — baixa uma imagem pronta. O certificado HTTPS é emitido automaticamente no primeiro acesso.
 
 Guia completo de instalação: [`hostgator-setup-kit/README.md`](../hostgator-setup-kit/README.md).
 

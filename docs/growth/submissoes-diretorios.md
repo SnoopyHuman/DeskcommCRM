@@ -6,7 +6,7 @@ Não espere tráfego direto — não existe estudo público que quantifique visi
 
 ---
 
-## 1. awesome-selfhosted ⏳ bloqueado até ~28/08/2026
+## 1. awesome-selfhosted ⏳ bloqueado até 27/11/2026
 
 **308,6 mil estrelas.** É o diretório de maior peso da categoria.
 
@@ -14,26 +14,19 @@ Não espere tráfego direto — não existe estudo público que quantifique visi
 
 > *"Any software project you are adding was first released more than 4 months ago."*
 
-O repositório foi criado em **28/04/2026**. A v1.0.0 saiu em **27/07/2026**. Pela leitura de idade do repositório, a janela abre por volta de **28/08/2026**; pela leitura mais rígida (4 meses após o primeiro release), **27/11/2026**. Submeter antes queima o PR e o histórico fica na thread.
+O repositório foi criado em **28/04/2026**. A v1.0.0 saiu em **27/07/2026**.
+
+**Vale 27/11/2026, não 28/08.** A regra diz *released*, não *criado*, e é o release que o revisor consegue conferir sem sair da página: a aba Releases mostra uma única entrada, e em agosto ela ainda dirá "1 month ago". Reprovação ali não é privada — fica na thread do PR, indexada, no domínio de 308 mil estrelas, lida exatamente pelo público que queremos. Esperar quatro meses custa menos do que isso.
+
+Não há como acelerar honestamente: o "primeiro release" é uma data fixa no passado. Cortar releases novas agora não move o primeiro.
+
+**A vaga compensa a espera.** A tag `Customer Relationship Management (CRM)` tem hoje **dois** projetos — `django-crm` e `espocrm` —, e **nenhum** com WhatsApp (conferido em 28/07/2026). Não é uma prateleira lotada onde viraríamos mais um item.
 
 **Como funciona:** a submissão **não** vai no README. Vai como um arquivo YAML em [`awesome-selfhosted-data`](https://github.com/awesome-selfhosted/awesome-selfhosted-data), em `software/deskcommcrm.yml`, um item por PR, nome de arquivo em kebab-case.
 
-**Entrada pronta** (confira `website_url` quando o domínio estiver no ar):
+**Entrada pronta:** `docs/growth/awesome-selfhosted-deskcommcrm.yml`. É só copiar o conteúdo abaixo dos comentários. Os nomes de tag e plataforma foram conferidos em 28/07/2026 contra o campo `name:` de cada arquivo do repositório deles — **não** contra o nome do arquivo, que é diferente (`customer-relationship-management-crm.yml` declara `Customer Relationship Management (CRM)`). Referenciar pelo nome do arquivo é a rejeição mais comum.
 
-```yaml
-name: DeskcommCRM
-website_url: https://deskcomm.com.br
-source_code_url: https://github.com/melgarafael/DeskcommCRM
-description: "CRM with native AI agents that answer, qualify and move deals over WhatsApp, with multi-tenant row-level security and an audited guardrail chain before every outbound message."
-licenses:
-  - MIT
-platforms:
-  - Nodejs
-  - Docker
-tags:
-  - Customer Relationship Management (CRM)
-depends_3rdparty: true
-```
+Dois campos que o arquivo **não** leva: `stargazers_count` e `commit_history` são injetados por um bot deles depois do merge.
 
 > `depends_3rdparty: true` está correto e é deliberado: o agente depende de um provedor de LLM externo. Declarar isso é exigência do diretório e, no nosso caso, é também coerente com a postura do projeto — omitir seria o tipo de meia-verdade que a doutrina do repo não admite.
 
@@ -83,9 +76,26 @@ Exige conta no site. Sem custo, sem trava de idade.
 
 ## 4. LibHunt 🟢 pode ir agora
 
-Indexa automaticamente a partir do GitHub, mas aceita submissão e curadoria de categoria. Sem custo.
+Indexa automaticamente a partir do GitHub e aceita submissão. Sem custo.
 
-Categoria alvo: **CRM** / **Node.js**. Os topics do repositório já estão bem cobertos (20 de 20 usados), que é a fonte que eles leem.
+**Caminho de submissão:** não existe um "adicionar projeto" avulso em evidência. O caminho documentado é abrir um projeto já listado que seja parecido, clicar em **Suggest alternative** e mandar a URL do nosso repositório. Existe também um formulário em `libhunt.com/site/project_submit`.
+
+⚠️ **Expectativa calibrada:** o ranqueamento deles é movido por menções e atividade do repositório, não pela listagem. Estar lá, sozinho, move pouco. É um item barato de fazer, não uma alavanca.
+
+⚠️ Os sites por categoria do LibHunt (incluindo `selfhosted.libhunt.com`) são espelhos de listas *awesome*. **Não confirmado** se o de self-hosted é gerado a partir do `awesome-selfhosted` — o site devolve 403 para automação e a sondagem não fechou. Se for, entramos lá de graça junto com o PR de novembro, e submeter agora é redundante. Conferir manualmente antes de gastar o esforço.
+
+Os topics do repositório já estão saturados (20 de 20 usados), que é a fonte que eles leem.
+
+---
+
+## 5. Avaliados e descartados
+
+Registrado para ninguém revisitar:
+
+| Diretório | Por quê |
+|---|---|
+| [`btw-so/open-source-alternatives`](https://github.com/btw-so/open-source-alternatives) | **Abandonado.** 8,6 mil estrelas atraem, mas o último merge foi em **novembro de 2024** e há **37 PRs abertos** sem resposta desde então. A seção de CRM tem uma única entrada. PR ali é trabalho que ninguém lê. |
+| `awesome-crm` | **Não existe** com peso relevante. A maior que leva esse nome tem 6 estrelas. |
 
 ---
 
@@ -97,4 +107,4 @@ Categoria alvo: **CRM** / **Node.js**. Os topics do repositório já estão bem 
 
 ---
 
-*Última atualização: 27 de julho de 2026.*
+*Última atualização: 28 de julho de 2026 — datas do awesome-selfhosted conferidas contra o template e os releases; `btw-so/open-source-alternatives` medido e descartado.*

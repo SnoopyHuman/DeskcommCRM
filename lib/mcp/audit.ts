@@ -62,11 +62,18 @@ export async function auditMcpToolCall(input: AuditMcpToolCallInput): Promise<vo
 
   await audit({
     action: "mcp.tool_called",
-    actorUserId: ctx.actor.type === "user" ? ctx.actor.id : null,
+    // Quem age via MCP é um TOKEN, nunca uma linha de auth.users: para um token
+    // comum, ctx.actor.id é o id do próprio token (lib/mcp/auth.ts), e mandá-lo
+    // como actorUserId estourava a FK api_audit_log_actor_user_id_fkey. O ator
+    // já fica registrado em actorApiTokenId e em metadata.actor_id.
+    actorUserId: null,
     actorApiTokenId: ctx.apiTokenId,
     organizationId: ctx.organizationId,
     resourceType: "mcp_tool",
-    resourceId: toolName,
+    // `resource_id` é uuid no banco; o nome da tool ia aqui como texto e o
+    // insert morria com "invalid input syntax for type uuid: crm_create_lead".
+    // O nome já viaja em metadata.tool_name, que é jsonb.
+    resourceId: null,
     requestId: ctx.requestId,
     metadata,
   });

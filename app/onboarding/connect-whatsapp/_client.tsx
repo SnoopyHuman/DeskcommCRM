@@ -104,6 +104,22 @@ export function ConnectWhatsappClient({ wahaConfigured, sessionName }: Props) {
     });
   }, [status, sessionName]);
 
+  // Derruba a sessão morta e sobe outra. O polling volta sozinho porque `status`
+  // sai de FAILED e o efeito que o observa roda de novo.
+  async function restartSession() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/v1/onboarding/whatsapp/session?restart=1", { method: "POST" });
+      const json = (await res.json()) as { data?: SessionInfo };
+      if (json.data) setInfo(json.data);
+      else toast.error("Não consegui gerar outro código. Tente de novo em alguns segundos.");
+    } catch {
+      toast.error("Não consegui falar com o servidor. Confira sua conexão e tente de novo.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const showQr = wahaConfigured && status === "SCAN_QR_CODE";
 
   return (
@@ -157,10 +173,18 @@ export function ConnectWhatsappClient({ wahaConfigured, sessionName }: Props) {
           )}
 
           {status === "FAILED" && (
-            <p className="mt-3 text-sm text-destructive">
-              Falha ao conectar. Verifique o WAHA dashboard em{" "}
-              <code>http://localhost:3030/dashboard</code>.
-            </p>
+            <div className="mt-3 space-y-2">
+              <p className="text-sm text-destructive">
+                O código expirou antes de alguém escanear. É normal — ele vale só alguns minutos.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Deixe o WhatsApp já aberto em <strong>Aparelhos conectados</strong> antes de gerar o
+                próximo, que aí dá tempo de sobra.
+              </p>
+              <Button type="button" size="sm" disabled={busy} onClick={restartSession}>
+                {busy ? "Gerando…" : "Gerar novo QR Code"}
+              </Button>
+            </div>
           )}
 
           {(status === "ERROR" || status === "NOT_STARTED") && (

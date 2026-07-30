@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { loadOnboardingState } from "@/app/actions/onboarding/_shared";
@@ -15,10 +14,6 @@ export default async function OnboardingLayout({ children }: { children: React.R
   const { onboardedAt } = await loadOnboardingState(activeOrg.orgId);
   if (onboardedAt) redirect("/app/inbox");
 
-  const hdrs = await headers();
-  const pathname = hdrs.get("x-pathname") ?? "";
-  const stepKey = currentStepFromPath(pathname);
-
   const isDev = process.env.NODE_ENV !== "production";
 
   return (
@@ -32,20 +27,10 @@ export default async function OnboardingLayout({ children }: { children: React.R
           {isDev ? <SkipToEnd /> : null}
         </div>
         <div className="mx-auto w-full max-w-3xl px-4 pb-2">
-          <Stepper current={stepKey} />
+          <Stepper />
         </div>
       </header>
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">{children}</main>
     </div>
   );
-}
-
-function currentStepFromPath(pathname: string): string {
-  if (pathname.includes("/welcome")) return "welcome";
-  if (pathname.includes("/connect-whatsapp")) return "whatsapp";
-  if (pathname.includes("/connect-nuvemshop")) return "nuvemshop";
-  if (pathname.includes("/setup-ai")) return "ai";
-  if (pathname.includes("/invite-team")) return "team";
-  if (pathname.includes("/done")) return "done";
-  return "welcome";
 }

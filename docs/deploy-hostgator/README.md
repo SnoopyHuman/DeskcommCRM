@@ -46,7 +46,9 @@ com Docker instalado**:
 - 👉 **[VPS padrão](https://www.hostgator.com.br/52708-13-3-12.html)** — funciona também (a gente instala o Docker)
 - 👉 **[Servidor Dedicado](https://www.hostgator.com.br/52708-2-3-11.html)** — só se você atende MUITO volume
 
-**Plano recomendado:** a partir de **2 GB de RAM** já roda (não precisa dos planos
+**Plano recomendado: VPS NVMe 4** (2 vCPU / 4 GB / 100 GB NVMe) — é exatamente o mínimo
+que o runbook de produção declara. A stack sobe num NVMe 2, mas opera no limite.
+(Não precisa dos planos
 grandes — o CRM vem "pré-montado", o servidor não fica compilando nada).
 
 Ao contratar, a HostGator te envia por e-mail o **IP do servidor**, um **usuário**

@@ -57,11 +57,33 @@ export async function audit(entry: AuditEntry): Promise<void> {
       acting_as_platform_admin: entry.actingAsPlatformAdmin ?? false,
     });
     if (error) {
-      console.error("[audit] insert error", error.message);
+      reportAuditFailure(error.message, entry);
     }
   } catch (err) {
-    console.error("[audit] write failed", err);
+    reportAuditFailure(err instanceof Error ? err.message : String(err), entry);
   }
+}
+
+/**
+ * Falha de audit não bloqueia a mutação (por doutrina), mas TEM que ser
+ * barulhenta em algum lugar — senão a trilha de auditoria pode parar inteira
+ * sem ninguém perceber. Foi exatamente o que aconteceu: TODA chamada de
+ * ferramenta MCP falhava ao auditar ("invalid input syntax for type uuid") e o
+ * único sinal era um console.error dentro do contêiner.
+ */
+function reportAuditFailure(message: string, entry: AuditEntry): void {
+  console.error("[audit] insert error", message, { action: entry.action });
+  void import("@sentry/nextjs")
+    .then((Sentry) => {
+      Sentry.captureException(new Error(`[audit] write failed: ${message}`), {
+        level: "error",
+        tags: { subsystem: "audit", audit_action: entry.action },
+        extra: { resource_type: entry.resourceType, organization_id: entry.organizationId },
+      });
+    })
+    .catch(() => {
+      /* sem Sentry configurado: o console.error acima é o que resta */
+    });
 }
 
 /**

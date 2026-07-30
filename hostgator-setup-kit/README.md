@@ -35,7 +35,10 @@ e-mail/senha do admin), gera o resto e sobe tudo.
 
 ## Requisitos do VPS
 
-- **2 GB RAM** bastam (a imagem é pré-buildada — o servidor não compila nada).
+- **4 GB RAM recomendados.** A imagem é pré-buildada, então o servidor não compila nada e a
+  stack SOBE com 2 GB — mas operar é outra coisa: são 7 contêineres, e o WAHA consome
+  ~150 MB por sessão de WhatsApp além de ~300 MB de overhead do Node. Com 2 GB você roda
+  no limite e vai precisar de swap. Ver `docs/runbooks/waha-hostgator.md`.
 - Portas **80** e **443** abertas (`ufw allow 80,443,22/tcp`).
 - Docker + Docker Compose v2.
 

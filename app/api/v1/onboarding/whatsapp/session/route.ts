@@ -72,7 +72,7 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   const user = await loadAuthUser();
   if (!user) return fail("unauthenticated", "Sessão expirada", 401);
   const activeOrg = await resolveActiveOrg(user);
@@ -83,6 +83,18 @@ export async function POST() {
 
   // 1) Make sure we have a row in channel_sessions.
   const channelSessionId = await ensureChannelSession(activeOrg.orgId, sessionName);
+
+  // 1b) `?restart=1` = pedido explícito de QR novo. O start sozinho não resolve
+  // uma sessão FAILED: o WAHA responde 422 ("already exists") e o usuário fica
+  // preso olhando um QR morto. O QR do WhatsApp expira em poucos minutos, então
+  // "falhou, gere outro" é fluxo normal do onboarding, não caso de exceção.
+  if (new URL(req.url).searchParams.get("restart") === "1") {
+    try {
+      await waha.stopSession(sessionName);
+    } catch {
+      // Sessão já parada/inexistente: seguir para o start é o comportamento certo.
+    }
+  }
 
   // 2) Start the session in WAHA. Idempotent — WAHA returns 422 if already started; treat as ok.
   try {

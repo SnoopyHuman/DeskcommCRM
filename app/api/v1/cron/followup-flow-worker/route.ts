@@ -73,13 +73,21 @@ async function handle(req: NextRequest): Promise<Response> {
     return fail("internal_error", detail, 500, { requestId });
   }
 
-  void audit({
-    action: "followup.worker_run",
-    organizationId: null,
-    bypassedRls: true,
-    metadata: { ...summary },
-    requestId,
-  });
+  // Só audita tick que MEXEU em alguma coisa. Auditar toda batida enchia o
+  // api_audit_log — que é append-only e tem retenção de 5 anos — de linhas
+  // vazias: numa instalação parada, medido nesta VPS, 95% das entradas eram
+  // heartbeat de cron (1.175 de 1.236 em ~9h), afogando as ações reais na tela
+  // de auditoria. Liveness de worker é assunto de log/monitoramento, não de
+  // trilha de auditoria.
+  if (summary.claimed || summary.advanced || summary.scheduled || summary.failed || summary.dead) {
+    void audit({
+      action: "followup.worker_run",
+      organizationId: null,
+      bypassedRls: true,
+      metadata: { ...summary },
+      requestId,
+    });
+  }
 
   try {
     const sweepSummary = await runSilenceSweep({
@@ -87,13 +95,15 @@ async function handle(req: NextRequest): Promise<Response> {
       gateDb: createSupabaseFollowupGateDb(admin),
       clock: () => new Date(),
     });
-    void audit({
-      action: "followup.silence_sweep_run",
-      organizationId: null,
-      bypassedRls: true,
-      metadata: { ...sweepSummary },
-      requestId,
-    });
+    if (sweepSummary.enrolled || sweepSummary.pointers_gated_out || sweepSummary.skipped_existing) {
+      void audit({
+        action: "followup.silence_sweep_run",
+        organizationId: null,
+        bypassedRls: true,
+        metadata: { ...sweepSummary },
+        requestId,
+      });
+    }
   } catch (err) {
     // Sweep falhando NUNCA aborta o tick — a resposta abaixo já reflete o
     // resultado de runFollowupTick, que rodou (e foi auditado) antes disto.

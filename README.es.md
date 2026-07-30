@@ -1,6 +1,6 @@
 <div align="center">
 
-[🇧🇷 Português](README.pt-BR.md) · [🇺🇸 English](README.md) · 🇪🇸 Español
+[🇧🇷 Português](README.md) · [🇺🇸 English](README.en.md) · 🇪🇸 Español
 
 # 🛠️ DeskcommCRM — El Sistema Operativo de Ventas con Agentes de IA
 
@@ -27,6 +27,22 @@
 >
 > **[👉 Contratar el VPS de HostGator con el descuento de la alianza](https://www.hostgator.com.br/52708-141-3-52.html)** —
 > datacenter en São Paulo, ideal para WhatsApp funcionando 24/7. *(enlace de partner — contratar por él apoya el proyecto y te sale más barato)*
+>
+> ¿Ya tienes el VPS? Entra por SSH y ejecuta:
+>
+> ```bash
+> git clone https://github.com/melgarafael/DeskcommCRM.git
+> cd DeskcommCRM
+> bash hostgator-setup-kit/install.sh
+> ```
+>
+> El instalador pregunta solo lo que es tuyo (dominio, claves de Supabase, clave de IA,
+> contraseña del admin), valida cada respuesta antes de seguir, genera todos los demás
+> secretos, aplica el schema de la base de datos y levanta toda la stack con HTTPS. Detalles
+> en [`hostgator-setup-kit/README.md`](hostgator-setup-kit/README.md).
+>
+> ⚠️ El **Quickstart** de abajo es el camino de *desarrollo* (correr la app en tu máquina).
+> Si compraste un VPS para correr el CRM, usa el comando de arriba, no el Quickstart.
 
 ## ✨ Qué es
 

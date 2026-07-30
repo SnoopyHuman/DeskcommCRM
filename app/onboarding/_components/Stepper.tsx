@@ -1,21 +1,34 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+
 import { cn } from "@/lib/utils";
 
 interface StepDef {
-  key: string;
+  /** Trecho da rota que identifica o passo (ver app/onboarding/<segmento>). */
+  segment: string;
   label: string;
 }
 
 const STEPS: StepDef[] = [
-  { key: "welcome", label: "Boas-vindas" },
-  { key: "whatsapp", label: "WhatsApp" },
-  { key: "nuvemshop", label: "Loja" },
-  { key: "ai", label: "IA" },
-  { key: "team", label: "Time" },
-  { key: "done", label: "Concluído" },
+  { segment: "welcome", label: "Boas-vindas" },
+  { segment: "connect-whatsapp", label: "WhatsApp" },
+  { segment: "connect-nuvemshop", label: "Loja" },
+  { segment: "setup-ai", label: "IA" },
+  { segment: "invite-team", label: "Time" },
+  { segment: "done", label: "Concluído" },
 ];
 
-export function Stepper({ current }: { current: string }) {
-  const idx = STEPS.findIndex((s) => s.key === current);
+/**
+ * O passo atual sai da própria rota. Antes vinha por prop, alimentada de um
+ * header `x-pathname` que NADA no projeto escrevia (não há middleware): o valor
+ * chegava sempre vazio, caía no fallback e o indicador ficava travado em
+ * "Boas-vindas" durante o onboarding inteiro. Ler a rota aqui dispensa o header,
+ * o prop e o mapeamento no layout.
+ */
+export function Stepper() {
+  const pathname = usePathname() ?? "";
+  const idx = STEPS.findIndex((s) => pathname.includes(`/${s.segment}`));
   return (
     <ol
       aria-label="onboarding steps"
@@ -26,7 +39,7 @@ export function Stepper({ current }: { current: string }) {
         const isDone = i < idx;
         return (
           <li
-            key={s.key}
+            key={s.segment}
             aria-current={isActive ? "step" : undefined}
             className="flex flex-1 flex-col items-center text-xs"
           >

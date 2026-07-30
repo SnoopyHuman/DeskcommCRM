@@ -105,13 +105,17 @@ async function handle(req: NextRequest): Promise<Response> {
     }
   }
 
-  void audit({
-    action: "conversation.snooze_watcher_run",
-    organizationId: null,
-    bypassedRls: true,
-    metadata: { scanned: conversations.length, reopened },
-    requestId,
-  });
+  // Ver comentário em followup-flow-worker: varredura que não reabriu nada não
+  // é mutação, e não tem por que ocupar linha na auditoria.
+  if (reopened > 0) {
+    void audit({
+      action: "conversation.snooze_watcher_run",
+      organizationId: null,
+      bypassedRls: true,
+      metadata: { scanned: conversations.length, reopened },
+      requestId,
+    });
+  }
 
   return ok({ scanned: conversations.length, reopened }, { requestId });
 }

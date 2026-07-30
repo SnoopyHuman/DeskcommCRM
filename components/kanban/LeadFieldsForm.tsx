@@ -10,6 +10,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useEditLead } from "@/hooks/kanban/useUpdateLead";
 import type { Lead } from "@/lib/types/leads";
 import { updateLeadSchema, type UpdateLeadInput } from "@/lib/schemas/leads";
+import { parseReaisToCents } from "@/lib/money";
+import { EcoDoValor } from "./EcoDoValor";
 
 interface FormShape {
   title: string;
@@ -75,13 +77,11 @@ export function LeadFieldsForm({ lead, pipelineId, onSaved, onCancel }: Props) {
     const reais = values.valueReais.trim();
     let valueCents: number | null = null;
     if (reais.length > 0) {
-      const normalized = reais.replace(/\./g, "").replace(",", ".");
-      const n = Number(normalized);
-      if (!Number.isFinite(n) || n < 0) {
+      valueCents = parseReaisToCents(reais);
+      if (valueCents === null) {
         form.setError("valueReais", { message: "Valor inválido" });
         return;
       }
-      valueCents = Math.round(n * 100);
     }
 
     const patch: Record<string, unknown> = {
@@ -136,6 +136,7 @@ export function LeadFieldsForm({ lead, pipelineId, onSaved, onCancel }: Props) {
               placeholder="0,00"
               {...form.register("valueReais")}
             />
+            <EcoDoValor control={form.control} />
             {form.formState.errors.valueReais && (
               <p className="text-xs text-error-fg">
                 {form.formState.errors.valueReais.message}

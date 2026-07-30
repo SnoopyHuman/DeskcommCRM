@@ -42,13 +42,42 @@ is_already_in_head() {
   return 1
 }
 
+# Carrega o .env lendo cada linha como DADO, sem `source`.
+#
+# O `. ./.env` interpretava o arquivo como script, e aí qualquer valor de texto
+# livre virava código: `APP_NAME=Loja do João` fazia o shell tentar executar
+# `do`; uma senha com `#` era truncada no que parecia comentário; uma com `$`
+# era expandida e chegava corrompida. Como TODO script do kit passa por aqui,
+# um nome de empresa com espaço — ou seja, quase todos — derrubava reset-mfa,
+# reset-password, backup, restore e healthcheck. Justamente as ferramentas de
+# emergência, que só são usadas quando já deu problema.
+#
+# Aceita valores com ou sem aspas: instalações antigas (sem aspas) passam a
+# funcionar sem precisar reescrever o .env.
+load_env() {
+  local file="${1:-.env}" line key val
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue;; esac
+    case "$line" in *=*) ;; *) continue;; esac
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in ''|*[!A-Za-z0-9_]*) continue;; esac
+    case "$val" in
+      \"*\") val="${val:1:${#val}-2}";;
+      \'*\') val="${val:1:${#val}-2}";;
+    esac
+    printf -v "$key" '%s' "$val"
+    export "${key?}"
+  done < "$file"
+}
+
 # Vai pro diretório do projeto (onde está o compose) e carrega o .env.
 enter_project() {
   if [ -f "$COMPOSE" ]; then :;
   elif [ -f "deskcommcrm/$COMPOSE" ]; then cd deskcommcrm;
   else die "Não achei $COMPOSE. Rode a partir da pasta do projeto."; fi
   [ -f .env ] || die "Falta o .env (rode install.sh primeiro)."
-  set -a; . ./.env; set +a
+  load_env .env
   PROJECT_DIR="$(pwd)"
 }
 
@@ -153,7 +182,7 @@ ensure_encryption_key() {
   local envfile="${1:-.env}"
   local key="${NUVEMSHOP_OAUTH_ENCRYPTION_KEY:-}"
   if [ -z "$key" ] && [ -f "$envfile" ]; then
-    key="$(grep -E '^NUVEMSHOP_OAUTH_ENCRYPTION_KEY=' "$envfile" | head -1 | cut -d= -f2- || true)"
+    key="$(grep -E '^NUVEMSHOP_OAUTH_ENCRYPTION_KEY=' "$envfile" | head -1 | cut -d= -f2- | tr -d "'\"" || true)"
   fi
   if [ -z "$key" ]; then
     key="$(openssl rand -hex 32)"

@@ -37,7 +37,28 @@ git fetch --tags --quiet origin 2>/dev/null || c_ylw "⚠ não consegui falar co
 git rev-parse --verify --quiet "${TARGET_TAG}^{commit}" >/dev/null \
   || die "Não conheço a versão $TARGET_TAG aqui. Confira o nome (ex.: v1.1.0) ou tente de novo quando o servidor conseguir falar com o GitHub."
 CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
-if [ "$CURRENT_TAG" = "$TARGET_TAG" ] && [ -z "$FORCE" ]; then
+
+# O código estar em dia NÃO significa que o app está: quem roda é a imagem.
+# Uma atualização interrompida depois do checkout (queda de rede, falta de
+# memória no meio do docker pull) deixa o repositório novo e a imagem velha — e
+# a partir dali TODO update.sh respondia "já está na versão mais recente",
+# prendendo o CRM na versão antiga sem nenhuma saída visível para o dono.
+# Também cobre imagem republicada sem commit novo (rebuild de segurança).
+# (Veio da `main`; a versão por tag cai exatamente na mesma armadilha, porque a
+# comparação de tags também fica satisfeita com a imagem velha no lugar.)
+image_desatualizada() {
+  local img="${APP_IMAGE:-ghcr.io/melgarafael/deskcommcrm:latest}" local_d remote_d
+  local_d="$(docker image inspect "$img" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null | sed 's/.*@//')"
+  [ -z "$local_d" ] && return 0                 # nem baixada ainda → atualizar
+  remote_d="$(docker buildx imagetools inspect "$img" 2>/dev/null | awk '/^Digest:/{print $2; exit}')"
+  [ -z "$remote_d" ] && return 1                # sem como consultar → não forçar
+  [ "$local_d" != "$remote_d" ]
+}
+
+MESMA_TAG=""
+[ "$CURRENT_TAG" = "$TARGET_TAG" ] && MESMA_TAG=1
+
+if [ -n "$MESMA_TAG" ] && [ -z "$FORCE" ] && ! image_desatualizada; then
   c_grn "✓ Você já está na versão mais recente ($TARGET_TAG). Nada a atualizar."
   exit 0
 fi
@@ -49,7 +70,9 @@ fi
 # já tem (foi assim que este próprio botão se autodestruiria, voltando pra uma
 # imagem que não conhece o agente de atualização). Recusar é o padrão; voltar
 # no tempo continua possível, mas só quando alguém pede de propósito.
-if [ -z "$FORCE" ]; then
+# Quando o alvo é a MESMA tag já instalada, a guarda não se aplica: não há para
+# onde voltar no tempo — só a imagem é que ficou para trás.
+if [ -z "$FORCE" ] && [ -z "$MESMA_TAG" ]; then
   is_already_in_head "$TARGET_TAG" && CONTIDA=0 || CONTIDA=$?
   case "$CONTIDA" in
     0) refuse "A versão $TARGET_TAG é ANTERIOR à que já está instalada neste servidor.
@@ -66,7 +89,11 @@ if [ -z "$FORCE" ]; then
        bash hostgator-setup-kit/update.sh --to $TARGET_TAG --force" ;;
   esac
 fi
-c_ylw "Vou atualizar para a versão $TARGET_TAG com segurança."
+if [ -n "$MESMA_TAG" ]; then
+  c_ylw "O código já está na $TARGET_TAG, mas o app está rodando uma imagem antiga. Vou atualizar a imagem."
+else
+  c_ylw "Vou atualizar para a versão $TARGET_TAG com segurança."
+fi
 
 # ── 2. Backup de segurança ANTES de tocar no banco ───────────────────────────
 if [ -z "$SKIP_BACKUP" ]; then

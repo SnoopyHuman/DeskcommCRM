@@ -30,14 +30,29 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const COMMON_SCOPES = [
-  "contacts:read",
-  "contacts:write",
-  "leads:read",
-  "leads:write",
-  "messages:read",
-  "messages:write",
-  "audit:read",
+/**
+ * `mcp:read`/`mcp:write` faltavam nesta lista, e sem eles NENHUMA ferramenta
+ * MCP funciona: toda chamada volta "Token missing required scope 'mcp:read'"
+ * (lib/mcp/types.ts exige um dos dois em cada tool). Como esta tela é o único
+ * lugar que emite token, o "CRM operável por agentes de IA via MCP" ficava
+ * inalcançável — a API sempre aceitou os escopos; só o catálogo daqui os
+ * escondia.
+ */
+const SCOPES: { id: string; label: string }[] = [
+  { id: "mcp:read", label: "Agentes de IA podem LER o CRM (MCP)" },
+  { id: "mcp:write", label: "Agentes de IA podem AGIR no CRM (MCP)" },
+  // Sem isto o token nasce como 'agent' e as ferramentas de nível gerente
+  // (criar lead, atribuir conversa) respondem "Role 'agent' insufficient".
+  // O papel viaja junto dos escopos (ver lib/mcp/auth.ts) e também não
+  // aparecia em lugar nenhum da interface.
+  { id: "role:manager", label: "Tratar o token como gerente (necessário p/ criar e atribuir)" },
+  { id: "contacts:read", label: "Ler contatos" },
+  { id: "contacts:write", label: "Criar e editar contatos" },
+  { id: "leads:read", label: "Ler leads" },
+  { id: "leads:write", label: "Criar e editar leads" },
+  { id: "messages:read", label: "Ler mensagens" },
+  { id: "messages:write", label: "Enviar mensagens" },
+  { id: "audit:read", label: "Ler o log de auditoria" },
 ];
 
 export function ApiTokensClient() {
@@ -172,16 +187,19 @@ export function ApiTokensClient() {
             <div className="space-y-2">
               <Label>Escopos</Label>
               <div className="flex flex-wrap gap-2">
-                {COMMON_SCOPES.map((s) => (
+                {SCOPES.map((s) => (
                   <button
                     type="button"
-                    key={s}
-                    onClick={() => toggleScope(s)}
+                    key={s.id}
+                    onClick={() => toggleScope(s.id)}
+                    title={s.label}
+                    aria-label={`${s.id} — ${s.label}`}
                     className={`rounded-md border px-2 py-1 text-xs ${
-                      scopes.includes(s) ? "border-primary bg-primary/10" : "border-border"
+                      scopes.includes(s.id) ? "border-primary bg-primary/10" : "border-border"
                     }`}
                   >
-                    {s}
+                    {s.id}
+                    <span className="ml-1 text-muted-foreground">· {s.label}</span>
                   </button>
                 ))}
               </div>
