@@ -71,18 +71,25 @@ export function KnowledgeSourceCard({ source, type, onReindex, isReindexing }: P
           </div>
           <p className="text-sm text-text-muted">{meta.description}</p>
         </CardHeader>
-        <CardContent className="flex-1">
+        {/* O botão "Configurar" era um stub: `disabled` fixo com um
+            onClick de toast "Em breve." que, por estar desabilitado, NUNCA
+            aparecia. O usuário via um botão morto e nenhuma explicação — e
+            saía achando que a base de conhecimento existia e estava vazia por
+            culpa dele. Enquanto a criação por aqui não existe, a tela diz o
+            que é verdade. */}
+        <CardContent className="flex-1 space-y-2">
           <p className="text-sm text-text-muted">Nenhuma fonte configurada.</p>
+          <p className="text-xs text-text-muted">
+            Cadastrar {meta.label.toLowerCase()} por esta tela ainda não está
+            disponível. Enquanto isso, dá para criar pela API
+            (<code>POST /api/v1/ai/knowledge/sources</code>) — e o agente segue
+            atendendo normalmente, só sem consultar esta base.
+          </p>
         </CardContent>
         <CardFooter>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled
-            onClick={() => toast.info("Em breve.")}
-          >
-            Configurar {meta.label}
-          </Button>
+          <span className="rounded-sm border border-border px-2 py-1 text-xs text-text-muted">
+            Em breve
+          </span>
         </CardFooter>
       </Card>
     );

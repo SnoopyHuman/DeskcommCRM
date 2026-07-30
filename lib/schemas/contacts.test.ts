@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   contactCreateSchema,
   contactListQuerySchema,
+  contactPatchSchema,
   isValidCpf,
   lgpdAnonymizeSchema,
 } from "./contacts";
@@ -79,6 +80,15 @@ describe("contactCreateSchema", () => {
   it("rejects malformed birthdate", () => {
     const r = contactCreateSchema.safeParse({ birthdate: "01/01/1990" });
     expect(r.success).toBe(false);
+  });
+});
+
+describe("contactPatchSchema", () => {
+  it("não materializa source=manual quando PATCH omite source", () => {
+    const parsed = contactPatchSchema.parse({ tags: ["vip"] });
+
+    expect(parsed).toEqual({ tags: ["vip"] });
+    expect("source" in parsed).toBe(false);
   });
 });
 

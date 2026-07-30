@@ -41,6 +41,8 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   pipelineId: string;
   stages: Stage[];
+  /** Vincula o lead criado a este contato de origem (ex.: painel do Inbox). */
+  contactId?: string | null;
 }
 
 function defaultStageId(stages: Stage[]): string {
@@ -48,7 +50,7 @@ function defaultStageId(stages: Stage[]): string {
   return open?.id ?? stages[0]?.id ?? "";
 }
 
-export function NewLeadDialog({ open, onOpenChange, pipelineId, stages }: Props) {
+export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactId }: Props) {
   const create = useCreateLead(pipelineId);
   const initialStage = useMemo(() => defaultStageId(stages), [stages]);
 
@@ -94,6 +96,7 @@ export function NewLeadDialog({ open, onOpenChange, pipelineId, stages }: Props)
       source: "manual",
       tags,
     };
+    if (contactId) payload.contact_id = contactId;
     if (values.description.trim()) payload.description = values.description.trim();
     if (valueCents !== null) payload.value_cents = valueCents;
     if (values.expected_close_date) payload.expected_close_date = values.expected_close_date;

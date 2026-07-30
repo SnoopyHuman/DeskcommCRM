@@ -303,12 +303,35 @@ export async function processRagIndexer(row: EventRow): Promise<HandlerResult> {
         result = await handleProductSynced(row, agentId);
         break;
 
-      case "knowledge_source.updated":
-        // Wave 4 stub — full reindex deferred to S-06.05/06/07
+      case "knowledge_source.updated": {
+        // Ainda um stub — a reindexação completa de FAQ/política/conversas está
+        // adiada para S-06.05/06/07 (o caminho de produto acima é o único
+        // implementado).
+        //
+        // O que mudou aqui é a HONESTIDADE: antes isto só logava dentro do
+        // contêiner e devolvia "skipped", que o drain marca como `done`. Na
+        // tela, quem clicava em "Re-indexar" via a fonte seguir "Não indexado"
+        // sem uma palavra de explicação, e concluía que o RAG estava
+        // funcionando com a base vazia. Agora o motivo fica gravado na própria
+        // fonte, que a tela já sabe exibir.
+        const sourceId = row.payload["knowledge_source_id"];
+        if (typeof sourceId === "string" && sourceId) {
+          await createAdminClient()
+            .from("ai_knowledge_sources")
+            .update({
+              last_index_status: "failed",
+              last_index_error:
+                "Indexação desta fonte ainda não está disponível nesta versão — o agente responde sem consultar esta base.",
+              last_indexed_at: new Date().toISOString(),
+            })
+            .eq("id", sourceId)
+            .eq("organization_id", row.organization_id);
+        }
         console.warn(
           "[rag-indexer] knowledge_source.updated reindex deferred to S-06.05/06/07",
         );
         return { consumer_key: consumerKey, status: "skipped", detail: "knowledge_source_reindex_deferred" };
+      }
 
       default:
         return { consumer_key: consumerKey, status: "skipped", detail: `unhandled_event:${row.event_type}` };

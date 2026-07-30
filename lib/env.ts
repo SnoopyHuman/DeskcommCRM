@@ -68,6 +68,16 @@ const schema = z.object({
   WAHA_API_BASE_URL: required("WAHA_API_BASE_URL"),
   WAHA_API_KEY: required("WAHA_API_KEY"),
   WAHA_WEBHOOK_BASE_URL: required("WAHA_WEBHOOK_BASE_URL"),
+  // Segredo com que o WAHA assina os webhooks. O compose já o entrega ao
+  // contêiner do WAHA; o app precisa dele para CONFERIR a assinatura — e não o
+  // declarava aqui, então nunca teve como verificar nada.
+  WAHA_HMAC_SECRET: z.string().optional().default(""),
+  // "true" exige assinatura válida em todo webhook do WAHA. Fica desligado por
+  // padrão porque o WAHA Core não assina (medido: 2026.7.2 CORE manda os
+  // eventos sem header mesmo com WHATSAPP_HOOK_HMAC configurado), e exigir
+  // derrubaria a ingestão de mensagens. Ligue se usa WAHA Plus ou um proxy que
+  // assine — aí a verificação passa a ser obrigatória.
+  WAHA_WEBHOOK_REQUIRE_SIGNATURE: z.string().optional().default("false"),
 
   // Upstash Redis
   UPSTASH_REDIS_REST_URL: required("UPSTASH_REDIS_REST_URL"),
@@ -95,13 +105,14 @@ const schema = z.object({
     .default("false")
     .transform((v) => v === "true"),
 
-  // EPIC-13 wave 6: enquanto S-13.08 (runtime real) não landa, o endpoint
-  // :test devolve um trace fake quando esta flag = 'true'. Default 'true' em
-  // dev, deve virar 'false' em produção quando a wave 8 estiver mergeada.
+  // O endpoint :test devolve um trace fake quando esta flag = 'true'.
+  // Default 'false' desde que a S-13.08 landou: `callInternalRuntime` executa
+  // o `runAgent` real, então quem instala do zero testa o agente de verdade.
+  // Ligue 'true' só para exercitar o render da UI sem gastar token.
   INTERNAL_AGENT_RUN_STUB: z
     .enum(["true", "false"])
     .optional()
-    .default("true")
+    .default("false")
     .transform((v) => v === "true"),
 
   // Sentry
