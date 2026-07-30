@@ -235,6 +235,27 @@ check "não reportou rollback nenhum" test -z "$(grep -F 'failed_rolled_back' "$
 check "o motivo em português chegou no log que a tela mostra" \
   grep -qi 'anterior' "$CURL_LOG"
 
+echo "── 8. Instalação atrasada que não deu pra comparar: o agente diz que NÃO SABE"
+# Fixture do defeito: instalação numa release antiga (v0.9.0), com a v1.1.0
+# genuinamente mais nova conhecida localmente, num clone raso que não consegue
+# completar a história. Se o agente só omitir a tag, o app lê o silêncio como
+# "está em dia" e a instalação nunca fica sabendo da atualização.
+echo mid > "$SRC/mid.txt"; git -C "$SRC" add -A; git -C "$SRC" commit --quiet -m "depois da 0.9.0"
+echo nova > "$SRC/nova.txt"; git -C "$SRC" add -A; git -C "$SRC" commit --quiet -m "release nova"
+git -C "$SRC" tag v1.1.0
+ATRASADO="$WORK/atrasado"
+git -c advice.detachedHead=false clone --depth 1 --branch v0.9.0 --quiet "file://$SRC" "$ATRASADO"
+cp "$RASO/.env" "$ATRASADO/.env"; chmod 600 "$ATRASADO/.env"
+cd "$ATRASADO" || exit 1
+git fetch --tags --quiet origin                # conhece a v1.1.0…
+git remote set-url origin "$WORK/nao-existe"   # …mas não consegue completar a história
+: > "$CURL_LOG"
+bash hostgator-setup-kit/agent.sh > "$WORK/agente2.out" 2>&1
+check "o heartbeat diz explicitamente que não conseguiu comparar" \
+  grep -q '"compare_failed":true' "$CURL_LOG"
+check "e não anuncia versão nenhuma (seria oferecer o que o update.sh recusa)" \
+  grep -q '"latest_version":""' "$CURL_LOG"
+
 echo
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi
 exit $((FAILS > 0))

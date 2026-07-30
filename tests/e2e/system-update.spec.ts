@@ -107,6 +107,7 @@ async function heartbeat(
     current_version?: string;
     changelog?: string;
     off_release?: boolean;
+    compare_failed?: boolean;
   },
 ): Promise<HeartbeatResponse> {
   const res = await request.post("/api/v1/system/agent", {
@@ -117,6 +118,7 @@ async function heartbeat(
       current_sha: "abc1234",
       off_release: opts.off_release ?? false,
       latest_version: opts.latest_version,
+      compare_failed: opts.compare_failed ?? false,
       changelog: opts.changelog ?? "",
     },
   });
@@ -292,10 +294,12 @@ test("quando a atualização falha, a tela nomeia a versão certa, mostra o log 
   ).toBeVisible();
   await page.screenshot({ path: ".superpowers/evidence/final-2-falha-sem-rollback.png" });
 
-  // ── Recusa: o servidor não fez nada, e a tela não pode dizer que fez ───────
-  // O update.sh recusa alvos que seriam retrocesso ANTES de tocar em qualquer
-  // coisa; o run volta "failed" sem nenhum passo concluído. Dizer "pode estar
-  // rodando com defeito" aqui assustaria por nada.
+  // ── Sem nenhum passo reportado, a saída NÃO pode sumir ────────────────────
+  // `run_progress` não tem retry e engole falha; `run_result` insiste por ~2
+  // min. Uma atualização que mexeu em tudo e quebrou no fim chega aqui com
+  // `last_step` nulo sempre que os POSTs de progresso não passaram — foi por
+  // ler esse nulo como "o host recusou, nada mudou" que a tela ficou sem
+  // comando nenhum justamente no pior estado possível.
   resetEstado();
   await heartbeat(request, { current_version: "1.1.0", latest_version: "1.2.0" });
   await page.reload();
@@ -312,12 +316,40 @@ test("quando a atualização falha, a tela nomeia a versão certa, mostra o log 
   );
   await page.reload();
 
-  await expect(page.getByRole("heading", { name: /não chegou a começar/i })).toBeVisible();
-  await expect(page.getByText(/nada mudou/i)).toBeVisible();
-  await expect(page.getByText(/não deu certo/i)).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: /a atualização para a versão 1\.2\.0 não deu certo/i }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("bash hostgator-setup-kit/update.sh --to v1.1.0 --force"),
+  ).toBeVisible();
   await page.getByText(/Detalhes técnicos/).click();
   await expect(page.getByText(/é ANTERIOR à que já está instalada/)).toBeVisible();
-  await page.screenshot({ path: ".superpowers/evidence/final-4-recusa-sem-tocar.png" });
+  await page.screenshot({ path: ".superpowers/evidence/final-4-sem-passo-reportado.png" });
+});
+
+test("quando o host não conseguiu comparar, a tela não diz que está em dia", async ({
+  page,
+  request,
+}) => {
+  // Instalação numa tag (off_release falso) cujo host não conseguiu completar a
+  // história para comparar. Sem o sinal explícito, `latest_version` vazio virava
+  // "Você está na versão 0.9.0 — É a mais recente", e uma instalação atrasada
+  // ficaria para sempre sem saber que existe correção de segurança esperando.
+  resetEstado();
+  await heartbeat(request, {
+    current_version: "0.9.0",
+    latest_version: "",
+    off_release: false,
+    compare_failed: true,
+  });
+  await loginWithTotp(page, creds.users.admin!.email, creds.admin_totp!.secret);
+  await page.goto("/app/settings/atualizacao");
+
+  await expect(page.getByRole("heading", { name: /não consegui checar/i })).toBeVisible();
+  await expect(page.getByText(/é a mais recente/i)).toHaveCount(0);
+  await expect(page.getByText(/quer dizer que eu não sei/i)).toBeVisible();
+  await expect(page.getByText("bash hostgator-setup-kit/update.sh")).toBeVisible();
+  await page.screenshot({ path: ".superpowers/evidence/final-5-nao-consegui-checar.png" });
 });
 
 test("instalação à frente da versão publicada não vira tela quebrada nem alarme", async ({

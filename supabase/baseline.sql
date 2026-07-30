@@ -8434,3 +8434,14 @@ where id in (select id from ranked where rn > 1);
 create unique index if not exists uniq_system_update_runs_dispatched
   on public.system_update_runs (status)
   where status = 'dispatched';
+
+-- ---- "não consegui comparar" não é "está em dia" (migration 0093) ----
+--
+-- Sem esta coluna, o agente que falha ao comparar (clone raso sem conseguir
+-- completar a história) simplesmente não anuncia versão nova, e a tela lê a
+-- ausência como boa notícia — informando "é a mais recente" a uma instalação
+-- atrasada. Idempotente: `add column if not exists` com default.
+alter table public.system_version
+  add column if not exists compare_failed boolean not null default false;
+comment on column public.system_version.compare_failed is
+  'true quando o agente do host não conseguiu comparar a versão instalada com a última publicada (ex.: clone raso sem conseguir completar a história). A tela mostra "não consegui checar", nunca "você está em dia".';

@@ -130,7 +130,7 @@ export function UpdatePanel() {
           mutate={() => atualizar.mutate()}
           isPending={atualizar.isPending}
           erro={erro}
-          texto={`Se quiser tentar de novo, ou deixar o servidor todo de volta na ${anterior}, quem tem acesso pode rodar:`}
+          texto={`Para deixar o servidor inteiro de volta na versão ${anterior} — inclusive o código, que já foi trocado —, quem tem acesso pode rodar:`}
           comando={comandoDeVolta(data.run.from_version)}
         />
       </Layout>
@@ -138,25 +138,14 @@ export function UpdatePanel() {
   }
 
   if (data.run?.status === "failed") {
-    // Nenhum passo concluído = o servidor recusou a atualização ANTES de tocar
-    // em qualquer coisa (ex.: o alvo era mais antigo que o instalado). Dizer
-    // "pode estar rodando com defeito" aqui seria assustar por nada.
-    // ponytail: o sinal é `last_step`, não um estado próprio no banco — o teto
-    // é o caso raro do agente morrer sem conseguir reportar nem o primeiro
-    // passo; um status próprio (migration + baseline + MANIFEST) é o upgrade
-    // se isso algum dia doer.
-    if (!data.run.last_step) {
-      return (
-        <Layout titulo="A atualização não chegou a começar">
-          <p className="text-sm">
-            O servidor recusou a atualização antes de mexer em qualquer coisa, então{" "}
-            <strong>nada mudou</strong>: você continua na versão {anterior}, com os mesmos dados de
-            sempre. O motivo está logo abaixo, em detalhes técnicos.
-          </p>
-          <DetalhesTecnicos texto={data.run.log_tail} />
-        </Layout>
-      );
-    }
+    // Já houve aqui um texto próprio para "o host recusou antes de começar",
+    // detectado por `last_step` nulo. Era sinal errado: `run_progress` não tem
+    // retry e engole falha (o `run_result` insiste por ~2 min), então uma
+    // atualização que mexeu em TUDO e falhou no fim chega aqui com `last_step`
+    // nulo sempre que os POSTs de progresso não passaram — e a tela dizia "nada
+    // mudou" e não oferecia saída nenhuma, justo quando o dono mais precisa do
+    // comando de volta. A cópia alarmante erra para o lado de fazer conferir, e
+    // o log logo abaixo explica em português quando foi só uma recusa.
     return (
       <Layout titulo={`A atualização para a versão ${alvo} não deu certo`}>
         <p className="text-sm">
@@ -208,6 +197,27 @@ export function UpdatePanel() {
         </p>
         <Comando comando={COMANDO_MANUAL} />
         <p className="mt-3 text-sm text-muted-foreground">Versão instalada: {versao}.</p>
+      </Layout>
+    );
+  }
+
+  // O host disse, com todas as letras, que não conseguiu comparar. Recusar a
+  // agir é defensável; afirmar "é a mais recente" sem ter conferido não é — a
+  // conta disso é o cliente nunca receber a próxima correção de segurança.
+  if (data.compare_failed) {
+    return (
+      <Layout titulo="Não consegui checar se há versão nova">
+        <p className="text-sm">
+          O servidor não conseguiu comparar a sua versão (<strong>{versao}</strong>) com a última
+          publicada — normalmente é internet instável ou falta de espaço em disco na hora da
+          checagem. <strong>Não quer dizer que esteja desatualizado, nem que esteja em dia</strong>:
+          quer dizer que eu não sei.
+        </p>
+        <p className="mt-3 text-sm">
+          Vou tentar de novo sozinho a cada poucos minutos. Se continuar assim, quem tem acesso ao
+          servidor pode conferir na hora com:
+        </p>
+        <Comando comando={COMANDO_MANUAL} />
       </Layout>
     );
   }

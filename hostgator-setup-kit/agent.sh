@@ -96,7 +96,8 @@ esc() {
 }
 
 # ── 1. Que versão está instalada e qual é a última publicada? ────────────────
-git fetch --tags --quiet origin 2>/dev/null || true
+FETCH_OK=1
+git fetch --tags --quiet origin 2>/dev/null || FETCH_OK=0
 
 CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 CURRENT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
@@ -117,10 +118,20 @@ fi
 #
 # Na dúvida (repositório raso que não deu pra completar), também NÃO anuncia:
 # oferecer o botão seria oferecer o que o update.sh vai recusar do outro lado.
+#
+# Mas "não anunciei" e "não existe versão nova" são coisas DIFERENTES, e o app
+# não tem como distinguir uma da outra olhando um campo vazio — ele leria o
+# silêncio como boa notícia e diria "você está em dia" a uma instalação
+# atrasada. Por isso o "não sei" viaja explícito no heartbeat.
+COMPARE_FAILED=false
 if [ -n "$LATEST_TAG" ]; then
   is_already_in_head "$LATEST_TAG" && CONTIDA=0 || CONTIDA=$?
+  [ "$CONTIDA" = 2 ] && COMPARE_FAILED=true
   [ "$CONTIDA" = 1 ] || LATEST_TAG=""   # 0 = retrocesso, 2 = não sei: nos dois, não anuncia
 fi
+# Sem nenhuma tag conhecida E sem ter conseguido buscar: também não dá para
+# afirmar que não há versão nova — nem sabemos se existe alguma publicada.
+[ -z "$LATEST_TAG" ] && [ "$FETCH_OK" = 0 ] && COMPARE_FAILED=true
 
 CHANGELOG=""
 if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT" ]; then
@@ -147,7 +158,7 @@ fi
 # Cinto e suspensório: o "LC_ALL=C" acima já torna esc() incapaz de abortar
 # por sequência inválida, mas a morte do agente é grave o bastante (run
 # travado pra sempre) pra justificar a redundância explícita do "|| true".
-BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"changelog\":\"$(esc "$CHANGELOG")\"}" || true
+BODY="{\"kind\":\"heartbeat\",\"current_version\":\"${CURRENT}\",\"current_sha\":\"${CURRENT_SHA}\",\"off_release\":${OFF_RELEASE},\"latest_version\":\"${LATEST_TAG}\",\"compare_failed\":${COMPARE_FAILED},\"changelog\":\"$(esc "$CHANGELOG")\"}" || true
 RESP="$(post "$BODY")"
 
 [ "$(json_field "$RESP" update_requested)" = "true" ] || exit 0

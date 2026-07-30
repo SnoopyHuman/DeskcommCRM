@@ -29,6 +29,12 @@ const heartbeat = z.object({
   current_sha: z.string().max(64),
   off_release: z.boolean(),
   latest_version: z.string().max(64),
+  // "não consegui comparar" ≠ "não há nada novo". Opcional com default: o
+  // container do app atualiza antes do script do host (é literalmente o
+  // bootstrap desta feature), e um agente antigo não pode passar a receber 422
+  // — ele voltaria a ficar mudo, que é o defeito que este campo existe para
+  // impedir.
+  compare_failed: z.boolean().optional().default(false),
   changelog: z.string().max(CHANGELOG_MAX_BYTES),
 });
 
@@ -82,6 +88,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         current_sha: payload.current_sha,
         off_release: payload.off_release,
         latest_version: payload.latest_version,
+        compare_failed: payload.compare_failed,
         changelog_raw: payload.changelog,
         agent_last_seen_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

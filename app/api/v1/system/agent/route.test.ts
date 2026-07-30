@@ -136,6 +136,24 @@ describe("POST /api/v1/system/agent", () => {
     expect(body.data.run_id).toBe(RUN_ID);
   });
 
+  it("heartbeat grava compare_failed quando o host não conseguiu comparar", async () => {
+    const { POST } = await import("./route");
+    const res = await POST(req({ ...HEARTBEAT, latest_version: "", compare_failed: true }));
+    expect(res.status).toBe(200);
+    expect(lastUpdate("system_version")).toMatchObject({ compare_failed: true });
+  });
+
+  it("aceita heartbeat de agente ANTIGO, sem o campo compare_failed", async () => {
+    // O container do app atualiza antes do script do host — é literalmente o
+    // bootstrap desta feature. Se o campo novo fosse obrigatório, o agente
+    // antigo passaria a levar 422 e ficaria mudo: a tela pararia de saber a
+    // versão instalada por causa de um campo que existe para evitar silêncio.
+    const { POST } = await import("./route");
+    const res = await POST(req(HEARTBEAT));
+    expect(res.status).toBe(200);
+    expect(lastUpdate("system_version")).toMatchObject({ compare_failed: false });
+  });
+
   it("recusa changelog acima do teto", async () => {
     const { POST } = await import("./route");
     const res = await POST(req({ ...HEARTBEAT, changelog: "x".repeat(70_000) }));

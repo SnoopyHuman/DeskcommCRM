@@ -28,7 +28,9 @@ export async function GET(_req: NextRequest): Promise<Response> {
   const db = createAdminClient();
   const { data: version, error: versionError } = await db
     .from("system_version")
-    .select("current_version, latest_version, off_release, changelog_raw, agent_last_seen_at")
+    .select(
+      "current_version, latest_version, off_release, compare_failed, changelog_raw, agent_last_seen_at",
+    )
     .eq("id", 1)
     .maybeSingle();
 
@@ -86,6 +88,10 @@ export async function GET(_req: NextRequest): Promise<Response> {
     latest_version: latest,
     update_available: Boolean(latest) && latest !== running,
     off_release: version?.off_release ?? false,
+    // Sem isto, a tela lê "sem versão nova anunciada" como "você está em dia" —
+    // e uma instalação atrasada cujo host não conseguiu comparar é informada de
+    // que está atualizada, em silêncio.
+    compare_failed: version?.compare_failed ?? false,
     agent_online: !Number.isNaN(lastSeen) && now.getTime() - lastSeen < AGENT_OFFLINE_AFTER_MS,
     notes: section ? { body: section.body, requires_attention: section.requiresAttention } : null,
     run: run

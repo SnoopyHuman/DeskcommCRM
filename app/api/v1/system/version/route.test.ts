@@ -53,6 +53,7 @@ beforeEach(() => {
     off_release: false,
     changelog_raw: "## [1.1.0] — 2026-08-02\n\n**⚠️ Requer atenção**\n\nreconecte o número.\n\n### Adicionado\n\n- botão.\n",
     agent_last_seen_at: new Date().toISOString(),
+    compare_failed: false,
     update_requested_at: null,
   };
 
@@ -161,6 +162,17 @@ describe("GET /api/v1/system/version", () => {
     expect(body.data.update_available).toBe(true);
     expect(body.data.notes.body).toContain("botão");
     expect(body.data.notes.requires_attention).toContain("reconecte o número");
+  });
+
+  it("entrega compare_failed para a tela poder dizer 'não sei' em vez de 'está em dia'", async () => {
+    versionRow.latest_version = "";
+    versionRow.compare_failed = true;
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.compare_failed).toBe(true);
+    // E não pode virar "há atualização": não sabemos que há.
+    expect(body.data.update_available).toBe(false);
   });
 
   it("marca o agente como offline quando o heartbeat é velho", async () => {
