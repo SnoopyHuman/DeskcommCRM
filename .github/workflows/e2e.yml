@@ -112,16 +112,17 @@ jobs:
       # para o boot passar da validação Zod — nenhum segredo real entra aqui.
       - name: E2E (subconjunto sem dependência externa)
         run: |
-          pnpm exec playwright test \
+          # --workers=1 não é preciosismo: os specs compartilham UMA conta admin
+          # com MFA, e código TOTP é de uso único por janela no GoTrue. Com dois
+          # workers, dois specs gerando o mesmo código no mesmo intervalo de 30s
+          # fazem o segundo ser recusado como replay. Foi o que derrubava a
+          # `reset-password-mfa` (issue #80): ela passa sozinha e falha em
+          # paralelo. Paralelizar de novo exige conta própria por spec.
+          pnpm exec playwright test --workers=1 \
             smoke.spec.ts auth.spec.ts error-pages.spec.ts \
             password-recovery.spec.ts signup-journey.spec.ts \
-            rbac-roles.spec.ts inbox-scope.spec.ts \
+            rbac-roles.spec.ts inbox-scope.spec.ts reset-password-mfa.spec.ts \
             degradacao-silenciosa.spec.ts vps-webhook-outbound-ssrf.spec.ts
-          # FORA daqui, e não por acaso: `reset-password-mfa.spec.ts`. Ela falha
-          # neste ambiente e ainda não sabemos se é defeito do produto ou do
-          # setup — a irmã `password-recovery` passa, então `/auth/confirm`
-          # funciona; o que quebra é o trecho recuperação+MFA. Investigação em
-          # aberto na issue #80; NÃO reintroduzir sem entender o porquê.
         env:
           INTERNAL_SECRET: ci-placeholder-nao-e-segredo
           CPF_ENCRYPTION_KEY: ci-placeholder-nao-e-segredo
@@ -140,12 +141,11 @@ jobs:
           {
             echo "## E2E — cobertura deste job"
             echo ""
-            echo "**Rodou (9 de 20 specs):** smoke, auth, error-pages, password-recovery,"
-            echo "signup-journey, rbac-roles, inbox-scope, degradacao-silenciosa,"
-            echo "vps-webhook-outbound-ssrf."
+            echo "**Rodou (10 de 20 specs):** smoke, auth, error-pages, password-recovery,"
+            echo "signup-journey, rbac-roles, inbox-scope, reset-password-mfa,"
+            echo "degradacao-silenciosa, vps-webhook-outbound-ssrf."
             echo ""
-            echo "**Não rodou (11):**"
-            echo "- excluída sob investigação: reset-password-mfa (issue #80)"
+            echo "**Não rodou (10):**"
             echo "- precisa de WAHA: followup-journey, webhooks"
             echo "- precisa de WAHA + Redis + Resend + Nuvemshop: vps-fresh-onboarding"
             echo "- precisa de seed próprio: followup-builder, followup-queue,"
