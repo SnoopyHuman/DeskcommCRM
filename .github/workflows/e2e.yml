@@ -112,7 +112,11 @@ jobs:
       # para o boot passar da validação Zod — nenhum segredo real entra aqui.
       - name: E2E (subconjunto sem dependência externa)
         run: |
-          pnpm exec playwright test reset-password-mfa.spec.ts --trace on
+          pnpm exec playwright test --workers=1 \
+            smoke.spec.ts auth.spec.ts error-pages.spec.ts \
+            password-recovery.spec.ts signup-journey.spec.ts \
+            rbac-roles.spec.ts inbox-scope.spec.ts reset-password-mfa.spec.ts \
+            degradacao-silenciosa.spec.ts vps-webhook-outbound-ssrf.spec.ts
           # FORA daqui, e não por acaso: `reset-password-mfa.spec.ts`. Ela falha
           # neste ambiente e ainda não sabemos se é defeito do produto ou do
           # setup — a irmã `password-recovery` passa, então `/auth/confirm`
