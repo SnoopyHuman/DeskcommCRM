@@ -8444,6 +8444,145 @@ create unique index if not exists uniq_system_update_runs_dispatched
 update public.crm_stages set name = 'Em separação' where name = 'Em separacao';
 update public.crm_stages set name = 'Pós-venda'    where name = 'Pos-venda';
 
+-- ---- channel provider (migration 0087) ----
+-- O canal deixa de ser suposto. Até aqui o sistema INTEIRO supunha WAHA (o
+-- handler de envio chamava `getAdapter("waha")` com literal; o ctx de produção
+-- do `before_send` fixava `provider: 'waha'`), e supor o canal é o que impede o
+-- seam de existir.
+--
+-- Tagged union, não flag: `provider` sozinho aceitaria uma sessão `meta_cloud`
+-- sem `meta_phone_number_id` e uma `waha` sem `waha_session_name` — as duas
+-- irresolvíveis na hora do envio, descobertas em runtime com a mensagem do
+-- cliente já aceita. O CHECK move a descoberta para o INSERT.
+--
+-- `waha_session_name` perde o NOT NULL porque ele É o identificador de um dos
+-- ramos da união; obrigatório, `meta_cloud` seria inexprimível. A UNIQUE dele
+-- continua valendo (NULLs são distintos no Postgres).
+--
+-- NÃO cria índice único de (organization_id, phone_number): a trava já existe
+-- desde o snapshot — `channel_sessions_phone_per_org_unique ... DEFERRABLE
+-- INITIALLY DEFERRED` — e já responde a "um número vive em UM provider", porque
+-- não olha o provider. Duplicá-la custaria checagem em toda escrita e colocaria
+-- uma trava NÃO-deferível ao lado de uma deferível, quebrando no meio qualquer
+-- transação que hoje troca números entre sessões.
+--
+-- Auto-curativo para o `update.sh` de clone: o default preenche as linhas
+-- existentes no mesmo ALTER e `waha_session_name` era NOT NULL antes desta
+-- mudança — então TODA linha pré-existente já satisfaz o ramo 'waha' quando o
+-- CHECK nasce. Não há dado a deduplicar antes da constraint.
+alter table public.channel_sessions
+  add column if not exists provider text not null default 'waha',
+  add column if not exists meta_phone_number_id text,
+  add column if not exists meta_waba_id text,
+  add column if not exists meta_token_encrypted bytea;
+
+alter table public.channel_sessions alter column waha_session_name drop not null;
+
+do $$ begin
+  alter table public.channel_sessions add constraint channel_sessions_provider_check
+    check (provider = any (array['waha'::text, 'meta_cloud'::text]));
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter table public.channel_sessions add constraint channel_sessions_provider_ref_check check (
+    (provider = 'waha'       and waha_session_name    is not null) or
+    (provider = 'meta_cloud' and meta_phone_number_id is not null)
+  );
+exception when duplicate_object then null; end $$;
+
+comment on column public.channel_sessions.provider is
+  'Canal desta sessão. Vocabulário espelhado em lib/channels/types.ts → ChannelProvider (cobrado por tests/invariants/vocabulario-banco-x-typescript.test.ts).';
+
+-- ---- meta templates (migration 0088) ----
+-- Espelho idempotente da migration 0088. Racional completo no arquivo da
+-- migration; aqui fica o que o install.sh/update.sh precisa executar.
+
+create table if not exists public.meta_templates (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  waba_id text not null,
+  name text not null,
+  language text not null,
+  status text not null,                 -- APPROVED | PENDING | REJECTED | PAUSED | DISABLED
+  category text,
+  rejected_reason text,
+  quality_score text,
+  -- Payload de `components` como a Meta o devolveu. É a ENTRADA de
+  -- deriveTemplateContract; guardar o derivado seria a segunda fonte da verdade
+  -- que esta fase inteira existe para eliminar.
+  components jsonb not null,
+  -- sha256 do contrato DERIVADO (não do jsonb cru): muda quando parâmetro muda,
+  -- não muda quando alguém corrige uma vírgula no texto.
+  contract_hash text not null,
+  parameter_format text not null default 'POSITIONAL',
+  synced_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+do $$ begin
+  alter table public.meta_templates
+    add constraint meta_templates_parameter_format_check
+    check (parameter_format in ('POSITIONAL', 'NAMED'));
+exception when duplicate_object then null; end $$;
+
+-- COMMENTs ficam no banco: aparecem em `\d+` e no Supabase Studio, onde quem
+-- inspeciona a tabela não tem este arquivo à mão.
+comment on table public.meta_templates is
+  'Espelho local dos templates hospedados na Meta (migration 0088). Derivado, nunca autoritativo: o schema vive na Meta. contract_hash sai de lib/channels/meta/contract-hash.ts e é a âncora da trava por obsolescência.';
+comment on column public.meta_templates.status is
+  'Vocabulário ABERTO da Meta — deliberadamente SEM CHECK (ela cria estado novo sem avisar; CHECK quebraria o update.sh do clone). Espelhado em lib/channels/meta/template-sync.ts.';
+comment on column public.meta_templates.contract_hash is
+  'SHA-256 do contrato DERIVADO (slots + parameter_format), não do JSON cru. Config de disparo guarda este hash; divergência = config obsoleta.';
+comment on column public.meta_templates.parameter_format is
+  'Valor NORMALIZADO por deriveTemplateContract, não o cru da Meta — por isso TEM CHECK, ao contrário de status.';
+
+create unique index if not exists meta_templates_org_waba_name_lang_uniq
+  on public.meta_templates (organization_id, waba_id, name, language);
+
+-- `name` no fim serve a listagem ordenada da tela sem sort extra (índice dele,
+-- superset do meu — combinado em vez de escolhido).
+create index if not exists meta_templates_org_status_idx
+  on public.meta_templates (organization_id, status, name);
+
+alter table public.meta_templates enable row level security;
+
+drop policy if exists tenant_isolation_meta_templates_all on public.meta_templates;
+create policy tenant_isolation_meta_templates_all on public.meta_templates
+  for all
+  using (organization_id in (select public.fn_user_org_ids()))
+  with check (organization_id in (select public.fn_user_org_ids()));
+
+-- ---- message type: template (migration 0091) ----
+-- Espelho idempotente. Racional completo no arquivo da migration: `template` NAO
+-- podia ser gravado como 'text' porque o tipo e a unica coluna que carrega custo
+-- (template e cobrado por entrega), conformidade de janela, e o que o contato viu.
+-- Backfill: nenhum por construcao — o conjunto antigo e subconjunto do novo.
+
+do $$ begin
+  alter table public.messages drop constraint if exists messages_type_check;
+  alter table public.messages add constraint messages_type_check
+    check (type = any (array[
+      'text', 'image', 'video', 'audio', 'document', 'sticker',
+      'location', 'contact', 'reaction', 'system',
+      -- novo: envio de template aprovado (canal oficial, fora da janela de 24h)
+      'template'
+    ]));
+end $$;
+
+-- Nome do template disparado. Fica em coluna, não só em `metadata`, porque é o que
+-- responde "quanto gastei com o template X?" sem varrer jsonb — e porque `metadata`
+-- é vocabulário aberto por desenho, o que tornaria a consulta uma aposta.
+alter table public.messages
+  add column if not exists template_name text,
+  add column if not exists template_language text;
+
+comment on column public.messages.template_name is
+  'Nome do template da Meta quando type = template. Null nos demais tipos. Em coluna (não em metadata) porque é a chave de custo e de auditoria de janela.';
+
+create index if not exists messages_template_idx
+  on public.messages (organization_id, template_name)
+  where template_name is not null;
 -- ---- "não consegui comparar" não é "está em dia" (migration 0093) ----
 --
 -- Sem esta coluna, o agente que falha ao comparar (clone raso sem conseguir

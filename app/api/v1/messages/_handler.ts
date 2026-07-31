@@ -11,13 +11,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/api/types";
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import {
+  CHANNEL_SESSION_REF_COLUMNS,
+  DEFAULT_CHANNEL_PROVIDER,
+  getAdapter,
+  resolveSessionRef,
+  type ChannelSessionRef,
+} from "@/lib/channels";
+import { isMediaPathOwnedBy } from "@/lib/messaging/media/upload-validation";
 import type { ListMessagesQuery, SendMessageInput } from "@/lib/schemas";
+import { sendTemplateForSession } from "@/lib/channels/meta/send-template-for-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { Message } from "@/lib/types/messaging";
-import { getWahaClient } from "@/lib/waha/client";
-import { isMediaPathOwnedBy, wahaSendPlanFor } from "@/lib/waha/media-send";
-import { parseWahaMessageId } from "@/lib/waha/message-id";
-import { resolveWahaChatId } from "@/lib/waha/send";
 
 type SB = SupabaseClient;
 
@@ -132,7 +137,7 @@ export async function sendMessageHandler(
   const { data: conv, error: convErr } = await supabase
     .from("conversations")
     .select(
-      "id, organization_id, contact_id, channel_session_id, is_group, group_chat_id, contacts:contact_id(phone_number, wa_identity, is_blocked), channel_sessions:channel_session_id(waha_session_name, status)",
+      `id, organization_id, contact_id, channel_session_id, is_group, group_chat_id, contacts:contact_id(phone_number, wa_identity, is_blocked), channel_sessions:channel_session_id(${CHANNEL_SESSION_REF_COLUMNS}, status)`,
     )
     .eq("id", input.conversation_id)
     .maybeSingle();
@@ -152,7 +157,7 @@ export async function sendMessageHandler(
     is_group: boolean;
     group_chat_id: string | null;
     contacts: { phone_number: string | null; wa_identity: string | null; is_blocked: boolean } | null;
-    channel_sessions: { waha_session_name: string; status: string } | null;
+    channel_sessions: (ChannelSessionRef & { status: string }) | null;
   };
   const c = conv as unknown as Joined;
 
@@ -216,19 +221,23 @@ export async function sendMessageHandler(
   }
   let message = created as unknown as Message;
 
-  const waha = getWahaClient();
-  const chatId = resolveWahaChatId({
+  // O canal vem da SESSÃO (migration 0087), não de um literal. O fallback só
+  // alcança o caso em que o embed não trouxe a sessão — impossível hoje
+  // (`conversations.channel_session_id` é NOT NULL com FK ON DELETE RESTRICT),
+  // e ainda assim mantido para não trocar o desfecho desse ramo defensivo.
+  const adapter = getAdapter(c.channel_sessions?.provider ?? DEFAULT_CHANNEL_PROVIDER);
+  const chatId = adapter.resolveRecipient({
     isGroup: c.is_group,
     groupChatId: c.group_chat_id,
     phoneNumber: c.contacts?.phone_number,
     waIdentity: c.contacts?.wa_identity,
   });
 
-  if (!waha) {
+  if (!adapter.isConfigured()) {
     const { data: updated } = await supabase
       .from("messages")
       .update({
-        metadata: { ...(message.metadata ?? {}), queued_reason: "waha_not_configured" },
+        metadata: { ...(message.metadata ?? {}), queued_reason: adapter.codes.notConfigured },
       })
       .eq("id", message.id)
       .select(MSG_COLS)
@@ -261,9 +270,24 @@ export async function sendMessageHandler(
     if (updated) message = updated as unknown as Message;
   } else {
     try {
-      let wahaRes: unknown;
-      if (input.media_storage_path) {
-        // Storage-first: signed URL curta só pro WAHA baixar (nunca base64).
+      // O que separa mídia de texto é a presença de `media` no envelope — o
+      // adapter preserva o mesmo branch (e a mesma mensagem de erro de cada
+      // método) do outro lado do seam.
+      let externalId: string | null;
+      if (input.type === "template") {
+        // Template é caminho próprio: não passa pelo `adapter.send` (que fala em
+        // texto/mídia) porque o payload da plataforma é outro — e porque o envio
+        // exige checar o contrato ANTES de sair (bind vigente, valores completos),
+        // coisa que só faz sentido para template.
+        externalId = await sendTemplateForSession(supabase, {
+          organizationId: ctx.organization_id,
+          to: chatId,
+          name: input.template_name ?? "",
+          language: input.template_language ?? "",
+          values: input.template_values ?? {},
+        });
+      } else if (input.media_storage_path) {
+        // Storage-first: signed URL curta só pro canal baixar (nunca base64).
         const admin = createAdminClient();
         const { data: signed, error: signErr } = await admin.storage
           .from("whatsapp-media")
@@ -272,37 +296,48 @@ export async function sendMessageHandler(
           throw new Error(`storage_sign_failed: ${signErr?.message ?? "no_url"}`);
         }
         const filename = input.media_storage_path.split("/").pop() ?? undefined;
-        wahaRes = await waha.sendMedia(
-          c.channel_sessions.waha_session_name,
-          chatId,
-          wahaSendPlanFor(input.type, {
+        ({ externalId } = await adapter.send({
+          sessionRef: resolveSessionRef(c.channel_sessions),
+          to: chatId,
+          kind: input.type,
+          media: {
             url: signed.signedUrl,
             mime: input.media_mime ?? "application/octet-stream",
             filename,
             caption: input.body ?? null,
-          }),
-        );
+          },
+        }));
       } else {
-        wahaRes = await waha.sendMessage(
-          c.channel_sessions.waha_session_name,
-          chatId,
-          input.body ?? "",
-        );
+        ({ externalId } = await adapter.send({
+          sessionRef: resolveSessionRef(c.channel_sessions),
+          to: chatId,
+          kind: input.type,
+          body: input.body ?? "",
+        }));
       }
-      // Fase 4A-3: o shape do id varia por engine (string | {_serialized} |
-      // NOWEB {id:{id}} | {key:{id}}) — parser compartilhado cobre todos; sem
-      // external_id o ack do webhook duplica a linha em vez de atualizar.
-      const externalId = parseWahaMessageId(wahaRes);
       const { data: updated } = await supabase
         .from("messages")
-        .update({ status: "sent", external_id: externalId, ack: 0 })
+        .update({
+          status: "sent",
+          external_id: externalId,
+          ack: 0,
+          // Colunas só do template — é o que responde custo e conformidade de
+          // janela depois, sem varrer jsonb.
+          ...(input.type === "template"
+            ? { template_name: input.template_name, template_language: input.template_language }
+            : {}),
+        })
         .eq("id", message.id)
         .select(MSG_COLS)
         .maybeSingle();
       if (updated) message = updated as unknown as Message;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "waha_unknown";
-      const code = msg.startsWith("storage_sign_failed") ? "storage_sign_failed" : "waha_error";
+      const msg = err instanceof Error ? err.message : adapter.codes.unknownError;
+      // `storage_sign_failed` fica literal: é falha do NOSSO Storage, não do
+      // canal — a URL assinada é montada antes de qualquer coisa tocar o adapter.
+      const code = msg.startsWith("storage_sign_failed")
+        ? "storage_sign_failed"
+        : adapter.codes.sendFailed;
       const { data: updated } = await supabase
         .from("messages")
         .update({

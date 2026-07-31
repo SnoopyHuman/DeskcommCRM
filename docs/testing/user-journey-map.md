@@ -281,3 +281,103 @@ espaço e acento, que era o gatilho do defeito #6.
 | 28 | 🟠 **CI vermelho por lentidão, não por defeito.** O teste que abre processo filho (`npx tsx`) leva ~5s e o timeout padrão do vitest é 5s — derrubou a `main` num PR que só mexia em documentação | corrigido — timeout explícito de 60s; 3 rodadas seguidas verdes. O controle positivo continua provando o aparato |
 
 **Nota de ambiente:** o `.env` da VPS foi apontado para `ghcr.io/...:latest` durante o QA, porque o fluxo de release novo fixa a imagem numa tag (`1.1.0`) e as correções desta sessão estão à frente dela. Para voltar ao comportamento de release, basta repor `APP_IMAGE` com a tag desejada.
+
+## RAG do tenant — implementado e provado (2026-07-30)
+
+Autorizado pelo dono, o RAG saiu do stub. **Cinco defeitos encadeados**: cada
+conserto revelava o próximo, e nenhum aparecia sem rodar de verdade.
+
+| # | Defeito | Como apareceu |
+|---|---|---|
+| 29 | Handler de `knowledge_source.updated` era stub declarado | só `nuvemshop.product_synced` indexava — e a Nuvemshop vem desligada |
+| 30 | `ON CONFLICT` apontava para constraint **inexistente** | *"there is no unique or exclusion constraint matching"* — TODO chunk falhava. **O mesmo alvo errado estava no caminho de produto**: o RAG nunca gravou um chunk, para nenhuma fonte |
+| 31 | `token_count` é NOT NULL e ninguém preenchia | *"null value in column token_count"* |
+| 32 | 🔴 Versão **vazia** era marcada `ready` e **ativada** | numa instalação com base funcionando, uma indexação com problema trocaria a base boa por uma vazia — o agente perderia o RAG em silêncio |
+| 33 | Fonte tipo `policy` era criada **vazia**, conteúdo descartado | a rota só tratava `source_type === "faq"`; política enviada com markdown voltava 201 com o conteúdo no lixo |
+| 34 | 🔴 Limiar padrão **0.72** descartava toda paráfrase | medido: relevante 0.49–0.85, irrelevante 0.27. Só a pergunta **literal** passava — o RAG parecia quebrado funcionando bem |
+
+**Decisão de arquitetura tomada** (a que faltava para destravar): a reindexação
+**reconstrói UMA versão com TODAS as fontes**, em vez de uma versão por fonte —
+a busca recebe um único `kb_version_id` e o agente aponta para uma única versão
+ativa; uma versão por fonte faria o FAQ desativar o catálogo e vice-versa.
+
+**Prova final, medida:** FAQ (4 itens) + Política (2 itens) → versão 5 com 6
+chunks, ativa. Busca atravessando as duas fontes:
+
+| Pergunta | Acerto | Semelhança |
+|---|---|---|
+| "quanto tempo demora pra chegar em BH?" | FAQ — prazo BH | 0.653 |
+| "e se eu quiser devolver o produto?" | Política — devolução | 0.649 |
+| "tem garantia?" | Política — garantia | 0.690 |
+| "aceita pix?" | FAQ — pagamento | 0.490 |
+
+E a tela ganhou o cadastro que faltava: o botão "Configurar" era stub `disabled`
+com um toast que nunca aparecia.
+
+## Áudio do WhatsApp
+
+| # | Defeito | Estado |
+|---|---|---|
+| 35 | 🔴 **A transcrição mandava a chave da Anthropic para a OpenAI.** O Whisper é da OpenAI, mas recebia `llm.apiKey` (provedor de chat da org) → `transcription_401` em toda tentativa, com a `OPENAI_API_KEY` certa no `.env` | corrigido — fallback de ambiente para OpenAI, simétrico ao que a Anthropic já tinha |
+| 36 | 🟠 **O agente responde ANTES de a mídia ser derivada** — dispatch às 20:24:22, derivação pedida às 20:25:03 | **aberto**: é ordenação de pipeline, não conserto pontual |
+
+Prova: áudio real recebido (`type: audio`), agente respondeu *"não consigo ouvi-lo"*.
+Com o 35 corrigido a transcrição passa a rodar; o 36 faz a PRIMEIRA resposta
+ainda sair antes dela.
+
+## Áudio: cadeia fechada (2026-07-31)
+
+| # | Defeito | Prova |
+|---|---|---|
+| 35 | A transcrição mandava a **chave da Anthropic para a OpenAI** (`transcription_401`) | mesmo áudio: antes *"não consigo ouvi-lo"*; depois transcrito (`"Oi!"`) e o agente respondeu ao conteúdo |
+| 36 | O turno era despachado **antes** de a mídia virar texto | log ao vivo: `drain: mídia ainda sendo transcrita — turno adiado (tipo: audio, esperando_ha_ms: 708)` |
+| 37 | 🔴 **Regressão minha**: o alerta de job morto referenciava `last_error` numa CTE que não o devolvia — e como esse reap roda no BOOT, **o worker parou de subir** | worker em loop de reinício; corrigido e validado executando a query INTEIRA contra o banco (em transação com rollback) |
+| 38 | Timeout padrão de 5s por teste reprovava teste saudável em máquina carregada | 3 falsos vermelhos locais em testes diferentes + 1 CI vermelho num PR de documentação; com 15s, 1473 testes verdes sob a mesma carga |
+
+**Erro de método registrado (nº 37):** validei a expressão SQL nova contra linhas
+reais, mas **isolada** — não dentro da CTE onde ela ia viver. Testei a peça, não
+a montagem, e a peça passou. Mudança dentro de string SQL agora se prova
+executando a query inteira.
+
+## Agente pausado que continuava gastando (2026-07-31)
+
+**Achado nº 39 — dinheiro indo pro ralo com o agente desligado.** Pausar o agente
+pela tela tirava a resposta do lead, mas **não** tirava o gasto: o drain
+enfileirava o turno assim mesmo, o worker resolvia credencial, chamava o LLM e só
+então descobria que não havia ninguém publicado para atender. O usuário via
+"pausado" e continuava pagando por token.
+
+**A guarda.** `lib/agent-engine/edge/crm/drain.ts` agora pergunta ao banco, **antes
+de enfileirar** (portanto antes de qualquer gasto), se existe alguém que pode
+atender aquela sessão: agente com versão `published` ligada à sessão, **ou**
+roteador ativo com fallback/membros. Não havendo nenhum dos dois, o turno é
+pulado com log explícito (`nenhum agente publicado para a sessão — turno pulado
+(sem gasto)`) e o evento fecha como processado — não fica reciclando na fila.
+
+**Medida na VPS, com contador de chamadas de LLM (`llm_calls`).** Primeira
+tentativa foi **teste confundido**: caiu na conversa que eu mesmo havia posto em
+atendimento humano, e o log disse "turno pulado — lead em handoff humano", que é
+outra guarda. Refiz com um contato sintético (`QA Sintetico`, número inexistente,
+para o envio falhar sem incomodar ninguém):
+
+| Estado do agente | `llm_calls` antes → depois | Resposta ao lead |
+|---|---|---|
+| pausado | 221 → **221** | nenhuma |
+| republicado | 221 → **227** | respondeu |
+
+Mesma mensagem, mesmo contato, só o estado do agente mudando — a diferença é do
+efeito, não do cenário.
+
+**Cobertura.** `drain.test.ts` ganhou 3 casos de capacidade (nenhum dos dois →
+pula; agente publicado → despacha; roteador com membro → despacha). Sabotada a
+guarda, ficam vermelhos.
+
+**Custo colateral, e a lição.** A guarda deixou vermelho o invariante
+`agent-dispatch-single-consumer`: o fixture dele nunca teve agente publicado,
+então o drain passou a pular — corretamente. O CI pegou, que é o trabalho dele. O
+fixture passou a criar o agente publicado: a premissa "existe alguém que pode
+atender" sempre esteve implícita ali, e a guarda apenas a tornou observável. A
+edição de invariante é congelada por hook; usei a válvula
+`DESKCOMM_GOV_INVARIANTS_EDIT=1` **declarando o uso no commit** (`685d6e7`) em vez
+de contornar em silêncio. CI verde em `2c045c4` (invariants, verify, e2e,
+build-and-size, build-and-push).

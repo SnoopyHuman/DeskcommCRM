@@ -1798,13 +1798,17 @@ export type Database = {
           is_warmup_complete: boolean | null
           last_health_check_at: string | null
           last_status_change_at: string
+          meta_phone_number_id: string | null
+          meta_token_encrypted: string | null
+          meta_waba_id: string | null
           metadata: Json
           organization_id: string
           phone_number: string | null
+          provider: string
           status: string
           status_reason: string | null
           updated_at: string
-          waha_session_name: string
+          waha_session_name: string | null
           warmup_completed_at: string | null
           warmup_started_at: string | null
           webhook_path_token: string
@@ -1821,13 +1825,17 @@ export type Database = {
           is_warmup_complete?: boolean | null
           last_health_check_at?: string | null
           last_status_change_at?: string
+          meta_phone_number_id?: string | null
+          meta_token_encrypted?: string | null
+          meta_waba_id?: string | null
           metadata?: Json
           organization_id: string
           phone_number?: string | null
+          provider?: string
           status?: string
           status_reason?: string | null
           updated_at?: string
-          waha_session_name: string
+          waha_session_name?: string | null
           warmup_completed_at?: string | null
           warmup_started_at?: string | null
           webhook_path_token?: string
@@ -1844,13 +1852,17 @@ export type Database = {
           is_warmup_complete?: boolean | null
           last_health_check_at?: string | null
           last_status_change_at?: string
+          meta_phone_number_id?: string | null
+          meta_token_encrypted?: string | null
+          meta_waba_id?: string | null
           metadata?: Json
           organization_id?: string
           phone_number?: string | null
+          provider?: string
           status?: string
           status_reason?: string | null
           updated_at?: string
-          waha_session_name?: string
+          waha_session_name?: string | null
           warmup_completed_at?: string | null
           warmup_started_at?: string | null
           webhook_path_token?: string

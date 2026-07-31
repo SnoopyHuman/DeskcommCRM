@@ -75,3 +75,58 @@ describe("authRateLimited", () => {
     expect(chaves).not.toContain("203.0.113.30");
   });
 });
+
+describe("sem IP identificável — o balde global que era um DoS", () => {
+  function semNenhumHeaderDeIp() {
+    vi.mocked(headers).mockResolvedValue({ get: () => null } as never);
+  }
+
+  it("não barra por IP quando não há de onde tirar o IP", async () => {
+    // A versão anterior jogava TODA tentativa sem header num único balde
+    // (`opaque("sem-ip")`). Como o kit self-host expõe o app sem proxy, esse era o
+    // caminho NORMAL: 60 requisições anônimas trancavam o login da instalação
+    // inteira, e o atacante dividia o balde com as vítimas em vez de ficar isolado.
+    const { authRateLimited } = await import("./rate-limit");
+    semNenhumHeaderDeIp();
+    const limites = { ip: 3, windowSec: 300 };
+
+    const veredito: boolean[] = [];
+    for (let i = 0; i < 6; i++) {
+      veredito.push(await authRateLimited("teste_sem_ip", null, limites));
+    }
+
+    expect(veredito).toEqual([false, false, false, false, false, false]);
+  });
+
+  it("mas o teto por CONTA continua valendo sem IP — é ele que barra força bruta", async () => {
+    // O contrapeso que impede a leitura preguiçosa "sem IP não tem limite": a
+    // proteção que realmente importa contra adivinhação de senha não depende de IP,
+    // e é exatamente a desenhada para o ataque distribuído.
+    const { authRateLimited } = await import("./rate-limit");
+    semNenhumHeaderDeIp();
+    const limites = { ip: 100, id: 2, windowSec: 300 };
+
+    const veredito: boolean[] = [];
+    for (let i = 0; i < 3; i++) {
+      veredito.push(await authRateLimited("teste_conta", "alvo@example.com", limites));
+    }
+
+    expect(veredito).toEqual([false, false, true]);
+  });
+
+  it("x-real-ip serve quando x-forwarded-for não vem — Nginx simples só seta esse", async () => {
+    const { authRateLimited } = await import("./rate-limit");
+    vi.mocked(headers).mockResolvedValue({
+      get: (k: string) => (k === "x-real-ip" ? "203.0.113.77" : null),
+    } as never);
+    const limites = { ip: 2, windowSec: 300 };
+
+    const veredito: boolean[] = [];
+    for (let i = 0; i < 3; i++) {
+      veredito.push(await authRateLimited("teste_real_ip", null, limites));
+    }
+
+    // Barra na terceira: o IP FOI reconhecido, senão nenhuma seria barrada.
+    expect(veredito).toEqual([false, false, true]);
+  });
+});

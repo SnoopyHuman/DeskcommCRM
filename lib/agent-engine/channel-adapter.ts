@@ -22,6 +22,20 @@ export interface ChannelSendInput {
   /** referência da conversa no canal (conversation_id do CRM na v1) */
   conversationId: string;
   body: string;
+  /**
+   * Presente = este envio é um TEMPLATE aprovado, não texto livre.
+   *
+   * Opcional de propósito: o contrato continua válido para todo canal que só sabe
+   * texto, e um adapter que ignore o campo envia o `body` — que já é o template
+   * RENDERIZADO (ver `lib/channels/meta/render-template.ts`). Degrada para texto em
+   * vez de estourar, e o `body` renderizado é o que os gates de conteúdo avaliaram.
+   */
+  template?: {
+    name: string;
+    language: string;
+    /** Valor por slot, chaveado por `slotKey` — a mesma chave da tela. */
+    values: Record<string, string>;
+  };
 }
 
 /**

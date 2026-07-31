@@ -34,6 +34,7 @@ function baseCtx(overrides: Partial<GateContext> = {}): GateContext {
     now: new Date("2026-07-23T12:00:00Z"),
     body: "",
     optedOut: false,
+    provider: "waha",
     pacing: { knobs: PACING_DEFAULTS, state: { lastSentAt: null, sentToday: 0, numberActivatedAt: null }, crmDailyLimit: null },
     spinning: { knobs: SPINNING_DEFAULTS, window: [] },
     promise: { table: null },

@@ -8,6 +8,7 @@
  */
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import type { AuthUser, Role, UserOrgMembership, ActiveOrg } from "./types";
 
@@ -36,7 +37,11 @@ export async function loadAuthUser(): Promise<AuthUser | null> {
   if (!user) return null;
 
   // Platform admin? (active = no revoked_at). RLS returns null for non-admins.
-  const { data: paRow } = await supabase
+  //
+  // ⚠️ O erro é capturado de propósito: aqui `data: null` é AMBÍGUO — significa tanto
+  // "não é platform admin" (RLS filtrou, estado normal) quanto "a query falhou".
+  // Sem separar os dois, um banco instável rebaixa silenciosamente um super-admin.
+  const { data: paRow, error: paErro } = await supabase
     .from("platform_admins")
     .select("user_id, revoked_at")
     .eq("user_id", user.id)
@@ -44,11 +49,43 @@ export async function loadAuthUser(): Promise<AuthUser | null> {
     .maybeSingle();
 
   // Org memberships (only active = not revoked, accepted)
-  const { data: rawMemberships } = await supabase
+  const { data: rawMemberships, error: membErro } = await supabase
     .from("user_organizations")
     .select("organization_id, role, organizations(display_name)")
     .eq("user_id", user.id)
     .is("revoked_at", null);
+
+  /**
+   * FALHA ALTO, não baixo.
+   *
+   * Antes, o erro destas duas queries era descartado e `rawMemberships` nulo virava
+   * `[]` — ou seja, "usuário sem organização". O resultado é que uma instabilidade do
+   * banco chega ao operador como **"você não pertence a nenhuma organização"**: as
+   * telas de admin somem, as rotas devolvem 403, e nada indica que a causa é
+   * infraestrutura.
+   *
+   * Medido em 2026-07-30: com o PostgREST devolvendo `name resolution failed` depois
+   * de um restart do Docker, TODOS os cards de admin sumiram do hub de configurações.
+   * Custou seis diagnósticos errados — build velho, processo velho, cache, filtro de
+   * papel — antes de alguém olhar a causa real.
+   *
+   * Degradar permissão em silêncio é o pior desfecho possível num caminho de auth:
+   * parece uma decisão de autorização e é um defeito de infra. Melhor estourar e
+   * mostrar erro do que renderizar uma UI mentirosa.
+   */
+  if (paErro || membErro) {
+    const detalhe = (paErro ?? membErro)!;
+    logger.error("[auth] não foi possível resolver permissões do usuário", {
+      user_id: user.id,
+      onde: paErro ? "platform_admins" : "user_organizations",
+      code: detalhe.code,
+      message: detalhe.message,
+    });
+    throw new Error(
+      `auth_permissions_unavailable: ${detalhe.message} — permissões não puderam ser ` +
+        `resolvidas; a sessão NÃO foi rebaixada por decisão de autorização.`,
+    );
+  }
 
   const rows = (rawMemberships ?? []) as RawMembershipRow[];
   const memberships: UserOrgMembership[] = rows.map((row) => {

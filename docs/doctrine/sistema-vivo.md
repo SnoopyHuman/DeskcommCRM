@@ -46,6 +46,13 @@ Todo dado exibido responde "**por que estou vendo isto e o que faço a seguir**"
 
 - **Verificação:** cada elemento de dado tem um "e daí?" — leva a uma ação, uma priorização, ou um alerta.
 
+### 6. Toda configuração tem superfície
+Os invariantes 3 e 5 cobrem o que **aconteceu** e o que se **vê**. Este cobre o que está **valendo**: nenhum mecanismo de backend pode depender de estado configurável que não tenha **tela para ver, tela para mudar, e caminho visível de falha**. Um mecanismo operável só por quem lê o banco não é operável.
+
+- **Anti-exemplo:** existir disparo de template por follow-up sem nenhuma área para ver ou configurar templates — o mecanismo funciona e é invisível, o que é pior que não existir (falha sem culpado).
+- **Verificação:** para todo estado configurável existe (a) rota de leitura na UI, (b) rota de escrita na UI, e (c) falta de configuração vira item de inbox ou banner — nunca um `return` mudo no worker.
+- **Doutrina irmã:** [`restricao-de-canal.md`](./restricao-de-canal.md) aplica isto ao eixo dos canais externos (auto-restrição × hetero-restrição, contrato de parâmetros derivado).
+
 ---
 
 ## Living System Checklist
@@ -59,6 +66,7 @@ Living System Checklist — <nome da feature>
 [ ] Que atividade/log eu emito?  (event_log / audit / crm_lead_activities)
 [ ] Onde eu apareço na tela?  (timeline/insight — não só no banco)
 [ ] Qual meu mecanismo anti-morte?  (próximo passo garantido, ou N/A justificado)
+[ ] Onde se CONFIGURA o que eu uso?  (tela de ver + tela de mudar; e o que aparece se faltar)
 [ ] Qual a continuidade IA↔humano?  (payload de handoff nas duas direções, se aplicável)
 [ ] Atualizei o mapa vivo?  (docs/architecture/*.json + re-render archify se a arquitetura mudou)
 ```

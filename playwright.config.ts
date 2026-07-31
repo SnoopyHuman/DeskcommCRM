@@ -9,6 +9,23 @@ export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
   fullyParallel: false,
+  /**
+   * UM worker. `fullyParallel: false` serializa apenas DENTRO de cada arquivo —
+   * entre arquivos o Playwright continua abrindo vários workers, e estes specs
+   * compartilham a MESMA organização, os MESMOS usuários e o MESMO banco: um
+   * spec revoga acesso enquanto outro checa escopo, um cria convite enquanto
+   * outro conta membros.
+   *
+   * Medido em 2026-07-31: rodando a suíte inteira, 10 a 15 specs falhavam com
+   * `waitForURL` estourando depois do login e elementos "not found"; os MESMOS
+   * specs, rodados isolados, passavam em 18s. Não era lógica nem lentidão: era
+   * interferência.
+   *
+   * O custo é wall-clock no CI. O benefício é que um vermelho volta a significar
+   * "quebrou" em vez de "deu azar na ordem" — e suíte que falha por azar ninguém
+   * lê, o que na prática desliga o gate inteiro.
+   */
+  workers: 1,
   retries: 0,
   use: {
     baseURL: BASE_URL,

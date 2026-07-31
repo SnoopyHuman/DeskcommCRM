@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { isMediaPathOwnedBy, wahaSendPlanFor } from "@/lib/waha/media-send";
+import { isMediaPathOwnedBy } from "@/lib/messaging/media/upload-validation";
+import { wahaSendPlanFor } from "@/lib/waha/media-send";
 
 const media = { url: "https://signed.example/x?token=t", mime: "image/jpeg", filename: "x.jpg", caption: "oi" };
 

@@ -32,6 +32,25 @@ export interface AuthRateLimits {
   windowSec: number;
 }
 
+/**
+ * IP do cliente, ou `null` quando não dá para saber.
+ *
+ * `x-forwarded-for` é o header do proxy; `x-real-ip` é o que Nginx costuma setar
+ * sozinho em configurações simples. Nenhum dos dois é confiável contra spoofing —
+ * mas o uso aqui é rate limit, onde forjar o header só isola o atacante em outro
+ * balde, nunca dá acesso.
+ *
+ * `null` em vez de uma string sentinela: "não sei de onde veio" precisa ser
+ * inexprimível como se fosse uma origem, senão vira balde compartilhado.
+ */
+async function clientIp(): Promise<string | null> {
+  const hdrs = await headers();
+  const encaminhado = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (encaminhado) return encaminhado;
+  const real = hdrs.get("x-real-ip")?.trim();
+  return real || null;
+}
+
 function opaque(value: string): string {
   return createHash("sha256").update(value.trim().toLowerCase()).digest("hex").slice(0, 32);
 }
@@ -47,11 +66,29 @@ export async function authRateLimited(
   identifier: string | null,
   limits: AuthRateLimits,
 ): Promise<boolean> {
-  const hdrs = await headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() || "sem-ip";
+  const ip = await clientIp();
 
-  const byIp = await checkRateLimit(`auth:${action}:ip:${opaque(ip)}`, limits.ip, limits.windowSec);
-  if (!byIp.allowed) return true;
+  // SEM IP identificável, o limite por IP não entra — e isto é decisão de
+  // segurança, não relaxamento.
+  //
+  // O teto por IP existe para ISOLAR uma origem: barrar quem varre muitas contas
+  // de um lugar só. Quando o header não chega, não há origem para isolar, e a
+  // versão anterior jogava todo mundo num ÚNICO balde global (`opaque("sem-ip")`).
+  // O efeito é o oposto do pretendido: o atacante não fica isolado (ele divide o
+  // balde com as vítimas) e 60 requisições anônimas trancam o login da instalação
+  // INTEIRA. Vira um DoS de custo zero contra a própria empresa.
+  //
+  // E o caso não é hipotético: o kit self-host expõe o app direto, sem proxy
+  // (`docker-compose.prod.yml`), então `x-forwarded-for` não existe em nenhuma
+  // instalação padrão — ou seja, o balde global era o caminho NORMAL, não a exceção.
+  //
+  // O que barra força bruta de senha continua valendo integralmente: o contador por
+  // CONTA (`contaBloqueadaPorFalhas`), que não depende de IP nenhum e é justamente o
+  // desenhado para o ataque distribuído.
+  if (ip !== null) {
+    const byIp = await checkRateLimit(`auth:${action}:ip:${opaque(ip)}`, limits.ip, limits.windowSec);
+    if (!byIp.allowed) return true;
+  }
 
   if (identifier && limits.id !== undefined) {
     const byId = await checkRateLimit(

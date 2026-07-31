@@ -13,13 +13,13 @@
  *   5. Load history sliding window
  *   6. generateText with stopWhen=[stepCountIs(maxSteps), budgetGuard]
  *   7. Detect handoff signal → finalizeHandoff('agent_invoked_tool')
- *   8. !dry_run → outbound message via sendMessageHandler (WAHA)
+ *   8. !dry_run → outbound message via sendMessageHandler (canal da sessão)
  *   9. finalizeRun
  *  10. revoke ephemeral token (always)
  *
  * Robustness:
  *   - Try/catch global: any throw → finalizeRun('failed', error_message=...).
- *   - Dry-run path bypasses concurrency unique guard, WAHA dispatch, outbound row.
+ *   - Dry-run path bypasses concurrency unique guard, channel dispatch, outbound row.
  *   - Plaintext API keys are never logged.
  */
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -40,7 +40,13 @@ import { loadHistoryWithBudget } from "./history";
 import { mintEphemeralToken, revokeEphemeralToken } from "./mcp_token";
 import { pickToolsFromMcp, type RuntimeHandoffSignal } from "./tools";
 import { serializeSteps } from "./serialize";
-import { resolveWahaChatId } from "@/lib/waha/send";
+import {
+  CHANNEL_SESSION_REF_COLUMNS,
+  DEFAULT_CHANNEL_PROVIDER,
+  getAdapter,
+  resolveSessionRef,
+  type ChannelSessionRef,
+} from "@/lib/channels";
 
 export interface RunAgentInput {
   runId: string;
@@ -269,7 +275,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       const { data: convRaw } = await admin
         .from("conversations")
         .select(
-          "id, group_chat_id, is_group, contacts:contact_id(phone_number, wa_identity), channel_sessions:channel_session_id(waha_session_name)",
+          `id, group_chat_id, is_group, contacts:contact_id(phone_number, wa_identity), channel_sessions:channel_session_id(${CHANNEL_SESSION_REF_COLUMNS})`,
         )
         .eq("id", run.conversation_id)
         .eq("organization_id", run.organization_id)
@@ -279,11 +285,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         group_chat_id: string | null;
         is_group: boolean;
         contacts: { phone_number: string | null; wa_identity: string | null } | null;
-        channel_sessions: { waha_session_name: string } | null;
+        channel_sessions: ChannelSessionRef | null;
       } | null;
       if (conv) {
-        waSessionName = conv.channel_sessions?.waha_session_name ?? null;
-        chatId = resolveWahaChatId({
+        // Mesmo seam do handler de envio: quem sabe de que coluna sai o ref da
+        // sessão, e como o telefone vira endereço, é `lib/channels/`.
+        waSessionName = conv.channel_sessions ? resolveSessionRef(conv.channel_sessions) : null;
+        chatId = getAdapter(conv.channel_sessions?.provider ?? DEFAULT_CHANNEL_PROVIDER).resolveRecipient({
           isGroup: conv.is_group,
           groupChatId: conv.group_chat_id,
           phoneNumber: conv.contacts?.phone_number,
@@ -519,7 +527,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       };
     }
 
-    // 16) Happy path. Send WAHA reply when not dry-run.
+    // 16) Happy path. Send the reply through the channel when not dry-run.
     let outboundMessageId: string | null = null;
     const finalText = (result.text ?? "").trim();
     if (!run.is_dry_run && finalText && run.conversation_id) {

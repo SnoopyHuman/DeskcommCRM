@@ -32,6 +32,8 @@ const CONTACT = "aaaaaaaa-0000-4000-8000-000000000002";
 const SESSION = "aaaaaaaa-0000-4000-8000-000000000003";
 const CONV = "aaaaaaaa-0000-4000-8000-000000000004";
 const MSG = "aaaaaaaa-0000-4000-8000-000000000005";
+const AGENT = "aaaaaaaa-0000-4000-8000-000000000006";
+const VERSION = "aaaaaaaa-0000-4000-8000-000000000007";
 
 const DRAIN_KNOBS = {
   batchSize: 20,
@@ -70,6 +72,25 @@ beforeAll(async () => {
      on conflict (id) do nothing`,
     [MSG, ORG, CONV, SESSION, CONTACT],
   );
+
+  // Agente PUBLICADO para a sessão — premissa que este teste sempre teve
+  // implícita e que o drain agora cobra: sem ninguém que possa atender, ele
+  // pula o turno de propósito, para não pagar LLM com o agente desligado.
+  // Sem esta linha o teste mediria a guarda de custo, não a unicidade do
+  // consumidor, que é o que ele existe para congelar.
+  await pool.query(
+    `insert into ai_agents (id, organization_id, name, system_prompt)
+     values ($1, $2, 'Agente Prova', 'você é um atendente') on conflict (id) do nothing`,
+    [AGENT, ORG],
+  );
+  await pool.query(
+    `insert into ai_agent_versions (id, organization_id, agent_id, version_number, system_prompt,
+                                    provider, model, channel_session_id, status, published_at)
+     values ($1, $2, $3, 1, 'você é um atendente', 'anthropic', 'claude-sonnet-4-6', $4, 'published', now())
+     on conflict (id) do nothing`,
+    [VERSION, ORG, AGENT, SESSION],
+  );
+  await pool.query(`update ai_agents set published_version_id = $1 where id = $2`, [VERSION, AGENT]);
 });
 
 afterAll(async () => {

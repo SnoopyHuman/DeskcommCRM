@@ -14,6 +14,7 @@ import { createDefaultRegistry } from "@/lib/agent-engine/edge/llm/providers";
 import { createPool } from "@/lib/agent-engine/db/pool";
 import type { EventRow, HandlerResult } from "@/lib/event-log/dispatcher";
 import { deriveMediaText, type DeriveDeps } from "@/lib/messaging/media/derive";
+import { TIPOS_DERIVAVEIS } from "@/lib/messaging/media/derivable";
 import { deriveVideoText } from "@/lib/messaging/media/video-derive";
 import { apiTranscriptionProvider } from "@/lib/messaging/media/transcription";
 import { logger } from "@/lib/logger";
@@ -22,7 +23,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export const MEDIA_DERIVE_CONSUMER_KEY = "media_derive_v1";
 const DRAIN_MAX_ATTEMPTS = 5; // espelho de lib/event-log/drain.ts
 
-const DERIVABLE = new Set(["audio", "image", "document", "video"]);
+// Lista compartilhada com o drain do turno — ver lib/messaging/media/derivable.ts.
 
 // ponytail: singleton lazy — o drain só nos dá o admin client; resolveOrgLlmConfig
 // exige pg.Pool direto. Sem pool global no processo Next.js, então criamos um sob
@@ -61,7 +62,7 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
   const msg = data as MessageRow | null;
   if (!msg?.media_storage_path) return { consumer_key, status: "skipped", detail: "no media" };
   if (msg.media_derived_status === "ready") return { consumer_key, status: "skipped", detail: "already derived" };
-  if (!DERIVABLE.has(msg.type)) return { consumer_key, status: "skipped", detail: `type ${msg.type}` };
+  if (!TIPOS_DERIVAVEIS.has(msg.type)) return { consumer_key, status: "skipped", detail: `type ${msg.type}` };
   // Vídeo é opt-in (custo: ffmpeg + N chamadas de visão): só deriva se algum agente
   // publicado da org tem video_frames_enabled=true (flag da migration 0058).
   if (msg.type === "video") {

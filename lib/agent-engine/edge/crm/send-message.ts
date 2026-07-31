@@ -70,6 +70,13 @@ export interface SendMessageInput {
   seq: number;
   conversationId: string;
   body: string;
+  /**
+   * Presente = envio de TEMPLATE. O `body` continua sendo o texto RENDERIZADO — é
+   * ele que entra no hash de idempotência e é ele que os gates de conteúdo avaliaram.
+   * Trocar a chave por "nome do template" faria dois envios com valores diferentes
+   * colidirem no ledger e o segundo virar `already_sent` sem ter saído.
+   */
+  template?: { name: string; language: string; values: Record<string, string> };
 }
 
 /** Fallback do ator ai_agent quando não há agente publicado (cfg.agentActorId). */
@@ -118,7 +125,14 @@ export async function sendTurnMessage(
       },
       {
         conversation_id: input.conversationId,
-        type: 'text',
+        ...(input.template
+          ? {
+              type: 'template' as const,
+              template_name: input.template.name,
+              template_language: input.template.language,
+              template_values: input.template.values,
+            }
+          : { type: 'text' as const }),
         body: input.body,
         metadata: { idempotency_key: idempotencyKey },
       },

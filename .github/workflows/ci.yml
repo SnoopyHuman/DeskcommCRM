@@ -27,6 +27,13 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Invariante 1 de docs/doctrine/restricao-de-canal.md: nenhuma feature
+      # nomeia um provider. Step próprio (e não só dentro de `gov:verify`)
+      # porque é o CI que gateia PR — `gov:verify` não é invocado por nenhum
+      # workflow, e mecanismo que não roda no gate não protege nada.
+      - name: Channel provider leak
+        run: pnpm lint:channels
+
       - name: Unit tests
         run: pnpm test:unit
 

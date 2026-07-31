@@ -26,6 +26,10 @@ export const messageTypeSchema = z.enum([
   "video",
   "location",
   "contact",
+  // Envio de template aprovado (canal oficial, fora da janela de 24h). Não é
+  // "texto com outro nome": o tipo é o que carrega custo, conformidade de janela e
+  // o que o contato de fato viu (cabeçalho, rodapé, botões).
+  "template",
 ]);
 
 export const messageStatusSchema = z.enum([
@@ -47,6 +51,16 @@ export const sendMessageSchema = z
     media_mime: z.string().optional(),
     media_size_bytes: z.number().int().positive().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
+    /** Só em `type: "template"`. Nome exato aprovado na Meta. */
+    template_name: z.string().min(1).max(512).optional(),
+    /** Só em `type: "template"`. `pt_BR` e `pt` são templates DISTINTOS. */
+    template_language: z.string().min(2).max(16).optional(),
+    /**
+     * Só em `type: "template"`. Valor por slot, chaveado por `slotKey`
+     * (`lib/channels/meta/build-components.ts`) — a MESMA função que o formulário
+     * da tela usa. Chave montada de outro jeito é o mismatch voltando.
+     */
+    template_values: z.record(z.string(), z.string()).optional(),
   })
   .refine((d) => !!d.body || !!d.media_url || !!d.media_storage_path, {
     message: "body, media_url or media_storage_path required",

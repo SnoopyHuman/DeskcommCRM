@@ -99,6 +99,8 @@ interface FormState {
   handoff_keywords: string[];
   handoff_tool_enabled: boolean;
   cases_enabled: boolean;
+  split_messages: boolean;
+  split_max_chars: number;
   followup: FollowupValue;
 }
 
@@ -150,6 +152,8 @@ function buildState(args: {
     ],
     handoff_tool_enabled: version?.handoff_tool_enabled ?? true,
     cases_enabled: version?.cases_enabled ?? false,
+    split_messages: version?.split_messages ?? false,
+    split_max_chars: version?.split_max_chars ?? 600,
     followup: version?.followup ?? DEFAULT_FOLLOWUP,
   };
 }
@@ -171,6 +175,8 @@ function toVersionPayload(s: FormState) {
     handoff_keywords: s.handoff_keywords,
     handoff_tool_enabled: s.handoff_tool_enabled,
     cases_enabled: s.cases_enabled,
+    split_messages: s.split_messages,
+    split_max_chars: s.split_max_chars,
     followup: s.followup,
   };
 }
@@ -632,6 +638,46 @@ export function AgentForm(props: Props) {
             />
             {validation.system_prompt ? (
               <p className="text-xs text-destructive">{validation.system_prompt}</p>
+            ) : null}
+          </Card>
+
+          {/* Estilo de resposta (split de mensagens — Onda 4) */}
+          <Card className="space-y-3 p-4">
+            <h3 className="text-sm font-medium">Estilo de resposta</h3>
+            <div className="flex items-center gap-2">
+              <Switch
+                id="split_messages"
+                checked={form.split_messages}
+                onCheckedChange={(v) => patch({ split_messages: v })}
+                disabled={disabled}
+              />
+              <Label htmlFor="split_messages">
+                Responder em várias mensagens curtas (como uma pessoa digita)
+              </Label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Em vez de um bloco único, a resposta sai em bolhas separadas, espaçadas pelo
+              mesmo ritmo anti-banimento do envio. O agente também é instruído a escrever
+              em parágrafos curtos.
+            </p>
+            {form.split_messages ? (
+              <div className="space-y-1">
+                <Label htmlFor="split_max_chars">Tamanho máximo por bolha (80–4000)</Label>
+                <Input
+                  id="split_max_chars"
+                  type="number"
+                  min={80}
+                  max={4000}
+                  step={20}
+                  value={form.split_max_chars}
+                  onChange={(e) => patch({ split_max_chars: Number(e.target.value) })}
+                  disabled={disabled}
+                  aria-invalid={!!validation.split_max_chars}
+                />
+                {validation.split_max_chars ? (
+                  <p className="text-xs text-destructive">{validation.split_max_chars}</p>
+                ) : null}
+              </div>
             ) : null}
           </Card>
 

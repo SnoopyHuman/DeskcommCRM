@@ -33,6 +33,14 @@ export interface PacingInput {
    * degraus) — não os campos do CRM.
    */
   crmDailyLimit: number | null;
+  /**
+   * O canal tem risco de BANIMENTO por volume/padrão? (capability do provider).
+   * `false` desarma SÓ o que é anti-ban (warm-up, cap diário, throttle+jitter);
+   * janela horária/domingo/fuso são CORTESIA e continuam valendo em todo canal
+   * (doutrina `docs/doctrine/restricao-de-canal.md`, invariante 3).
+   * Omitir = `true`: nenhum chamador existente muda de comportamento.
+   */
+  banRisk?: boolean;
   /** [0,1) — injetável nos testes; default Math.random. */
   rng?: () => number;
 }
@@ -48,6 +56,7 @@ const DAY_MS = 86_400_000;
 export function decidePacing(input: PacingInput): PacingDecision {
   const { now, knobs, state, crmDailyLimit } = input;
   const rng = input.rng ?? Math.random;
+  const banRisk = input.banRisk ?? true; // default preserva o comportamento atual
   const wall = wallClock(now, knobs.timezone);
 
   if (!insideWindow(wall, knobs)) {
@@ -62,6 +71,11 @@ export function decidePacing(input: PacingInput): PacingDecision {
         `agende para ${formatInTz(nextAllowedAt, knobs.timezone)} (abertura da janela + jitter)`,
     };
   }
+
+  // Daqui para baixo tudo é ANTI-BAN (warm-up, cap diário, throttle+jitter): só
+  // arma onde há risco de banimento. A janela horária acima é CORTESIA e roda
+  // SEMPRE — desarmar as duas juntas acordaria cliente às 3h (invariante 3).
+  if (!banRisk) return { allow: true, waitMs: 0 };
 
   // Clamp em >= 0: number_activated_at no futuro (typo do admin / clock skew
   // daemon↔DB) cai no degrau MAIS conservador — warm-up falha FECHADO, nunca

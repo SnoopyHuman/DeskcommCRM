@@ -316,7 +316,11 @@ export async function reapExpiredJobs(
            locked_by = null, locked_at = null,
            last_error = coalesce(last_error, 'visibility timeout excedido (worker morto?)')
        where status = 'running' and locked_at < now() - ($1 * interval '1 millisecond')
-       returning id, organization_id, kind, attempts, status
+       -- last_error PRECISA sair no returning: a CTE do alerta abaixo só
+       -- enxerga as colunas devolvidas aqui, não as da tabela. Faltando ela, a
+       -- query inteira morre com "column last_error does not exist" — e como
+       -- este reap roda no BOOT do worker, o worker não subia.
+       returning id, organization_id, kind, attempts, status, last_error
      ),
      alert as (
        insert into agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)

@@ -14,6 +14,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { versionCreateSchema } from "@/lib/ai/agents/validation";
+
 const ROOT = process.cwd();
 
 /** Todo arquivo que carrega uma cópia da lista de colunas de versão. */
@@ -60,6 +62,42 @@ describe("VERSION_COLUMNS de ai_agent_versions", () => {
       const columns = versionColumnsOf(file);
       expect(columns).toContain("handoff_tool_enabled");
       expect(columns).toContain("cases_enabled");
+      expect(columns).toContain("split_messages");
+      expect(columns).toContain("split_max_chars");
     }
+  });
+});
+
+/**
+ * O SELECT idêntico não basta: o payload do form passa por `versionCreateSchema`,
+ * que é `.strict()`. Coluna ausente do schema faz o parse REJEITAR o save inteiro
+ * (ou, se fosse não-strict, silenciosamente descartar o campo). Foi o segundo elo
+ * quebrado do split de mensagens: a coluna existia no banco e no runtime, mas o
+ * schema não a conhecia, então a tela nunca conseguiria gravá-la.
+ */
+describe("versionCreateSchema aceita as flags por-agente que a tela edita", () => {
+  const base = {
+    system_prompt: "Você é um atendente de testes.",
+    provider: "anthropic" as const,
+    model: "claude-sonnet-4-6",
+    credential_id: "11111111-1111-4111-8111-111111111111",
+    channel_session_id: "22222222-2222-4222-8222-222222222222",
+  };
+
+  it("preserva split_messages/split_max_chars no parse", () => {
+    const parsed = versionCreateSchema.safeParse({
+      ...base,
+      split_messages: true,
+      split_max_chars: 240,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.split_messages).toBe(true);
+    expect(parsed.success && parsed.data.split_max_chars).toBe(240);
+  });
+
+  it("cai nos defaults da migration 0059 quando omitido", () => {
+    const parsed = versionCreateSchema.safeParse(base);
+    expect(parsed.success && parsed.data.split_messages).toBe(false);
+    expect(parsed.success && parsed.data.split_max_chars).toBe(600);
   });
 });

@@ -24,6 +24,8 @@ export interface AgentVersionRow {
   handoff_keywords: string[];
   handoff_tool_enabled: boolean;
   cases_enabled: boolean;
+  split_messages: boolean;
+  split_max_chars: number;
   followup: { enabled: boolean; flow_pointer_ids: string[] };
   status: "draft" | "published" | "superseded" | "archived";
   published_at: string | null;

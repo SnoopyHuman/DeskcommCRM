@@ -27,7 +27,7 @@ const AGENT_COLUMNS =
   "id, organization_id, name, description, model, system_prompt, is_active, is_default, kind, priority, published_version_id, archived_at, config, guardrails, active_kb_version_id, created_at, updated_at";
 
 const VERSION_COLUMNS =
-  "id, organization_id, agent_id, version_number, system_prompt, provider, model, credential_id, tool_ids, trigger_config, channel_session_id, max_steps, token_budget, cost_budget_cents, history_message_window, history_token_window, handoff_keywords, handoff_tool_enabled, cases_enabled, followup, status, published_at, superseded_at, created_at, created_by";
+  "id, organization_id, agent_id, version_number, system_prompt, provider, model, credential_id, tool_ids, trigger_config, channel_session_id, max_steps, token_budget, cost_budget_cents, history_message_window, history_token_window, handoff_keywords, handoff_tool_enabled, cases_enabled, split_messages, split_max_chars, followup, status, published_at, superseded_at, created_at, created_by";
 
 // ---------------------------------------------------------------------------
 // GET — list
@@ -136,6 +136,8 @@ export async function POST(req: NextRequest): Promise<Response> {
         handoff_keywords: v.handoff_keywords,
         handoff_tool_enabled: v.handoff_tool_enabled,
         cases_enabled: v.cases_enabled,
+        split_messages: v.split_messages,
+        split_max_chars: v.split_max_chars,
         followup: v.followup,
         status: "draft",
         created_by: authUser.id,

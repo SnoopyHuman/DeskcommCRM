@@ -138,8 +138,26 @@ test.describe("J6.8 — anti-SSRF do outbound call_webhook (real, ponta a ponta)
       ]);
       ruleCreated = true;
 
-      // liga a automação
-      await page.getByRole("switch", { name: `Ligar ${RULE_NAME}` }).click();
+      // liga a automação — e espera o SERVIDOR confirmar, não o pixel.
+      //
+      // `RulesTab.toggleActive` faz `qc.setQueryData` ANTES do `mutate`: a tela
+      // escreve "Ativa" no mesmo frame do clique, com o PATCH ainda voando. Assertar
+      // o texto e seguir dispara o lead enquanto o banco ainda tem `is_active=false`
+      // — o handler de automações não casa a regra, marca o evento como `done` sem
+      // criar run, sem erro nenhum, e o teste falha lá na frente com "a run não
+      // apareceu". Foi essa a intermitência do spec (verde/vermelho alternando no CI
+      // da main): não era vazão nem lentidão, era ler estado otimista como se fosse
+      // confirmação.
+      await Promise.all([
+        page.waitForResponse(
+          (r) =>
+            r.url().includes("/api/v1/automation-rules") &&
+            r.request().method() === "PATCH" &&
+            r.status() === 200,
+          { timeout: 20_000 },
+        ),
+        page.getByRole("switch", { name: `Ligar ${RULE_NAME}` }).click(),
+      ]);
       await expect(cardOf(page.getByText(RULE_NAME, { exact: true })).getByText("Ativa")).toBeVisible(
         { timeout: 15_000 },
       );
@@ -151,25 +169,36 @@ test.describe("J6.8 — anti-SSRF do outbound call_webhook (real, ponta a ponta)
       expect(leadRes.status()).toBe(200);
 
       const internalSecret = loadInternalSecret();
-      for (let i = 0; i < 3; i++) {
+      const drenar = async (): Promise<void> => {
         const drain = await request.post(`${APP_URL}/api/v1/cron/event-log-drain`, {
           headers: { Authorization: `Bearer ${internalSecret}` },
           timeout: 60_000,
         });
         expect(drain.ok()).toBeTruthy();
-        await page.waitForTimeout(700);
-      }
+      };
+      await drenar();
 
       // --- aba Atividade: a run aparece e NÃO é Sucesso (ação outbound barrada) ---
       await page.getByRole("tab", { name: "Atividade" }).click();
       const runTitle = page.getByText(RULE_NAME, { exact: true }).first();
       const runCard = cardOf(runTitle);
       let appeared = false;
+      // Drena DENTRO do laço, não três vezes antes dele.
+      //
+      // O drain processa 50 eventos por chamada (`lib/event-log/drain.ts`), em ordem
+      // de chegada. Três chamadas fixas alcançam 150 — e a fila deste banco tinha
+      // 165 pendentes quando o spec falhou, acumulados pelos specs anteriores. O
+      // evento DESTE teste estava atrás do lote, então a run nunca aparecia e o
+      // veredito virava "a automação não rodou" para um problema de vazão.
+      //
+      // Backlog não é anomalia de teste: qualquer instalação com movimento tem fila.
+      // Esperar por uma quantidade fixa de drenagens é presumir uma fila vazia.
       for (let attempt = 0; attempt < 12; attempt++) {
         if ((await runCard.count()) > 0) {
           appeared = true;
           break;
         }
+        await drenar();
         await page.getByRole("button", { name: "Atualizar" }).click();
         await page.waitForTimeout(1000);
       }

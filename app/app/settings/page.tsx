@@ -45,6 +45,18 @@ const LINKS: SettingsLink[] = [
     managerOnly: true,
   },
   {
+    href: "/app/settings/canal-oficial",
+    title: "Canal oficial (Cloud API)",
+    description: "Conectar o número oficial da Meta e o webhook.",
+    adminOnly: true,
+  },
+  {
+    href: "/app/settings/templates",
+    title: "Templates do WhatsApp",
+    description: "Espelho dos templates da Meta e seus parâmetros.",
+    adminOnly: true,
+  },
+  {
     href: "/app/connections",
     title: "Conexões WhatsApp",
     description: "Saúde, reconexão e novos números.",
