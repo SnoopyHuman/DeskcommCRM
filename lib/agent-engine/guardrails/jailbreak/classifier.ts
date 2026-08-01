@@ -19,6 +19,7 @@ import type pg from 'pg';
 
 import type { Logger } from '../../obs/logger';
 import type { ProviderRegistry } from '../../edge/llm/providers';
+import type { LlmResolveOverride } from '../../edge/llm/credentials';
 import { runModelCall, type LlmEdgeConfig } from '../../edge/llm/run-model-call';
 
 /** Severidade do sinal: none (limpo) < low (suspeito) < high (jailbreak/injeção claro). */
@@ -100,7 +101,7 @@ export async function classifyJailbreak(
   db: pg.Pool,
   cfg: LlmEdgeConfig,
   ids: { tenantId: string; leadId?: string | null; jobId?: string },
-  args: { message: string; model?: string },
+  args: { message: string; model?: string; llmOverride?: LlmResolveOverride },
   deps: { registry?: ProviderRegistry; log: Logger },
 ): Promise<JailbreakClassification> {
   const call = await runModelCall(
@@ -112,6 +113,7 @@ export async function classifyJailbreak(
       ...(ids.jobId !== undefined ? { jobId: ids.jobId } : {}),
       purpose: 'jailbreak_detect',
       ...(args.model !== undefined ? { model: args.model } : {}),
+      ...(args.llmOverride !== undefined ? { llmOverride: args.llmOverride } : {}),
       messages: [{ role: 'user', content: buildJailbreakMessage(args.message) }],
     },
     { registry: deps.registry, log: deps.log },

@@ -917,6 +917,9 @@ export async function runAgentTurn(
               ...((deps.knobs.promiseSemantic?.model ?? agentModel) !== undefined
                 ? { model: (deps.knobs.promiseSemantic?.model ?? agentModel) as string }
                 : {}),
+              ...(agentConfig !== null
+                ? { llmOverride: { provider: agentConfig.provider, credentialId: agentConfig.credentialId } }
+                : {}),
             },
             { ...(deps.registry !== undefined ? { registry: deps.registry } : {}), log: runLog },
           )
@@ -1633,6 +1636,9 @@ export async function runAgentTurn(
         ...((deps.knobs.stageClassifier.model ?? agentModel) !== undefined
           ? { model: (deps.knobs.stageClassifier.model ?? agentModel) as string }
           : {}),
+        ...(agentConfig !== null
+          ? { llmOverride: { provider: agentConfig.provider, credentialId: agentConfig.credentialId } }
+          : {}),
       },
       { registry: deps.registry, log: runLog },
     );
@@ -1655,6 +1661,9 @@ export async function runAgentTurn(
         message: skillSignal,
         ...((deps.knobs.jailbreak.model ?? agentModel) !== undefined
           ? { model: (deps.knobs.jailbreak.model ?? agentModel) as string }
+          : {}),
+        ...(agentConfig !== null
+          ? { llmOverride: { provider: agentConfig.provider, credentialId: agentConfig.credentialId } }
           : {}),
       },
       { registry: deps.registry, log: runLog },
