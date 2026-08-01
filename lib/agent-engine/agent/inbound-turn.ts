@@ -1629,7 +1629,14 @@ export async function runAgentTurn(
   // PII (a mensagem/reason nunca vão a log). A correlação com promessa fora de tabela
   // escala no fim.
   const currentStage: LeadStage = leadState?.stage ?? 'new';
-  const [stageSuggestion, jailbreakVerdict] = await Promise.all([
+  // Promise.allSettled (não Promise.all): se um classificador rejeita rápido, o outro
+  // ainda pode estar em voo — Promise.all propagaria o erro na hora e abandonaria essa
+  // chamada em background. O job então volta pra 'pending' e o polling (250ms) pode
+  // disparar OUTRA tentativa enquanto a chamada abandonada da tentativa anterior ainda
+  // está rodando (e será cobrada quando terminar) — falha persistente multiplicaria
+  // chamadas concorrentes cobradas. Esperar os dois assentarem garante que, quando o
+  // erro se propaga, nenhuma chamada da tentativa atual ainda está em voo.
+  const [stageSettled, jailbreakSettled] = await Promise.allSettled([
     deps.knobs.stageClassifier !== undefined
       ? classifyStage(
           pool,
@@ -1666,6 +1673,14 @@ export async function runAgentTurn(
         )
       : Promise.resolve(null),
   ]);
+  if (stageSettled.status === 'rejected') {
+    throw stageSettled.reason;
+  }
+  if (jailbreakSettled.status === 'rejected') {
+    throw jailbreakSettled.reason;
+  }
+  const stageSuggestion = stageSettled.value;
+  const jailbreakVerdict = jailbreakSettled.value;
 
   let stageHintBlock = '';
   if (stageSuggestion !== null) {
