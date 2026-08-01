@@ -24,8 +24,18 @@ describe("deriveAgentStatus", () => {
     expect(deriveAgentStatus({ ...base, published_version_id: "v1" } as AgentRow)).toBe("published");
   });
 
-  it("com versão publicada e inativo é PAUSADO", () => {
+  it("com versão publicada e inativo é PAUSADO (rag_bot)", () => {
     expect(deriveAgentStatus({ ...base, published_version_id: "v1", is_active: false } as AgentRow)).toBe("paused");
+  });
+
+  it("mcp_agent com versão publicada é PUBLICADO mesmo com is_active=false (dado órfão)", () => {
+    // pauseAgentAction nunca escreve is_active para mcp_agent (só limpa
+    // published_version_id); um is_active=false aqui é lixo de antes dessa
+    // separação existir e não pode fazer o badge mentir "Pausado" num agente
+    // que o runtime trata como publicado e que de fato responde e gasta.
+    expect(
+      deriveAgentStatus({ ...base, kind: "mcp_agent", published_version_id: "v1", is_active: false } as AgentRow),
+    ).toBe("published");
   });
 
   it("arquivado vence tudo", () => {

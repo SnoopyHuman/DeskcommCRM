@@ -14,10 +14,20 @@ export type AgentStatus = "published" | "draft" | "paused" | "archived" | "inval
  * `is_active` — e o agente criado no onboarding (ativo, sem versão) aparecia
  * como "Publicado" enquanto era invisível para os dois runtimes. O dono do CRM
  * terminava a instalação achando que tinha um atendente de IA no ar.
+ *
+ * `is_active` não é a semântica de pausa do `mcp_agent`: `pauseAgentAction`
+ * nunca escreve nesse campo para esse kind (só limpa `published_version_id` e
+ * supersede a versão) — e `unpauseAgentAction` recusa mexer nele também
+ * ("publique uma versão para reativar"). Um `mcp_agent` com versão publicada
+ * e `is_active=false` (dado órfão de antes dessa separação existir) é um
+ * agente NO AR mostrando "Pausado" — o inverso do achado 39 (agente pausado
+ * que seguia gastando): aqui o agente gasta e responde de verdade, mas a tela
+ * mente que está parado.
  */
 export function deriveAgentStatus(agent: AgentRow): AgentStatus {
   if (agent.archived_at) return "archived";
   if (!agent.published_version_id) return "draft";
+  if (agent.kind === "mcp_agent") return "published";
   return agent.is_active ? "published" : "paused";
 }
 

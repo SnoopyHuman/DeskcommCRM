@@ -29,6 +29,7 @@ import type pg from 'pg';
 import type { Logger } from '../obs/logger';
 import type { ProviderRegistry } from '../edge/llm/providers';
 import { runModelCall, type LlmEdgeConfig } from '../edge/llm/run-model-call';
+import type { LlmResolveOverride } from '../edge/llm/credentials';
 import type { LeadContext } from '../edge/crm/get-lead-context';
 import { LEAD_STAGES, type LeadStage } from './lead-state';
 
@@ -92,7 +93,7 @@ export async function classifyStage(
   db: pg.Pool,
   cfg: LlmEdgeConfig,
   ids: { tenantId: string; leadId: string; jobId?: string },
-  args: { context: LeadContext; currentStage: LeadStage; model?: string },
+  args: { context: LeadContext; currentStage: LeadStage; model?: string; llmOverride?: LlmResolveOverride },
   deps: { registry?: ProviderRegistry; log: Logger },
 ): Promise<LeadStage | null> {
   const call = await runModelCall(
@@ -104,6 +105,7 @@ export async function classifyStage(
       ...(ids.jobId !== undefined ? { jobId: ids.jobId } : {}),
       purpose: 'stage_classifier',
       ...(args.model !== undefined ? { model: args.model } : {}),
+      ...(args.llmOverride !== undefined ? { llmOverride: args.llmOverride } : {}),
       messages: [{ role: 'user', content: buildClassifierMessage(args.context, args.currentStage) }],
     },
     { registry: deps.registry, log: deps.log },
