@@ -1618,62 +1618,68 @@ export async function runAgentTurn(
     log: runLog, // os warns dos gates do breaker saem carimbados com o run
   });
 
-  // F3-11: stage-classifier auxiliar. Roda ANTES do turno (modelo BARATO pelo seam
-  // agnóstico) e sugere o estágio; a sugestão entra como HINT no SUFIXO por-lead — o modelo
-  // do agente decide e confirma via update_lead_state (a máquina F2-10 é a única porta). A
-  // sugestão fica guardada para comparar com o que o modelo confirmou (divergência, no fim).
+  // F3-11 + F4-04: stage-classifier e anti-jailbreak são independentes (um lê o
+  // contexto/estágio, o outro só a mensagem inbound) — rodam em paralelo pra não somar
+  // dois round-trips de LLM em série no caminho crítico do turno.
+  // F3-11: modelo BARATO pelo seam agnóstico, sugere o estágio; a sugestão entra como
+  // HINT no SUFIXO por-lead — o modelo do agente decide e confirma via update_lead_state
+  // (a máquina F2-10 é a única porta). Guardada para comparar com o confirmado, no fim.
+  // F4-04: classifier ADVISÓRIO sobre a mensagem INBOUND do lead (skillSignal já é a
+  // última inbound). NÃO veta o inbound — só FLAGRA o turno no trace; flag/level não são
+  // PII (a mensagem/reason nunca vão a log). A correlação com promessa fora de tabela
+  // escala no fim.
   const currentStage: LeadStage = leadState?.stage ?? 'new';
-  let stageSuggestion: LeadStage | null = null;
+  const [stageSuggestion, jailbreakVerdict] = await Promise.all([
+    deps.knobs.stageClassifier !== undefined
+      ? classifyStage(
+          pool,
+          deps.llmCfg,
+          { tenantId, leadId, jobId: job.id },
+          {
+            context: effectiveContext,
+            currentStage,
+            ...((deps.knobs.stageClassifier.model ?? agentModel) !== undefined
+              ? { model: (deps.knobs.stageClassifier.model ?? agentModel) as string }
+              : {}),
+            ...(agentConfig !== null
+              ? { llmOverride: { provider: agentConfig.provider, credentialId: agentConfig.credentialId } }
+              : {}),
+          },
+          { registry: deps.registry, log: runLog },
+        )
+      : Promise.resolve(null),
+    deps.knobs.jailbreak !== undefined
+      ? classifyJailbreak(
+          pool,
+          deps.llmCfg,
+          { tenantId, leadId, jobId: job.id },
+          {
+            message: skillSignal,
+            ...((deps.knobs.jailbreak.model ?? agentModel) !== undefined
+              ? { model: (deps.knobs.jailbreak.model ?? agentModel) as string }
+              : {}),
+            ...(agentConfig !== null
+              ? { llmOverride: { provider: agentConfig.provider, credentialId: agentConfig.credentialId } }
+              : {}),
+          },
+          { registry: deps.registry, log: runLog },
+        )
+      : Promise.resolve(null),
+  ]);
+
   let stageHintBlock = '';
-  if (deps.knobs.stageClassifier !== undefined) {
-    stageSuggestion = await classifyStage(
-      pool,
-      deps.llmCfg,
-      { tenantId, leadId, jobId: job.id },
-      {
-        context: effectiveContext,
-        currentStage,
-        ...((deps.knobs.stageClassifier.model ?? agentModel) !== undefined
-          ? { model: (deps.knobs.stageClassifier.model ?? agentModel) as string }
-          : {}),
-        ...(agentConfig !== null
-          ? { llmOverride: { provider: agentConfig.provider, credentialId: agentConfig.credentialId } }
-          : {}),
-      },
-      { registry: deps.registry, log: runLog },
-    );
-    if (stageSuggestion !== null) {
-      stageHintBlock = renderStageHint(stageSuggestion, currentStage);
-    }
+  if (stageSuggestion !== null) {
+    stageHintBlock = renderStageHint(stageSuggestion, currentStage);
   }
 
-  // F4-04: classifier ADVISÓRIO anti-jailbreak sobre a mensagem INBOUND do lead (o
-  // skillSignal já é a última inbound). Roda pelo seam agnóstico (modelo BARATO, budget
-  // checado nele). NÃO veta o inbound — só FLAGRA o turno no trace; flag/level não são PII
-  // (a mensagem/reason nunca vão a log). A correlação com promessa fora de tabela escala no fim.
   let jailbreakLevel: JailbreakLevel = 'none';
-  if (deps.knobs.jailbreak !== undefined) {
-    const verdict = await classifyJailbreak(
-      pool,
-      deps.llmCfg,
-      { tenantId, leadId, jobId: job.id },
-      {
-        message: skillSignal,
-        ...((deps.knobs.jailbreak.model ?? agentModel) !== undefined
-          ? { model: (deps.knobs.jailbreak.model ?? agentModel) as string }
-          : {}),
-        ...(agentConfig !== null
-          ? { llmOverride: { provider: agentConfig.provider, credentialId: agentConfig.credentialId } }
-          : {}),
-      },
-      { registry: deps.registry, log: runLog },
-    );
-    jailbreakLevel = verdict.level;
-    if (verdict.flag) {
+  if (jailbreakVerdict !== null) {
+    jailbreakLevel = jailbreakVerdict.level;
+    if (jailbreakVerdict.flag) {
       // trace do turno: só flag/level (não PII) — a mensagem e o reason nunca são logados.
       runLog.warn('jailbreak: sinal detectado na mensagem do lead', {
         jailbreak_flag: true,
-        jailbreak_level: verdict.level,
+        jailbreak_level: jailbreakVerdict.level,
       });
     }
   }
