@@ -17,10 +17,10 @@ interface HardResetResponse {
       conversations: number;
       lead_checkpoints: number;
       lead_state: number;
+      lead_notes: number;
       jobs_canceled: number;
       ai_chunks: number;
     };
-    notes_reparented: number;
   };
 }
 

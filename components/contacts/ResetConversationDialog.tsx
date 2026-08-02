@@ -76,9 +76,9 @@ export function ResetConversationDialog({
         <DialogHeader>
           <DialogTitle>Apagar o contexto deste contato</DialogTitle>
           <DialogDescription>
-            Isso apaga as mensagens, o resumo e o estado do funil da IA para{" "}
-            <strong>{contactName}</strong>. O contato e o negócio continuam
-            existindo, com toda a ficha e o histórico de pedidos.
+            Isso apaga as mensagens, o resumo, as notas e o estado do funil da
+            IA para <strong>{contactName}</strong>. O contato e o negócio
+            continuam existindo, com toda a ficha e o histórico de pedidos.
           </DialogDescription>
         </DialogHeader>
 

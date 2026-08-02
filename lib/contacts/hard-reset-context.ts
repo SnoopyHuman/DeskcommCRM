@@ -2,9 +2,13 @@
  * Hard reset do contexto de um contato (Spec 16 §6.1 / C2-03).
  *
  * Única operação destrutiva do épico de ciclo de vida: apaga conversas,
- * checkpoints e lead_state; preserva contato, lead, timeline, pedidos e
- * (via reparent) o conteúdo de notas humanas. `organization_id` SEMPRE vem
- * do caller autenticado — nunca do body.
+ * checkpoints, lead_state, lead_notes e conversation_notes (via cascade).
+ * Preserva contato, lead do CRM, timeline de atividades, pedidos.
+ * `organization_id` SEMPRE vem do caller autenticado — nunca do body.
+ *
+ * Por que apaga lead_notes: o agente grava resumos duráveis ali ("interesse:
+ * guipir…") e injeta no turno seguinte. Preservá-las fazia o hard reset
+ * "falhar" para QA — a conversa sumia, a memória não.
  *
  * Sequencial best-effort (mesmo padrão de `lgpd/anonymize`): supabase-js não
  * oferece transação multi-statement no client; cada passo filtra por org+contato.
@@ -22,10 +26,10 @@ export type HardResetResult =
         conversations: number;
         lead_checkpoints: number;
         lead_state: number;
+        lead_notes: number;
         jobs_canceled: number;
         ai_chunks: number;
       };
-      notesReparented: number;
     }
   | {
       ok: false;
@@ -94,7 +98,7 @@ export async function hardResetContactContext(
     }
   }
 
-  // 4. Cancela jobs pendentes/running — 'failed' (terminal de negócio), não
+  // Cancela jobs pendentes/running — 'failed' (terminal de negócio), não
   // 'dead' (que abriria alerta crítico na inbox).
   const { data: canceledJobs, error: jobErr } = await supabase
     .from("job_queue")
@@ -113,7 +117,6 @@ export async function hardResetContactContext(
   }
   const jobsCanceled = canceledJobs?.length ?? 0;
 
-  // 5. lead_checkpoints
   const { data: deletedCheckpoints, error: cpErr } = await supabase
     .from("lead_checkpoints")
     .delete()
@@ -124,7 +127,6 @@ export async function hardResetContactContext(
     return { ok: false, code: "internal_error", message: `lead_checkpoints: ${cpErr.message}` };
   }
 
-  // 6. lead_state
   const { data: deletedState, error: stateErr } = await supabase
     .from("lead_state")
     .delete()
@@ -135,46 +137,18 @@ export async function hardResetContactContext(
     return { ok: false, code: "internal_error", message: `lead_state: ${stateErr.message}` };
   }
 
-  // 8. Reparent conversation_notes → lead_notes ANTES do delete de conversations
-  // (cascade apagaria as originais irrevogavelmente).
-  let notesReparented = 0;
-  if (conversationIds.length > 0) {
-    const { data: notes, error: notesErr } = await supabase
-      .from("conversation_notes")
-      .select("body")
-      .eq("organization_id", organizationId)
-      .in("conversation_id", conversationIds);
-    if (notesErr) {
-      return {
-        ok: false,
-        code: "internal_error",
-        message: `conversation_notes: ${notesErr.message}`,
-      };
-    }
-
-    const rows = (notes ?? [])
-      .map((n) => {
-        const body = typeof n.body === "string" ? n.body.trim() : "";
-        if (!body) return null;
-        return {
-          organization_id: organizationId,
-          contact_id: contactId,
-          headline: body.slice(0, 80),
-          body,
-        };
-      })
-      .filter((r): r is NonNullable<typeof r> => r !== null);
-
-    if (rows.length > 0) {
-      const { error: insertErr } = await supabase.from("lead_notes").insert(rows);
-      if (insertErr) {
-        return { ok: false, code: "internal_error", message: `lead_notes: ${insertErr.message}` };
-      }
-      notesReparented = rows.length;
-    }
+  // Notas duráveis do lead — é daqui que vazava "guipir preto" após apagar a conversa.
+  const { data: deletedNotes, error: notesErr } = await supabase
+    .from("lead_notes")
+    .delete()
+    .eq("organization_id", organizationId)
+    .eq("contact_id", contactId)
+    .select("id");
+  if (notesErr) {
+    return { ok: false, code: "internal_error", message: `lead_notes: ${notesErr.message}` };
   }
 
-  // 10 (antes do 9 se purge): coletar chunks pelos conversation_ids ainda vivos.
+  // Purge RAG antes do delete das conversas (ids ainda vivos).
   let aiChunksDeleted = 0;
   if (purgeKnowledgeBase && conversationIds.length > 0) {
     for (const convId of conversationIds) {
@@ -191,7 +165,7 @@ export async function hardResetContactContext(
     }
   }
 
-  // 9. conversations — cascade apaga messages + conversation_notes originais
+  // Cascade apaga messages + conversation_notes.
   const { data: deletedConvs, error: delConvErr } = await supabase
     .from("conversations")
     .delete()
@@ -202,7 +176,6 @@ export async function hardResetContactContext(
     return { ok: false, code: "internal_error", message: `conversations: ${delConvErr.message}` };
   }
 
-  // 11. Sem histórico, a marca de corte perde sentido.
   const { error: clearErr } = await supabase
     .from("contacts")
     .update({ context_reset_at: null, context_reset_reason: null })
@@ -212,7 +185,6 @@ export async function hardResetContactContext(
     return { ok: false, code: "internal_error", message: `contacts: ${clearErr.message}` };
   }
 
-  // 12. Atividade — precisa de lead_id (NOT NULL). Sem lead, só o audit resta.
   const { data: leadRow } = await supabase
     .from("crm_leads")
     .select("id")
@@ -236,7 +208,7 @@ export async function hardResetContactContext(
         : "Contexto apagado manualmente",
       payload: {
         purge_knowledge_base: purgeKnowledgeBase,
-        notes_reparented: notesReparented,
+        deleted_lead_notes: deletedNotes?.length ?? 0,
         deleted_conversations: deletedConvs?.length ?? 0,
       },
     });
@@ -252,9 +224,9 @@ export async function hardResetContactContext(
       conversations: deletedConvs?.length ?? 0,
       lead_checkpoints: deletedCheckpoints?.length ?? 0,
       lead_state: deletedState?.length ?? 0,
+      lead_notes: deletedNotes?.length ?? 0,
       jobs_canceled: jobsCanceled,
       ai_chunks: aiChunksDeleted,
     },
-    notesReparented,
   };
 }

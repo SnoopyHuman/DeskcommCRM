@@ -90,7 +90,6 @@ export async function POST(
       purge_knowledge_base,
       reason: reason ?? null,
       deleted: result.deleted,
-      notes_reparented: result.notesReparented,
     },
   });
 
@@ -98,7 +97,6 @@ export async function POST(
     {
       contact_id: contactId,
       deleted: result.deleted,
-      notes_reparented: result.notesReparented,
     },
     { requestId },
   );

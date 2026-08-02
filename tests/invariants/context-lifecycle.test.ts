@@ -178,8 +178,22 @@ describe("C2-07 — isolamento 2-tenants", () => {
   });
 });
 
-describe("C2-07 — hard reset SQL preserva contact e lead", () => {
-  it("apagar conversations/checkpoints/state mantém contacts e crm_leads", () => {
+describe("C2-07 — hard reset SQL preserva contact e lead, apaga notas", () => {
+  it("apagar conversations/checkpoints/state/notes mantém contacts e crm_leads", () => {
+    // Garante que existe nota para provar que o hard reset a remove.
+    sql(`
+      insert into public.lead_notes (organization_id, contact_id, headline, body)
+      select '${ORG_A}', '${CONTACT_A}', 'nota-hard-reset', 'corpo que deve sumir'
+       where not exists (
+         select 1 from public.lead_notes
+          where organization_id = '${ORG_A}' and contact_id = '${CONTACT_A}'
+            and headline = 'nota-hard-reset'
+       );
+    `);
+    expect(
+      count(`select count(*) from lead_notes where contact_id = '${CONTACT_A}'`),
+    ).toBeGreaterThanOrEqual(1);
+
     const contactsBefore = count(`select count(*) from contacts where id = '${CONTACT_A}'`);
     const leadsBefore = count(`select count(*) from crm_leads where id = '${LEAD_A}'`);
 
@@ -187,6 +201,8 @@ describe("C2-07 — hard reset SQL preserva contact e lead", () => {
       delete from lead_checkpoints
        where organization_id = '${ORG_A}' and contact_id = '${CONTACT_A}';
       delete from lead_state
+       where organization_id = '${ORG_A}' and contact_id = '${CONTACT_A}';
+      delete from lead_notes
        where organization_id = '${ORG_A}' and contact_id = '${CONTACT_A}';
       delete from conversations
        where organization_id = '${ORG_A}' and contact_id = '${CONTACT_A}';
@@ -200,11 +216,13 @@ describe("C2-07 — hard reset SQL preserva contact e lead", () => {
     const convsAfter = count(
       `select count(*) from conversations where contact_id = '${CONTACT_A}'`,
     );
+    const notesAfter = count(`select count(*) from lead_notes where contact_id = '${CONTACT_A}'`);
 
     expect(contactsAfter).toBe(contactsBefore);
     expect(leadsAfter).toBe(leadsBefore);
     expect(contactsAfter).toBe(1);
     expect(leadsAfter).toBe(1);
     expect(convsAfter).toBe(0);
+    expect(notesAfter).toBe(0);
   });
 });
