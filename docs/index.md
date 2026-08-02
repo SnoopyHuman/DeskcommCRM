@@ -46,6 +46,7 @@ de menor precedência e registre.
 | [`prd/04-prd-pipeline-attendance.md`](prd/04-prd-pipeline-attendance.md) | Kanban, atendimento, tickets, handoff |
 | [`prd/05-prd-ai-rag-handoff.md`](prd/05-prd-ai-rag-handoff.md) | IA conversacional, RAG por tenant, sentiment |
 | [`prd/06-prd-nuvemshop-lgpd.md`](prd/06-prd-nuvemshop-lgpd.md) | Integração Nuvemshop + webhooks LGPD |
+| [`prd/07-prd-gestao-contexto-agente.md`](prd/07-prd-gestao-contexto-agente.md) | Ciclo de vida do contexto — quanto tempo o agente lembra |
 | [`business-rules/00-business-rules-catalog.md`](business-rules/00-business-rules-catalog.md) | **Catálogo de regras de negócio** — fonte da verdade fora do código |
 | [`presentation/pitch-deck.md`](presentation/pitch-deck.md) | Pitch |
 
@@ -70,6 +71,7 @@ Detalham schema SQL e payloads exatos. **Consulte antes de modelar qualquer cois
 | [`specs/13`](specs/13-spec-governanca-atendimento.md) | Governança de atendimento (épico G1–G6) |
 | [`specs/14`](specs/14-contrato-governanca-agentes-externos.md) | Contrato para agentes de IA externos |
 | [`specs/15`](specs/15-spec-casos-humanos.md) | Casos humanos (IA delega a humano) |
+| [`specs/16`](specs/16-spec-gestao-contexto-agente.md) | Ciclo de vida do contexto do agente (fases C1–C5) |
 | [`specs/RECONCILIATION-LOG.md`](specs/RECONCILIATION-LOG.md) | Log de reconciliação entre specs |
 
 ## 4. Doutrina e arquitetura

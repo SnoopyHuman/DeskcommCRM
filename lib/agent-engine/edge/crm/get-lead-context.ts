@@ -14,6 +14,7 @@
 import type { Queryable } from '../../queue/queue';
 import type { CrmEdgeConfig } from './mcp-client';
 import { deriveLgpdFromContact, type LgpdInput } from '../../guardrails/lgpd/legal-basis';
+import { cortarNaFronteiraDeSessao } from '../../agent/fronteira-de-sessao';
 
 /**
  * Heurística conservadora de contagem: ~3,5 chars/token para pt-br (BPE real fica
@@ -31,6 +32,15 @@ export interface LeadContextKnobs {
   historyLimit: number;
   /** Teto do payload serializado, contado por countPayloadTokens (default 1000). */
   maxTokens: number;
+  /**
+   * Horas de silêncio que abrem sessão nova (Spec 16 §4); `null` desliga a
+   * fronteira. Opcional: chamador que não passa mantém o comportamento atual
+   * (histórico completo, sem corte de sessão). Resolvido de
+   * `organizations.settings.context_lifecycle.session_gap_hours` via
+   * `resolveSessionGapHours` (lib/schemas/context-lifecycle.ts) — nunca
+   * hardcoded no call site.
+   */
+  sessionGapHours?: number | null;
 }
 
 /** Uma mensagem do histórico, já curada. */
@@ -219,6 +229,14 @@ export async function getLeadContext(
       ).rows.reverse()
     : [];
 
+  // Fronteira de sessão (Spec 16 §4): corta pelo SILÊNCIO, antes do orçamento
+  // de tokens — para o corte de sessão nunca ser confundido com corte por
+  // budget. NÃO afeta o checkpoint (lido à parte, em inbound-turn.ts): a
+  // fronteira apaga o papo antigo da leitura, não a cotação já combinada.
+  // `sessionGapHours` ausente (chamador não migrado) = sem corte, idêntico ao
+  // comportamento anterior a esta feature.
+  const historyNaFronteira = cortarNaFronteiraDeSessao(history, knobs.sessionGapHours ?? null);
+
   // LGPD: base legal derivada DIRETO do contato (fonte da verdade, mesmo banco).
   // isProspecting=false: o MVP é inbound + follow-up — ambos respondem a lead que
   // já engajou, nunca 1º toque frio (o veto de is_anonymized vale SEMPRE).
@@ -244,7 +262,7 @@ export async function getLeadContext(
       conversation_id: conversationId,
       last_human_decision: lastHumanDecision,
     },
-    history,
+    historyNaFronteira,
     knobs.maxTokens,
   );
   return { ok: true, context, tokenCount: countPayloadTokens(JSON.stringify(context)), lgpd };

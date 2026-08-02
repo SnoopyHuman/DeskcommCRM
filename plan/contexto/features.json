@@ -1,0 +1,365 @@
+{
+  "_meta": {
+    "loop": "contexto-loop",
+    "repo": "DeskcommCRM",
+    "active_phase": "C2",
+    "loop_doctrine": "Doutrina de DOMÍNIO soberana: CLAUDE.md deste repo + docs/specs/ (multi-tenancy, migrations em tripla, idempotência, RBAC, LGPD, anti-patterns). Backlog SEPARADO do plan/ raiz, que pertence ao gov-loop (fase G1 ativa) — não compartilham máquina, checkpoints nem numeração.",
+    "session_ritual": "Uma sessão = UMA feature. Maker≠checker: passes:true só com PASS de verificação sob hash-check.",
+    "spec": "docs/specs/16-spec-gestao-contexto-agente.md · PRD: docs/prd/07-prd-gestao-contexto-agente.md",
+    "migration_doctrine": "Feature que toca schema segue a tripla: supabase/migrations/<ts>_<NNNN>_<slug>.sql idempotente + apêndice em supabase/baseline.sql ('-- ---- ... (migration NNNN) ----') + linha em supabase/migrations/MANIFEST.md + lib/database.types.ts regenerado. Sequência NNNN validada contra TODAS as branches locais.",
+    "invariantes_do_epico": [
+      "Nada é apagado automaticamente — C1 e C3 não emitem delete.",
+      "Padrão de fábrica não esquece: resets_context nasce false.",
+      "Nenhuma regra deriva de is_won/is_lost.",
+      "Nenhum reset move, edita ou cria card no Kanban (C1–C4).",
+      "Histórico do humano é intocável fora do hard reset manual."
+    ],
+    "smoke": "pnpm typecheck && pnpm lint && pnpm test:unit"
+  },
+  "features": [
+    {
+      "id": "C1-01",
+      "phase": "C1",
+      "title": "Função pura da fronteira de sessão",
+      "description": "O corte é pelo SILÊNCIO entre mensagens consecutivas, não pela idade da mensagem — 'últimas 6h' cortaria ao meio uma conversa contínua longa. Função isolada, sem banco e sem relógio, para poder ser provada em teste unitário antes de qualquer wiring.",
+      "acceptance": [
+        "Existe `lib/agent-engine/agent/fronteira-de-sessao.ts` exportando `cortarNaFronteiraDeSessao<T extends { sent_at: string }>(mensagens: T[], gapHoras: number | null): T[]`, com as mensagens de entrada ordenadas da mais antiga para a mais nova.",
+        "A função NÃO referencia `Date.now()`, `new Date()` sem argumento, nem qualquer fonte de relógio: `grep -nE 'Date\\.now|new Date\\(\\)' lib/agent-engine/agent/fronteira-de-sessao.ts` não retorna nada.",
+        "Teste: conversa contínua de 10h com intervalos de 30min e gapHoras=6 devolve TODAS as mensagens (o corte é por silêncio, não por duração).",
+        "Teste: conversa com um silêncio de 8h no meio e gapHoras=6 devolve apenas as mensagens a partir da retomada (inclusive).",
+        "Teste: dois silêncios (10h e depois 7h) devolve apenas a partir do MAIS RECENTE.",
+        "Teste: gapHoras=null, gapHoras=0 e gapHoras negativo devolvem o array intacto; arrays de 0 e 1 elemento devolvem intactos; `sent_at` inválido não lança.",
+        "`pnpm typecheck && pnpm lint && pnpm test:unit` verde."
+      ],
+      "depends_on": [],
+      "priority": 10,
+      "lane": "core",
+      "kind": "build",
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "8/8 testes verdes; grep sem Date.now/new Date(); typecheck 0 erros; lint 0 erros no arquivo novo"
+      }
+    },
+    {
+      "id": "C1-02",
+      "phase": "C1",
+      "title": "Resolução do intervalo de sessão a partir de organizations.settings",
+      "description": "Config org-wide sem tabela nova, seguindo o precedente de organizations.settings.routing. Ausência da chave = default 6; null explícito = desligado.",
+      "acceptance": [
+        "O intervalo é lido de `organizations.settings.context_lifecycle.session_gap_hours` e validado com Zod (número positivo ou null).",
+        "Chave ausente resolve para 6; `null` explícito resolve para null (fronteira desligada); valor inválido cai no default 6 sem lançar.",
+        "O valor viaja até `getLeadContext` pelo mesmo canal de `LeadContextKnobs` (junto de historyLimit/maxTokens), não por variável global nem por payload de job.",
+        "Teste unitário cobre os quatro casos (ausente, 6, null, inválido).",
+        "Nenhuma migration foi criada por esta feature."
+      ],
+      "depends_on": [
+        "C1-01"
+      ],
+      "priority": 9,
+      "lane": "core",
+      "kind": "build",
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "6/6 testes verdes (resolveSessionGapHours); typecheck 0 erros; sem migration criada"
+      }
+    },
+    {
+      "id": "C1-03",
+      "phase": "C1",
+      "title": "Aplicar a fronteira de sessão no contexto do turno",
+      "description": "Ponto de aplicação: entre a leitura do histórico e fitToBudget, em lib/agent-engine/edge/crm/get-lead-context.ts. Antes do orçamento de tokens, para que corte de sessão e corte de budget não se confundam.",
+      "acceptance": [
+        "`getLeadContext` aplica `cortarNaFronteiraDeSessao` ao histórico ANTES de chamar `fitToBudget`.",
+        "Com gap configurado e retomada após o silêncio, o `LeadContext.messages` resultante não contém nenhuma mensagem anterior à retomada.",
+        "Com gap `null`, o payload é byte-a-byte idêntico ao comportamento anterior à feature (teste de regressão).",
+        "O `lead_checkpoints` continua sendo lido integralmente — a fronteira de sessão NÃO corta checkpoint (é a garantia de que uma cotação dada 8h antes sobrevive).",
+        "`pnpm typecheck && pnpm lint && pnpm test:unit` verde."
+      ],
+      "depends_on": [
+        "C1-02"
+      ],
+      "priority": 9,
+      "lane": "core",
+      "kind": "build",
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "4/4 testes novos verdes (corte/retomada/null/ausente/contínua); 210/210 testes de agent-engine+schemas sem regressão; typecheck e lint 0 erros"
+      }
+    },
+    {
+      "id": "C2-01",
+      "phase": "C2",
+      "title": "Migration 0098 — marca de corte e política por etapa (tripla completa)",
+      "description": "DDL da Spec §3: contacts.context_reset_at/context_reset_reason, índice parcial, crm_stages.resets_context/context_reset_after_days com CHECK de faixa. Colunas nascem com default que reproduz o comportamento atual — sem backfill.",
+      "acceptance": [
+        "Existe `supabase/migrations/20260802120000_0098_ciclo_de_vida_do_contexto.sql` idempotente (`add column if not exists`, `create index if not exists`, constraint guardada por bloco `do $$`), sem BEGIN/COMMIT explícito e sem temp table.",
+        "`supabase/baseline.sql` tem apêndice rotulado `-- ---- ciclo de vida do contexto (migration 0098) ----` com o mesmo DDL idempotente.",
+        "`supabase/migrations/MANIFEST.md` tem linha nova descrevendo versão, nome e o QUÊ/PORQUÊ.",
+        "`lib/database.types.ts` regenerado contendo `context_reset_at`, `context_reset_reason`, `resets_context` e `context_reset_after_days`.",
+        "Postgres descartável `pgvector/pgvector:pg17`: `baseline.sql` aplica em modo install (`ON_ERROR_STOP=1`) e em modo update (re-aplicar, sem a flag) — ambos passam.",
+        "`crm_stages.resets_context` tem default `false` e `context_reset_after_days` default `7` com CHECK 0..365; nenhuma linha existente é marcada pela migration.",
+        "`pnpm test:db` verde."
+      ],
+      "depends_on": [
+        "C1-03"
+      ],
+      "priority": 8,
+      "lane": "core",
+      "kind": "schema",
+      "passes": false
+    },
+    {
+      "id": "C2-02",
+      "phase": "C2",
+      "title": "Leituras do turno respeitam a marca de corte",
+      "description": "Mensagens e checkpoint filtram por sent_at/created_at > context_reset_at; lead_state é NEUTRALIZADO em leitura, nunca sobrescrito — é o que mantém o reset reversível de graça.",
+      "acceptance": [
+        "Query de histórico em `get-lead-context.ts` filtra `sent_at > coalesce($n::timestamptz, '-infinity'::timestamptz)`.",
+        "`latestCheckpoint` em `lib/agent-engine/agent/inbound-turn.ts` filtra `created_at > coalesce($n::timestamptz, '-infinity'::timestamptz)`.",
+        "Existe `estadoVigente(row, cutoff)` que devolve `null` quando `lead_state.updated_at <= cutoff`, fazendo o turno operar como stage='new' — e NENHUM `update`/`delete` é emitido sobre `lead_state`.",
+        "O valor de `context_reset_at` é relido de `contacts` no turno (mesma closure org-scoped que resolve `is_blocked`); `grep` confirma que não vem de payload de job.",
+        "Com `context_reset_at` nulo, o comportamento é idêntico ao anterior (teste de regressão).",
+        "Invariante: após setar `context_reset_at`, `select count(*) from messages` do contato é idêntico ao de antes."
+      ],
+      "depends_on": [
+        "C2-01"
+      ],
+      "priority": 8,
+      "lane": "core",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C2-03",
+      "phase": "C2",
+      "title": "Endpoint de hard reset manual",
+      "description": "Única operação destrutiva do épico. Um contato por vez, manager+, confirmação digitada, bloqueio por caso humano aberto, cancelamento de jobs pendentes e audit. Preserva contato, lead, timeline, notas e pedidos.",
+      "acceptance": [
+        "`POST /api/v1/contacts/{id}/context/hard-reset` existe, usa `requireRole(\"manager\")` e resolve `organization_id` da sessão — nunca do body (grep confirma).",
+        "Body validado por Zod: `confirmation` literal 'APAGAR' (senão 422 `invalid_confirmation`), `purge_knowledge_base` boolean opcional default false, `reason` string opcional.",
+        "Com `agent_cases` aberto (definido por negação: `status not in ('resolved','cancelled')`) para o contato, responde 409 `open_case_blocks_reset` com `details.case_id` e NÃO apaga nada.",
+        "Cancela jobs pendentes do contato em `job_queue` antes dos deletes.",
+        "Apaga `lead_checkpoints`, `lead_state` e `conversations` (cascade em `messages`) do par organização+contato; zera `context_reset_at`.",
+        "`purge_knowledge_base: true` apaga também `ai_chunks` cujo `metadata->>'conversation_id'` esteja entre as conversas removidas (ids coletados ANTES do delete); com false, `ai_chunks` fica intacto.",
+        "Preserva `contacts`, `crm_leads`, `crm_lead_activities` (salvo a atividade nova), `lead_notes`, `conversation_notes`, `orders`, `org_memory_entries` e `lead_state_transitions` — provado por contagem antes/depois.",
+        "Emite atividade `context.reset_manual` e `audit({ action: 'context.reset_manual', ... })`.",
+        "Rate limit aplicado e `X-Request-Id` na resposta."
+      ],
+      "depends_on": [
+        "C2-02"
+      ],
+      "priority": 8,
+      "lane": "core",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C2-04",
+      "phase": "C2",
+      "title": "Botão e diálogo de reset em Contatos",
+      "description": "Ao lado de Editar no header do detalhe do contato, escondido de quem não é manager+. Espelha o padrão de AnonymizeDialog (confirmação por texto), com as strings de UX writing da Spec §9.3.",
+      "acceptance": [
+        "`ACTION_MIN_ROLE` em `hooks/auth/AuthProvider.tsx` ganha `\"context.reset_manual\": \"manager\"` e `\"context.policy_write\": \"admin\"`.",
+        "Botão 'Resetar conversa' aparece ao lado de 'Editar' em `app/app/contacts/[id]/_client.tsx`, com `variant=\"outline\"`, condicionado a `usePermission(\"context.reset_manual\")` — sem checagem manual de role no componente.",
+        "Diálogo usa as strings exatas da Spec §9.3, inclui o checkbox de base de conhecimento e exige digitar 'APAGAR' para habilitar o botão de confirmação.",
+        "Erro 409 de caso aberto é renderizado com a mensagem da Spec §9.3, não com JSON cru.",
+        "E2E pela tela: `manager` vê o botão e completa o fluxo; `agent` e `viewer` não veem o botão. Evidência visual em `.superpowers/evidence/`.",
+        "Após o reset, o contato continua aparecendo na lista de Contatos e a ficha continua preenchida."
+      ],
+      "depends_on": [
+        "C2-03"
+      ],
+      "priority": 7,
+      "lane": "ui",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C2-05",
+      "phase": "C2",
+      "title": "Desfazer a expiração automática",
+      "description": "O 'desfazer' prometido no PRD §3.10. Como nada foi apagado na expiração automática, limpar a marca restaura o contexto integralmente.",
+      "acceptance": [
+        "`DELETE /api/v1/contacts/{id}/context/cutoff` existe, `requireRole(\"manager\")`, seta `context_reset_at` e `context_reset_reason` para null filtrando por `organization_id` da sessão.",
+        "Emite atividade `context.cutoff_cleared` e audit.",
+        "Teste: contato com corte, após o DELETE, volta a ter o mesmo `LeadContext.messages` e o mesmo checkpoint de antes do corte.",
+        "Contato sem corte responde 200 idempotente (não 404)."
+      ],
+      "depends_on": [
+        "C2-02"
+      ],
+      "priority": 6,
+      "lane": "core",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C2-06",
+      "phase": "C2",
+      "title": "Divisor de corte na thread do inbox",
+      "description": "Sem marcador visual, 'por que a IA não lembrou disso?' vira chamado de suporte. O divisor é o que torna o comportamento do agente legível para o humano.",
+      "acceptance": [
+        "Na thread do inbox, quando `contacts.context_reset_at` não é nulo, aparece um divisor na posição temporal correta com data formatada pt-BR e motivo ('fim de ciclo' para `stage_policy`, 'reset manual por {nome}' para manual).",
+        "Tooltip com o texto da Spec §9.4.",
+        "100% das mensagens continuam renderizadas — o divisor não esconde nem colapsa nada.",
+        "Conversa sem corte não mostra divisor.",
+        "E2E pela tela com evidência visual."
+      ],
+      "depends_on": [
+        "C2-02"
+      ],
+      "priority": 6,
+      "lane": "ui",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C2-07",
+      "phase": "C2",
+      "title": "Invariantes de não-destrutividade e isolamento",
+      "description": "As duas promessas centrais do épico viram teste: reset automático não apaga nada, e política/marca de uma org nunca alcançam outra.",
+      "acceptance": [
+        "Invariante em `tests/invariants/`: setar `context_reset_at` num contato não altera `count(*)` de `messages`, `conversations`, `crm_lead_activities`, `lead_notes` nem `orders`.",
+        "Invariante 2-tenants: `context_reset_at` e política de etapa da org A não afetam o `LeadContext` de um contato da org B com mesmo telefone.",
+        "Invariante: hard reset preserva `contacts` e `crm_leads` do contato alvo.",
+        "Os invariantes rodam em `pnpm test:db` e ficam verdes."
+      ],
+      "depends_on": [
+        "C2-03"
+      ],
+      "priority": 7,
+      "lane": "core",
+      "kind": "test",
+      "passes": false
+    },
+    {
+      "id": "C3-01",
+      "phase": "C3",
+      "title": "Configuração de expiração na etapa do Kanban",
+      "description": "A política fala o vocabulário do tenant: 'Entregue' num e-commerce, 'Alta' numa clínica, 'Escriturado' numa imobiliária. Nenhuma regra deriva de is_won/is_lost. UX writing para leigo é critério de aceite, não enfeite.",
+      "acceptance": [
+        "Na configuração do pipeline, cada etapa expõe o checkbox e o campo de carência com as strings EXATAS da Spec §9.1 (incluindo os textos de ajuda).",
+        "Persistem em `crm_stages.resets_context` e `crm_stages.context_reset_after_days` via endpoint com `requireRole(\"admin\")` (`context.policy_write`).",
+        "Org nova não tem nenhuma etapa marcada — verificado em banco fresco pós-`bootstrap-owner.ts`.",
+        "Nenhum texto da tela usa a palavra 'contexto' sem a explicação de efeito ao lado; nenhum jargão técnico (`checkpoint`, `cutoff`, `lead_state`) aparece na UI.",
+        "Mudança de política emite `audit({ action: 'context.policy_changed' })`.",
+        "Renomear ou reordenar a etapa preserva a política (é coluna da etapa, não do nome).",
+        "E2E pela tela com evidência visual."
+      ],
+      "depends_on": [
+        "C2-01"
+      ],
+      "priority": 6,
+      "lane": "ui",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C3-02",
+      "phase": "C3",
+      "title": "Worker context-lifecycle-watcher",
+      "description": "Cron horário que marca o corte de contatos cujo negócio está parado numa etapa marcada além da carência. Idempotente por construção: a condição de seleção exclui quem já foi marcado depois da entrada na etapa.",
+      "acceptance": [
+        "`app/api/v1/cron/context-lifecycle-watcher/route.ts` existe com o mesmo contrato de auth dos demais crons (Bearer `INTERNAL_CRON_SECRET`|`INTERNAL_SECRET`, fail-closed 403) e `export const dynamic = \"force-dynamic\"`.",
+        "Seleciona conforme a Spec §7: `resets_context=true`, etapa não arquivada, `stage_changed_at <= now() - context_reset_after_days`, contato ainda não marcado após a entrada na etapa, e sem `agent_cases` aberto. Teto de 500 por invocação.",
+        "Para cada contato: seta `context_reset_at=now()` e `context_reset_reason='stage_policy'`, cancela jobs pendentes, insere atividade `context.reset_auto` com `metadata.stage_name` e `metadata.after_days`, e emite audit.",
+        "Idempotência provada: rodar 2× seguidas produz exatamente 1 marca e 1 atividade por contato.",
+        "Negócio com 6 dias numa etapa de carência 7 NÃO é marcado; com 8 dias É marcado.",
+        "Contato com caso humano aberto (`status not in ('resolved','cancelled')` — status novo entra bloqueando) é pulado e volta a ser elegível quando o caso fecha.",
+        "O worker não emite nenhum `delete` (grep no arquivo).",
+        "Contato de outra organização nunca é alcançado (teste 2-tenants)."
+      ],
+      "depends_on": [
+        "C3-01"
+      ],
+      "priority": 6,
+      "lane": "core",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C3-03",
+      "phase": "C3",
+      "title": "Aba Ciclo de vida do contexto em Memória da IA",
+      "description": "Onde o tenant regula o intervalo de sessão e entende a diferença entre memória do negócio (não expira) e contexto do cliente (expira). A confusão entre as duas foi o que fez o diagnóstico original apontar para o lugar errado.",
+      "acceptance": [
+        "Aba nova em `app/app/ai/memory/` com as strings EXATAS da Spec §9.2, incluindo a nota informativa sobre o que NÃO é afetado.",
+        "Campo persiste em `organizations.settings.context_lifecycle.session_gap_hours`; vazio grava `null` (desliga) e o texto de ajuda explica o efeito.",
+        "Escrita exige `admin` (`context.policy_write`); `manager` vê a aba em modo leitura; `agent`/`viewer` não veem.",
+        "Mudança emite `audit({ action: 'context.policy_changed' })`.",
+        "E2E pela tela com evidência visual."
+      ],
+      "depends_on": [
+        "C3-01"
+      ],
+      "priority": 5,
+      "lane": "ui",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C4-01",
+      "phase": "C4",
+      "title": "Ficha do cliente que sobrevive ao reset",
+      "description": "Esquecer a conversa não pode virar tratar o cliente como estranho. A ficha vem de dado ESTRUTURADO (contacts + orders), nunca de rolling_summary — é essa regra que impede o vazamento que originou o épico.",
+      "acceptance": [
+        "`getLeadContext` inclui bloco de ficha com identidade (`display_name`/`name`, telefone, e-mail, tags) e relação comercial agregada de `orders` (total de pedidos, data/valor/status do último), com a query da Spec §8.1 filtrando `is_anonymized = false`.",
+        "Contato sem pedido não gera a linha de relação comercial (nada de bloco vazio ou '0 pedidos').",
+        "`contacts.is_anonymized = true` não gera ficha alguma.",
+        "Valores formatados em pt-BR (moeda e data) de forma determinística.",
+        "A ficha é montada mesmo com `context_reset_at` preenchido — é o que sobrevive ao reset.",
+        "Teste unitário cobre: 0 pedidos, 1 pedido, N pedidos, contato anonimizado."
+      ],
+      "depends_on": [
+        "C2-02"
+      ],
+      "priority": 7,
+      "lane": "core",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C4-02",
+      "phase": "C4",
+      "title": "Aviso de atendimento anterior",
+      "description": "Sem o aviso, o agente afirma 'é a primeira vez que conversamos' para quem já comprou três vezes — troca uma alucinação por outra.",
+      "acceptance": [
+        "O aviso da Spec §8.2 entra no contexto quando `context_reset_at` não é nulo OU quando a fronteira de sessão descartou ao menos uma mensagem.",
+        "Contato genuinamente novo (sem histórico anterior ao corte) NÃO recebe o aviso.",
+        "O texto do aviso nunca é enviado ao cliente (não vaza para o corpo da mensagem outbound) — provado em teste de ponta.",
+        "Teste unitário cobre os três casos: sem corte, corte por sessão, corte por marca."
+      ],
+      "depends_on": [
+        "C4-01"
+      ],
+      "priority": 7,
+      "lane": "core",
+      "kind": "build",
+      "passes": false
+    },
+    {
+      "id": "C4-03",
+      "phase": "C4",
+      "title": "Invariante — ficha e aviso não carregam memória conversacional",
+      "description": "A fronteira que sustenta o épico inteiro: fato de negócio expira diferente de resumo de conversa. Se essa linha for cruzada, o reset volta a vazar.",
+      "acceptance": [
+        "Invariante em `tests/invariants/`: com um contato que tem `rolling_summary` e mensagens de conteúdo conhecido, o payload de ficha+aviso não contém nenhuma substring de `lead_checkpoints.rolling_summary` nem de `messages.body`.",
+        "Invariante roda em `pnpm test:db` e fica verde.",
+        "Prova de ponta documentada em `docs/testing/user-journey-map.md`: cotação dada, silêncio de 8h, retomada — o agente não repete o papo anterior e ainda sabe a cotação (AC 1 e AC 2 do PRD)."
+      ],
+      "depends_on": [
+        "C4-02"
+      ],
+      "priority": 7,
+      "lane": "core",
+      "kind": "test",
+      "passes": false
+    }
+  ]
+}
