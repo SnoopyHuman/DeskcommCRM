@@ -138,7 +138,12 @@
       "priority": 8,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "227/227 testes de agent-engine+schemas verdes (21 novos: get-lead-context cutoff+combinação com fronteira de sessão, latestCheckpoint subquery, estadoVigente+getLeadState). typecheck e lint 0 erros. Grep confirma context_reset_at nunca vem de payload de job — sempre relido de contacts via subquery/join em cada uma das 3 leituras. Nenhum update/delete emitido nos 3 pontos alterados (grep). Achado operacional: duas edições ficaram perdidas no meio do trabalho porque o usuário rodou git checkout nesta MESMA worktree revisando o PR da C1 — refeitas e revalidadas."
+      }
     },
     {
       "id": "C2-03",

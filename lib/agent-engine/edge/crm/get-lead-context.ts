@@ -123,6 +123,8 @@ interface ContactRow {
   source: string | null;
   consent: Record<string, unknown> | null;
   is_anonymized: boolean;
+  /** Spec 16 §5: corte do contexto — relido do contato a cada turno, nunca de payload. */
+  context_reset_at: string | null;
 }
 
 interface DecisionRow {
@@ -170,7 +172,8 @@ export async function getLeadContext(
   knobs: LeadContextKnobs,
 ): Promise<LeadContextResult> {
   const { rows: contactRows } = await db.query<ContactRow>(
-    `select name, display_name, email, phone_number, tags, is_blocked, source, consent, is_anonymized
+    `select name, display_name, email, phone_number, tags, is_blocked, source, consent, is_anonymized,
+            context_reset_at::text as context_reset_at
      from contacts where organization_id = $1 and id = $2`,
     [input.tenantId, input.leadId],
   );
@@ -214,6 +217,11 @@ export async function getLeadContext(
   );
   const lastHumanDecision = decisaoRows[0] ? paraDecisao(decisaoRows[0]) : null;
 
+  // Spec 16 §5.1: mensagens anteriores ao corte (hard reset ou expiração por
+  // etapa) somem da leitura — NADA é apagado, é filtro. `context_reset_at`
+  // nulo cai no `coalesce(..., '-infinity')`: idêntico ao comportamento
+  // anterior a esta feature (distinto da fronteira de sessão de §4, que corta
+  // por SILÊNCIO; aqui o corte é por um instante fixo gravado no contato).
   const history: HistoryRow[] = conversationId
     ? (
         await db.query<HistoryRow>(
@@ -222,9 +230,10 @@ export async function getLeadContext(
            from messages
            where organization_id = $1 and conversation_id = $2
              and direction in ('inbound', 'outbound')
+             and sent_at > coalesce($4::timestamptz, '-infinity'::timestamptz)
            order by sent_at desc, id desc
            limit $3`,
-          [input.tenantId, conversationId, knobs.historyLimit],
+          [input.tenantId, conversationId, knobs.historyLimit, contact.context_reset_at],
         )
       ).rows.reverse()
     : [];

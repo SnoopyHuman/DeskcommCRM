@@ -148,16 +148,45 @@ export function findForbiddenKey(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Neutraliza `lead_state` no corte do contexto (Spec 16 §5.3): devolve `null`
+ * quando o estado é ANTERIOR ao corte — o turno passa a operar como
+ * `stage='new'` (mesmo default de `applyLeadStateUpdate` pra lead sem linha),
+ * SEM tocar a linha em `lead_state`. É o que torna o reset reversível de
+ * graça: limpar `context_reset_at` no contato faz o estado real reaparecer,
+ * porque ele nunca foi sobrescrito. Pura — não lê banco nem relógio, só
+ * compara os dois instantes que já chegaram prontos.
+ */
+export function estadoVigente(row: LeadStateRow | null, cutoff: string | null): LeadStateRow | null {
+  if (row === null || cutoff === null) return row;
+  return row.updated_at.getTime() > Date.parse(cutoff) ? row : null;
+}
+
+/**
+ * Relê `contacts.context_reset_at` a cada chamada (mesmo princípio de
+ * `is_blocked` em get-lead-context.ts) e aplica `estadoVigente` — os DOIS
+ * chamadores (abertura do turno E a validação de transição dentro de
+ * `applyLeadStateUpdate`) precisam enxergar o MESMO estado neutralizado,
+ * senão o modelo é informado "stage=new" no contexto e tem a própria
+ * transição rejeitada por `isValidTransition` contra o estágio real —
+ * inconsistência que só existe se o filtro vivesse fora daqui.
+ */
 export async function getLeadState(
   db: Queryable,
   tenantId: string,
   leadId: string,
 ): Promise<LeadStateRow | null> {
-  const { rows } = await db.query<LeadStateRow>(
-    'select * from lead_state where organization_id = $1 and contact_id = $2',
+  const { rows } = await db.query<LeadStateRow & { _context_reset_at: string | null }>(
+    `select ls.*,
+            (select context_reset_at::text from contacts where organization_id = $1 and id = $2) as _context_reset_at
+     from lead_state ls
+     where ls.organization_id = $1 and ls.contact_id = $2`,
     [tenantId, leadId],
   );
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  const { _context_reset_at, ...rest } = row;
+  return estadoVigente(rest, _context_reset_at);
 }
 
 /**

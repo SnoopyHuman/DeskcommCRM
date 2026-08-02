@@ -428,7 +428,17 @@ export interface InboundTurnDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Checkpoint mais recente do lead — a memória que atravessa sessões. */
+/**
+ * Checkpoint mais recente do lead — a memória que atravessa sessões.
+ *
+ * Filtra por `contacts.context_reset_at` (Spec 16 §5.2) via subquery: o corte
+ * é relido do contato A CADA CHAMADA, nunca recebido por parâmetro (mesmo
+ * princípio de `is_blocked` em get-lead-context.ts — a fonte da verdade é o
+ * banco no instante do turno). Contato sem corte (`context_reset_at is null`)
+ * cai no `coalesce(..., '-infinity')`: comportamento idêntico ao anterior a
+ * esta feature. NENHUM `update`/`delete` é emitido aqui — o corte só FILTRA
+ * leitura, nunca apaga o checkpoint.
+ */
 export async function latestCheckpoint(
   db: Queryable,
   tenantId: string,
@@ -437,6 +447,10 @@ export async function latestCheckpoint(
   const { rows } = await db.query<LeadCheckpointRow>(
     `select * from lead_checkpoints
      where organization_id = $1 and contact_id = $2
+       and created_at > coalesce(
+         (select context_reset_at from contacts where organization_id = $1 and id = $2),
+         '-infinity'::timestamptz
+       )
      order by seq desc
      limit 1`,
     [tenantId, leadId],
