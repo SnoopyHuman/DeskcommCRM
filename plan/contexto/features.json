@@ -60,7 +60,12 @@
       "priority": 9,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "6/6 testes verdes (resolveSessionGapHours); typecheck 0 erros; sem migration criada"
+      }
     },
     {
       "id": "C1-03",

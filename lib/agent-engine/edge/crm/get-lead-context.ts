@@ -31,6 +31,15 @@ export interface LeadContextKnobs {
   historyLimit: number;
   /** Teto do payload serializado, contado por countPayloadTokens (default 1000). */
   maxTokens: number;
+  /**
+   * Horas de silêncio que abrem sessão nova (Spec 16 §4); `null` desliga a
+   * fronteira. Opcional: chamador que não passa mantém o comportamento atual
+   * (histórico completo, sem corte de sessão). Resolvido de
+   * `organizations.settings.context_lifecycle.session_gap_hours` via
+   * `resolveSessionGapHours` (lib/schemas/context-lifecycle.ts) — nunca
+   * hardcoded no call site.
+   */
+  sessionGapHours?: number | null;
 }
 
 /** Uma mensagem do histórico, já curada. */
