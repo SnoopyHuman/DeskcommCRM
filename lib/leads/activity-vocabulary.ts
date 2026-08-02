@@ -30,7 +30,12 @@ export type ActivityType =
   | "lead_reactivated"
   | "reactivation_accepted"
   | "reactivation_dismissed"
-  | "reactivation_expired";
+  | "reactivation_expired"
+  // Spec 16 (ciclo de vida do contexto) — os três eventos de corte que
+  // aparecem no divisor da thread e na timeline do contato.
+  | "context_reset_manual"
+  | "context_reset_auto"
+  | "context_cutoff_cleared";
 
 export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   stage_changed: "Mudou de estágio",
@@ -60,6 +65,11 @@ export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   reactivation_accepted: "Retomada de contato aprovada",
   reactivation_dismissed: "Retomada de contato descartada",
   reactivation_expired: "Sugestão de retomada venceu sem decisão",
+  // O divisor da thread (Spec 16 §9.4) reusa este rótulo — é por isso que o
+  // texto já nasce na terceira pessoa e sem jargão técnico ("corte"/"cutoff").
+  context_reset_manual: "Contexto apagado manualmente",
+  context_reset_auto: "Contexto reiniciado — fim de ciclo",
+  context_cutoff_cleared: "Corte de contexto desfeito",
 };
 
 /** Quando o tipo é legado/desconhecido, a linha ainda é honesta — sem jargão. */

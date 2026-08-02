@@ -186,4 +186,12 @@ export type AuditAction =
   | "pipeline.stage_updated"
   | "pipeline.stage_archived"
   | "system.update_requested"
-  | "system.update_finished";
+  | "system.update_finished"
+  /** Spec 16 (ciclo de vida do contexto). Hard reset manual — 1 contato por vez. */
+  | "context.reset_manual"
+  /** Desfazer a expiração automática (C2-05) — restaura o contexto integralmente. */
+  | "context.cutoff_cleared"
+  /** Worker de expiração por etapa (C3) — 1 vez por contato, não por deal. */
+  | "context.reset_auto"
+  /** Mudança de política de retenção (intervalo de sessão / expiração por etapa). */
+  | "context.policy_changed";
