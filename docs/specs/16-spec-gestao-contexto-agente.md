@@ -209,17 +209,34 @@ Ordem de execução (transação única, `organization_id` da sessão):
 
 1. `requireRole("manager")` — admin incluso por hierarquia.
 2. Rejeita se `confirmation !== "APAGAR"` → `422 invalid_confirmation`.
-3. Rejeita se houver `agent_cases` aberto do contato (`status not in ('resolved','cancelled')` — ver §7) → `409 open_case_blocks_reset`, com `details.case_id`.
+3. Rejeita se houver `agent_cases` aberto do contato — resolve via `agent_cases.conversation_id → conversations.contact_id` (`agent_cases` **não** tem `contact_id`; `status not in ('resolved','cancelled')` — ver §7) → `409 open_case_blocks_reset`, com `details.case_id`.
 4. Cancela jobs pendentes do contato em `job_queue` (status pendente/agendado).
 5. `delete from lead_checkpoints where organization_id=$1 and contact_id=$2`
 6. `delete from lead_state where organization_id=$1 and contact_id=$2`
-7. `delete from conversations where organization_id=$1 and contact_id=$2` — cascade apaga `messages` (FK `messages_conversation_id_fkey ON DELETE CASCADE`)
-8. Se `purge_knowledge_base`: `delete from ai_chunks` cujos `metadata->>'conversation_id'` estejam entre as conversas apagadas (ids coletados no passo 7, antes do delete)
-9. `update contacts set context_reset_at = null, context_reset_reason = null` — sem histórico, a marca perde sentido
-10. Atividade `context.reset_manual` em `crm_lead_activities`
-11. `audit({ action: "context.reset_manual", resourceType: "contact", resourceId, metadata: { purge_knowledge_base, reason, deleted: {...} } })`
+7. Coletar ids das conversas do contato (`select id from conversations where organization_id=$1 and contact_id=$2`).
+8. Reparentar notas humanas **antes** do delete — `conversation_notes.conversation_id` é `ON DELETE CASCADE`, então apagar conversas sem este passo destruiria notas humanas irrevogavelmente:
 
-**Nunca tocados:** `contacts`, `crm_leads`, `crm_lead_activities` (exceto a inserção do passo 10), `lead_notes`, `conversation_notes`, `orders`, `org_memory_entries`, `lead_state_transitions`.
+   ```sql
+   insert into lead_notes (organization_id, contact_id, headline, body)
+   select cn.organization_id,
+          conv.contact_id,
+          left(cn.body, 80),
+          cn.body
+     from conversation_notes cn
+     join conversations conv on conv.id = cn.conversation_id
+    where conv.organization_id = $1
+      and conv.contact_id = $2
+   ```
+
+9. `delete from conversations where organization_id=$1 and contact_id=$2` — cascade apaga `messages` e as `conversation_notes` originais (já copiadas no passo 8).
+10. Se `purge_knowledge_base`: `delete from ai_chunks` cujos `metadata->>'conversation_id'` estejam entre as conversas apagadas (ids coletados no passo 7).
+11. `update contacts set context_reset_at = null, context_reset_reason = null` — sem histórico, a marca perde sentido
+12. Atividade `context.reset_manual` em `crm_lead_activities`
+13. `audit({ action: "context.reset_manual", resourceType: "contact", resourceId, metadata: { purge_knowledge_base, reason, deleted: {...}, notes_reparented: N } })`
+
+**Nunca tocados:** `contacts`, `crm_leads`, `crm_lead_activities` (exceto a inserção do passo 12), `lead_notes` (acrescidas pelas notas reparentadas no passo 8), `orders`, `org_memory_entries`, `lead_state_transitions`.
+
+**Preservados por reparent:** o *conteúdo* de `conversation_notes` sobrevive em `lead_notes` (passo 8). As linhas originais somem no cascade do passo 9 — não há como mantê-las: `conversation_id` é `NOT NULL` + `ON DELETE CASCADE`.
 
 `ai_agent_runs` e `ai_invocations` referenciam mensagens/conversas com `ON DELETE SET NULL` — ficam órfãos por design, preservando telemetria e custo.
 
@@ -236,7 +253,8 @@ Ordem de execução (transação única, `organization_id` da sessão):
 Seleção:
 
 ```sql
-select l.id as lead_id, l.contact_id, l.organization_id, l.stage_changed_at, s.name as stage_name
+select distinct on (l.organization_id, l.contact_id)
+       l.id as lead_id, l.contact_id, l.organization_id, l.stage_changed_at, s.name as stage_name
   from crm_leads l
   join crm_stages s on s.id = l.stage_id
   join contacts c on c.id = l.contact_id
@@ -247,16 +265,22 @@ select l.id as lead_id, l.contact_id, l.organization_id, l.stage_changed_at, s.n
    and (c.context_reset_at is null or c.context_reset_at < l.stage_changed_at)
    and not exists (
      select 1 from agent_cases ac
+     join conversations conv on conv.id = ac.conversation_id
       where ac.organization_id = l.organization_id
-        and ac.contact_id = l.contact_id
+        and conv.contact_id = l.contact_id
         and ac.status not in ('resolved', 'cancelled')
    )
+ order by l.organization_id, l.contact_id, l.stage_changed_at asc, l.id asc
  limit 500
 ```
 
-**"Caso aberto" é definido por negação, de propósito.** O CHECK de `agent_cases.status` hoje aceita `awaiting_human`, `awaiting_lead`, `resolved`, `escalated` e `cancelled`. Listar os abertos pelo nome faria um status novo (adicionado depois por outra spec) nascer **fora** do bloqueio, silenciosamente — o reset passaria a apagar contexto de casos que ninguém previu. Com `not in ('resolved','cancelled')`, status novo entra bloqueando, que é o lado seguro do erro. A mesma expressão vale para o hard reset (§6.1, passo 3).
+**Join de caso aberto via `conversations`.** `agent_cases` expõe `lead_id` e `conversation_id`, não `contact_id`. O caminho seguro é `ac.conversation_id → conversations.contact_id` — `conversation_id` é `NOT NULL`; `lead_id` pode ser nulo (`ON DELETE SET NULL`) e deixaria casos órfãos de lead fora do bloqueio.
 
-Para cada linha: `update contacts set context_reset_at = now(), context_reset_reason = 'stage_policy'`, cancelar jobs pendentes do contato, inserir atividade `context.reset_auto` com `metadata.stage_name` e `metadata.after_days`, e `audit`.
+**`DISTINCT ON (organization_id, contact_id)` é obrigatório.** O índice `idx_crm_leads_org_contact` não é unique: um contato com N deals elegíveis devolveria N linhas, repetiria atividade/audit e faria o `LIMIT 500` contar deals em vez de contatos. Empate resolvido pelo `stage_changed_at` mais antigo (carência mais vencida), depois `l.id`.
+
+**"Caso aberto" é definido por negação, de propósito.** O CHECK de `agent_cases.status` hoje aceita `awaiting_human`, `awaiting_lead`, `resolved`, `escalated` e `cancelled`. Listar os abertos pelo nome faria um status novo (adicionado depois por outra spec) nascer **fora** do bloqueio, silenciosamente — o reset passaria a apagar contexto de casos que ninguém previu. Com `not in ('resolved','cancelled')`, status novo entra bloqueando, que é o lado seguro do erro. A mesma expressão (e o mesmo join via `conversations`) vale para o hard reset (§6.1, passo 3).
+
+Para cada linha: `update contacts set context_reset_at = now(), context_reset_reason = 'stage_policy'`, cancelar jobs pendentes do contato, inserir atividade `context.reset_auto` com `metadata.stage_name` e `metadata.after_days`, e `audit`. Side effects rodam **uma vez por contato**, não por deal.
 
 **Idempotência:** a condição `c.context_reset_at < l.stage_changed_at` faz o contato sair do conjunto após a primeira passagem. Reprocessar não muda nada. Se o negócio voltar para a etapa depois (novo `stage_changed_at`), volta a ser elegível — que é o comportamento correto para um novo ciclo.
 
@@ -393,7 +417,8 @@ Sem backfill: as colunas nascem com default que reproduz o comportamento atual (
 - Idempotência do worker: rodar 2× produz 1 marca e 1 atividade.
 - Não-destrutividade: após expiração automática, `count(messages)` do contato é idêntico ao de antes.
 - Ficha e aviso nunca contêm substring de `rolling_summary` nem de `messages.body`.
-- Hard reset preserva `contacts`, `crm_leads`, `crm_lead_activities`, `lead_notes` e `orders`.
+- Hard reset preserva `contacts`, `crm_leads`, `crm_lead_activities`, `lead_notes` (incluindo conteúdo reparentado de `conversation_notes`) e `orders`.
+- Worker de expiração: contato com 2+ deals elegíveis gera exatamente 1 marca, 1 atividade e 1 audit.
 - `baseline.sql` aplica em modos install (`ON_ERROR_STOP=1`) e update num `pgvector/pgvector:pg17` descartável.
 
 **E2E pela tela (`pnpm test:e2e`, doutrina de QA visual)**
