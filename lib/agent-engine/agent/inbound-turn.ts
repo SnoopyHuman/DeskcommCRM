@@ -429,31 +429,46 @@ export interface InboundTurnDeps {
 }
 
 /**
+ * Lê `contacts.context_reset_at` uma vez (Spec 16 §5 — snapshot do turno).
+ * Nunca vem do job payload: a fonte é o banco no início do turno. O mesmo
+ * valor alimenta checkpoint, lead_state e histórico — evita misturar corte
+ * antigo com mensagens novas se a marca mudar no meio das três leituras.
+ */
+export async function loadContextResetAt(
+  db: Queryable,
+  tenantId: string,
+  leadId: string,
+): Promise<string | null> {
+  const { rows } = await db.query<{ context_reset_at: string | null }>(
+    `select context_reset_at::text as context_reset_at
+       from contacts
+      where organization_id = $1 and id = $2`,
+    [tenantId, leadId],
+  );
+  return rows[0]?.context_reset_at ?? null;
+}
+
+/**
  * Checkpoint mais recente do lead — a memória que atravessa sessões.
  *
- * Filtra por `contacts.context_reset_at` (Spec 16 §5.2) via subquery: o corte
- * é relido do contato A CADA CHAMADA, nunca recebido por parâmetro (mesmo
- * princípio de `is_blocked` em get-lead-context.ts — a fonte da verdade é o
- * banco no instante do turno). Contato sem corte (`context_reset_at is null`)
- * cai no `coalesce(..., '-infinity')`: comportamento idêntico ao anterior a
- * esta feature. NENHUM `update`/`delete` é emitido aqui — o corte só FILTRA
- * leitura, nunca apaga o checkpoint.
+ * Filtra por `contextResetAt` (snapshot do turno, Spec 16 §5.2). Contato sem
+ * corte (`null`) cai no `coalesce(..., '-infinity')`: comportamento idêntico
+ * ao anterior a esta feature. NENHUM `update`/`delete` é emitido aqui — o
+ * corte só FILTRA leitura, nunca apaga o checkpoint.
  */
 export async function latestCheckpoint(
   db: Queryable,
   tenantId: string,
   leadId: string,
+  contextResetAt: string | null,
 ): Promise<LeadCheckpointRow | null> {
   const { rows } = await db.query<LeadCheckpointRow>(
     `select * from lead_checkpoints
      where organization_id = $1 and contact_id = $2
-       and created_at > coalesce(
-         (select context_reset_at from contacts where organization_id = $1 and id = $2),
-         '-infinity'::timestamptz
-       )
+       and created_at > coalesce($3::timestamptz, '-infinity'::timestamptz)
      order by seq desc
      limit 1`,
-    [tenantId, leadId],
+    [tenantId, leadId, contextResetAt],
   );
   return rows[0] ?? null;
 }
@@ -751,12 +766,14 @@ export async function runAgentTurn(
     agentConfig !== null && agentConfig.casesEnabled
       ? `${systemWithMemory}\n\n${CASES_SYSTEM_BLOCK}`
       : systemWithMemory;
-  const previous = await latestCheckpoint(pool, tenantId, leadId);
-  const leadState = await getLeadState(pool, tenantId, leadId);
+  // Spec 16 §5: um snapshot por turno — as três leituras usam o mesmo corte.
+  const contextResetAt = await loadContextResetAt(pool, tenantId, leadId);
+  const previous = await latestCheckpoint(pool, tenantId, leadId, contextResetAt);
+  const leadState = await getLeadState(pool, tenantId, leadId, contextResetAt);
   const openingContext = await getLeadContext(
     pool,
     deps.crmCfg,
-    { tenantId, leadId, conversationId: input.conversationId },
+    { tenantId, leadId, conversationId: input.conversationId, contextResetAt },
     turnContextKnobs,
   );
   if (!openingContext.ok) {
@@ -1004,7 +1021,7 @@ export async function runAgentTurn(
           return await getLeadContext(
             pool,
             deps.crmCfg,
-            { tenantId, leadId, conversationId: input.conversationId },
+            { tenantId, leadId, conversationId: input.conversationId, contextResetAt },
             turnContextKnobs,
           );
         } catch (err) {
@@ -1845,20 +1862,20 @@ export async function runAgentTurn(
   );
   const content = parseCheckpointText(closing.result.text);
 
-  // Wave 3 (2.4): o checkpoint anterior é lido ANTES de gravar o novo — a
-  // timeline recebe o DIFF, nunca o snapshot. Emitir a cada turno encheria a
+  // Wave 3 (2.4): DIFF contra o checkpoint da ABERTURA do turno (`previous`) —
+  // a timeline recebe o DIFF, nunca o snapshot. Reusar o snapshot evita reler
+  // o corte no meio do turno (Spec 16 §5). Emitir a cada turno encheria a
   // tela com "a IA pensou" e enterraria a única linha que muda o que alguém
   // faria a seguir.
-  const checkpointAnterior = await latestCheckpoint(pool, tenantId, leadId);
   await insertCheckpoint(pool, { tenantId, leadId, jobId: job.id, content });
 
   const mudanca = diffCheckpoint(
-    checkpointAnterior
+    previous
       ? {
-          commitments: (checkpointAnterior.commitments ?? []) as string[],
-          objections: (checkpointAnterior.objections ?? []) as string[],
-          next_action: checkpointAnterior.next_action ?? null,
-          rolling_summary: checkpointAnterior.rolling_summary ?? null,
+          commitments: (previous.commitments ?? []) as string[],
+          objections: (previous.objections ?? []) as string[],
+          next_action: previous.next_action ?? null,
+          rolling_summary: previous.rolling_summary ?? null,
         }
       : null,
     content,

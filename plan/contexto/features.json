@@ -149,17 +149,19 @@
       "id": "C2-03",
       "phase": "C2",
       "title": "Endpoint de hard reset manual",
-      "description": "Única operação destrutiva do épico. Um contato por vez, manager+, confirmação digitada, bloqueio por caso humano aberto, cancelamento de jobs pendentes e audit. Preserva contato, lead do CRM, timeline e pedidos — apaga também lead_notes (memória durável injetada no turno).",
+      "description": "Única operação destrutiva do épico. Um contato por vez, manager+, confirmação digitada, bloqueio por caso/job em voo, cancelamento de jobs pendentes e audit. Mutação em RPC atômica (`fn_hard_reset_contact_context`). Preserva contato, lead do CRM, timeline e pedidos — apaga também lead_notes.",
       "acceptance": [
         "`POST /api/v1/contacts/{id}/context/hard-reset` existe, usa `requireRole(\"manager\")` e resolve `organization_id` da sessão — nunca do body (grep confirma).",
         "Body validado por Zod: `confirmation` literal 'APAGAR' (senão 422 `invalid_confirmation`), `purge_knowledge_base` boolean opcional default false, `reason` string opcional.",
+        "Mutação destrutiva via `fn_hard_reset_contact_context` (SECURITY DEFINER, service_role, TX única) — falha no meio reverte tudo; rota só audita após `ok:true`.",
         "Com `agent_cases` aberto (join via `agent_cases.conversation_id -> conversations.contact_id` — `agent_cases` NÃO tem `contact_id`; `status not in ('resolved','cancelled')`) para o contato, responde 409 `open_case_blocks_reset` com `details.case_id` e NÃO apaga nada.",
-        "Cancela jobs pendentes do contato em `job_queue` (status pending/running) antes dos deletes.",
+        "Com job `running` do contato, responde 409 `job_in_flight_blocks_reset` e NÃO apaga nada (marcar failed não para o handler em memória).",
+        "Cancela só jobs `pending` do contato em `job_queue` antes dos deletes.",
         "Apaga `lead_checkpoints`, `lead_state`, `lead_notes` e `conversations` (cascade em `messages` e `conversation_notes`) do par organização+contato; zera `context_reset_at`/`context_reset_reason`.",
-        "`purge_knowledge_base: true` apaga também `ai_chunks` cujo `metadata->>'conversation_id'` esteja entre as conversas removidas (ids coletados ANTES do delete); com false, `ai_chunks` fica intacto.",
-        "Preserva `contacts`, `crm_leads`, `crm_lead_activities` (salvo a atividade nova), `orders`, `org_memory_entries` e `lead_state_transitions` — provado por contagem antes/depois. Após o reset, `count(lead_notes)` do contato é 0.",
+        "`purge_knowledge_base: true` apaga também `ai_chunks` cujo `metadata->>'conversation_id'` esteja entre as conversas removidas; com false, `ai_chunks` fica intacto.",
+        "Preserva `contacts`, `crm_leads`, `crm_lead_activities` (salvo a atividade nova), `orders`, `org_memory_entries` e `lead_state_transitions`. Após o reset, `count(lead_notes)` do contato é 0.",
         "Emite atividade `context.reset_manual` em `crm_lead_activities` e `audit({ action: 'context.reset_manual', metadata: { purge_knowledge_base, reason, deleted } })`.",
-        "`X-Request-Id` na resposta (mesmo padrão de ok()/fail()). Sem rate-limiter dedicado — doutrina do repo escopa rate limit a rotas PÚBLICAS; esta é autenticada + RBAC manager+, mesmo padrão de app/api/v1/lgpd/anonymize/route.ts (referência), que também não tem rate-limiter próprio."
+        "`X-Request-Id` na resposta (mesmo padrão de ok()/fail()). Sem rate-limiter dedicado — doutrina do repo escopa rate limit a rotas PÚBLICAS; esta é autenticada + RBAC manager+."
       ],
       "depends_on": [
         "C2-02"
@@ -171,7 +173,7 @@
       "verification": {
         "verdict": "PASS",
         "by": "self",
-        "note": "Endpoint hard-reset + schema Zod + lib/contacts/hard-reset-context; typecheck/lint/schema tests verdes; org_id da sessão."
+        "note": "RPC fn_hard_reset_contact_context + route RBAC/Zod; 409 open_case e job_in_flight; typecheck verde."
       }
     },
     {

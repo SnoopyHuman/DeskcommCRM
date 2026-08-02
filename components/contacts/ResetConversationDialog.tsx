@@ -28,6 +28,10 @@ const CONFIRM_TEXT = "APAGAR";
 export const OPEN_CASE_BLOCKS_RESET_MESSAGE =
   "Existe um caso aberto para este contato. Resolva o caso antes de apagar o contexto — senão quem estiver cuidando dele perde a referência.";
 
+/** Spec 16 §6.1 — job claimed pelo worker; reset esperaria o turno terminar. */
+export const JOB_IN_FLIGHT_BLOCKS_RESET_MESSAGE =
+  "Há um atendimento da IA em andamento para este contato. Espere ele terminar e tente de novo — senão o contexto pode reaparecer no meio do reset.";
+
 export function ResetConversationDialog({
   contactId,
   contactName,
@@ -59,6 +63,10 @@ export function ResetConversationDialog({
     } catch (err) {
       if (err instanceof ApiError && err.code === "open_case_blocks_reset") {
         setCaseError(OPEN_CASE_BLOCKS_RESET_MESSAGE);
+        return;
+      }
+      if (err instanceof ApiError && err.code === "job_in_flight_blocks_reset") {
+        setCaseError(JOB_IN_FLIGHT_BLOCKS_RESET_MESSAGE);
         return;
       }
       // hook handles toast for demais erros

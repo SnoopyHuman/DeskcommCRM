@@ -1,22 +1,21 @@
 /**
  * Hard reset do contexto de um contato (Spec 16 §6.1 / C2-03).
  *
- * Única operação destrutiva do épico de ciclo de vida: apaga conversas,
- * checkpoints, lead_state, lead_notes e conversation_notes (via cascade).
- * Preserva contato, lead do CRM, timeline de atividades, pedidos.
+ * Delega a `fn_hard_reset_contact_context` (SECURITY DEFINER, TX única) —
+ * mesmo padrão de `fn_lgpd_cascade_redact_contact`. O client supabase-js não
+ * oferece transação multi-statement; a RPC evita reset parcial (checkpoint
+ * apagado + 500 sem audit).
+ *
+ * Apaga conversas, checkpoints, lead_state, lead_notes e conversation_notes
+ * (via cascade). Preserva contato, lead do CRM, timeline de atividades, pedidos.
  * `organization_id` SEMPRE vem do caller autenticado — nunca do body.
  *
- * Por que apaga lead_notes: o agente grava resumos duráveis ali ("interesse:
- * guipir…") e injeta no turno seguinte. Preservá-las fazia o hard reset
- * "falhar" para QA — a conversa sumia, a memória não.
- *
- * Sequencial best-effort (mesmo padrão de `lgpd/anonymize`): supabase-js não
- * oferece transação multi-statement no client; cada passo filtra por org+contato.
+ * Jobs `running` bloqueiam (409): marcar failed não para o handler em memória,
+ * que poderia recriar estado depois do delete. Só `pending` é cancelado.
  */
-import type { SupabaseClient } from "@supabase/supabase-js";
-
 import type { Actor } from "@/lib/api/handlers/types";
 import { emitLeadActivity } from "@/lib/leads/activity-emitter";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export type HardResetResult =
   | {
@@ -33,13 +32,16 @@ export type HardResetResult =
     }
   | {
       ok: false;
-      code: "not_found" | "open_case_blocks_reset" | "internal_error";
+      code:
+        | "not_found"
+        | "open_case_blocks_reset"
+        | "job_in_flight_blocks_reset"
+        | "internal_error";
       message: string;
       details?: Record<string, unknown>;
     };
 
 export interface HardResetContextArgs {
-  supabase: SupabaseClient;
   organizationId: string;
   contactId: string;
   actor: Actor;
@@ -47,145 +49,81 @@ export interface HardResetContextArgs {
   reason?: string;
 }
 
+interface RpcResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  contact_id?: string;
+  deleted?: {
+    conversations?: number;
+    lead_checkpoints?: number;
+    lead_state?: number;
+    lead_notes?: number;
+    jobs_canceled?: number;
+    ai_chunks?: number;
+  };
+}
+
+function asCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 export async function hardResetContactContext(
   args: HardResetContextArgs,
 ): Promise<HardResetResult> {
-  const { supabase, organizationId, contactId, actor, purgeKnowledgeBase, reason } = args;
+  const { organizationId, contactId, actor, purgeKnowledgeBase, reason } = args;
+  const admin = createAdminClient();
 
-  const { data: contact, error: contactErr } = await supabase
-    .from("contacts")
-    .select("id")
-    .eq("id", contactId)
-    .eq("organization_id", organizationId)
-    .maybeSingle();
-  if (contactErr) {
-    return { ok: false, code: "internal_error", message: contactErr.message };
-  }
-  if (!contact) {
-    return { ok: false, code: "not_found", message: "Contato não encontrado." };
+  const { data, error } = await admin.rpc("fn_hard_reset_contact_context" as never, {
+    p_organization_id: organizationId,
+    p_contact_id: contactId,
+    p_purge_knowledge_base: purgeKnowledgeBase,
+  } as never);
+
+  if (error) {
+    return {
+      ok: false,
+      code: "internal_error",
+      message: `fn_hard_reset_contact_context: ${error.message}`,
+    };
   }
 
-  const { data: conversations, error: convErr } = await supabase
-    .from("conversations")
-    .select("id")
-    .eq("organization_id", organizationId)
-    .eq("contact_id", contactId);
-  if (convErr) {
-    return { ok: false, code: "internal_error", message: convErr.message };
-  }
-  const conversationIds = (conversations ?? []).map((c) => c.id as string);
-
-  if (conversationIds.length > 0) {
-    const { data: openCase, error: caseErr } = await supabase
-      .from("agent_cases")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .in("conversation_id", conversationIds)
-      .not("status", "in", "(resolved,cancelled)")
-      .limit(1)
-      .maybeSingle();
-    if (caseErr) {
-      return { ok: false, code: "internal_error", message: caseErr.message };
-    }
-    if (openCase) {
+  const result = (data ?? {}) as RpcResult;
+  if (!result.ok) {
+    const code = result.code;
+    if (
+      code === "not_found" ||
+      code === "open_case_blocks_reset" ||
+      code === "job_in_flight_blocks_reset"
+    ) {
       return {
         ok: false,
-        code: "open_case_blocks_reset",
-        message:
-          "Existe um caso aberto para este contato. Resolva o caso antes de apagar o contexto — senão quem estiver cuidando dele perde a referência.",
-        details: { case_id: openCase.id },
+        code,
+        message: result.message ?? "Hard reset bloqueado.",
+        details: result.details,
       };
     }
+    return {
+      ok: false,
+      code: "internal_error",
+      message: result.message ?? "Hard reset falhou sem código conhecido.",
+      details: result.details,
+    };
   }
 
-  // Cancela jobs pendentes/running — 'failed' (terminal de negócio), não
-  // 'dead' (que abriria alerta crítico na inbox).
-  const { data: canceledJobs, error: jobErr } = await supabase
-    .from("job_queue")
-    .update({
-      status: "failed",
-      last_error: "canceled_by_context_hard_reset",
-      locked_by: null,
-      locked_at: null,
-    })
-    .eq("organization_id", organizationId)
-    .eq("contact_id", contactId)
-    .in("status", ["pending", "running"])
-    .select("id");
-  if (jobErr) {
-    return { ok: false, code: "internal_error", message: `job_queue: ${jobErr.message}` };
-  }
-  const jobsCanceled = canceledJobs?.length ?? 0;
+  const deleted = {
+    conversations: asCount(result.deleted?.conversations),
+    lead_checkpoints: asCount(result.deleted?.lead_checkpoints),
+    lead_state: asCount(result.deleted?.lead_state),
+    lead_notes: asCount(result.deleted?.lead_notes),
+    jobs_canceled: asCount(result.deleted?.jobs_canceled),
+    ai_chunks: asCount(result.deleted?.ai_chunks),
+  };
 
-  const { data: deletedCheckpoints, error: cpErr } = await supabase
-    .from("lead_checkpoints")
-    .delete()
-    .eq("organization_id", organizationId)
-    .eq("contact_id", contactId)
-    .select("id");
-  if (cpErr) {
-    return { ok: false, code: "internal_error", message: `lead_checkpoints: ${cpErr.message}` };
-  }
-
-  const { data: deletedState, error: stateErr } = await supabase
-    .from("lead_state")
-    .delete()
-    .eq("organization_id", organizationId)
-    .eq("contact_id", contactId)
-    .select("id");
-  if (stateErr) {
-    return { ok: false, code: "internal_error", message: `lead_state: ${stateErr.message}` };
-  }
-
-  // Notas duráveis do lead — é daqui que vazava "guipir preto" após apagar a conversa.
-  const { data: deletedNotes, error: notesErr } = await supabase
-    .from("lead_notes")
-    .delete()
-    .eq("organization_id", organizationId)
-    .eq("contact_id", contactId)
-    .select("id");
-  if (notesErr) {
-    return { ok: false, code: "internal_error", message: `lead_notes: ${notesErr.message}` };
-  }
-
-  // Purge RAG antes do delete das conversas (ids ainda vivos).
-  let aiChunksDeleted = 0;
-  if (purgeKnowledgeBase && conversationIds.length > 0) {
-    for (const convId of conversationIds) {
-      const { data: purged, error: chunkErr } = await supabase
-        .from("ai_chunks")
-        .delete()
-        .eq("organization_id", organizationId)
-        .filter("metadata->>conversation_id", "eq", convId)
-        .select("id");
-      if (chunkErr) {
-        return { ok: false, code: "internal_error", message: `ai_chunks: ${chunkErr.message}` };
-      }
-      aiChunksDeleted += purged?.length ?? 0;
-    }
-  }
-
-  // Cascade apaga messages + conversation_notes.
-  const { data: deletedConvs, error: delConvErr } = await supabase
-    .from("conversations")
-    .delete()
-    .eq("organization_id", organizationId)
-    .eq("contact_id", contactId)
-    .select("id");
-  if (delConvErr) {
-    return { ok: false, code: "internal_error", message: `conversations: ${delConvErr.message}` };
-  }
-
-  const { error: clearErr } = await supabase
-    .from("contacts")
-    .update({ context_reset_at: null, context_reset_reason: null })
-    .eq("id", contactId)
-    .eq("organization_id", organizationId);
-  if (clearErr) {
-    return { ok: false, code: "internal_error", message: `contacts: ${clearErr.message}` };
-  }
-
-  const { data: leadRow } = await supabase
+  // Atividade na timeline fora da RPC: emitLeadActivity concentra vocabulário
+  // e payload; se falhar, o reset já commitou (audit da rota ainda registra).
+  const { data: leadRow } = await admin
     .from("crm_leads")
     .select("id")
     .eq("organization_id", organizationId)
@@ -195,7 +133,7 @@ export async function hardResetContactContext(
     .maybeSingle();
 
   if (leadRow?.id) {
-    const activity = await emitLeadActivity(supabase, {
+    const activity = await emitLeadActivity(admin, {
       organizationId,
       leadId: leadRow.id,
       contactId,
@@ -208,8 +146,8 @@ export async function hardResetContactContext(
         : "Contexto apagado manualmente",
       payload: {
         purge_knowledge_base: purgeKnowledgeBase,
-        deleted_lead_notes: deletedNotes?.length ?? 0,
-        deleted_conversations: deletedConvs?.length ?? 0,
+        deleted_lead_notes: deleted.lead_notes,
+        deleted_conversations: deleted.conversations,
       },
     });
     if (!activity.ok) {
@@ -217,16 +155,5 @@ export async function hardResetContactContext(
     }
   }
 
-  return {
-    ok: true,
-    contactId,
-    deleted: {
-      conversations: deletedConvs?.length ?? 0,
-      lead_checkpoints: deletedCheckpoints?.length ?? 0,
-      lead_state: deletedState?.length ?? 0,
-      lead_notes: deletedNotes?.length ?? 0,
-      jobs_canceled: jobsCanceled,
-      ai_chunks: aiChunksDeleted,
-    },
-  };
+  return { ok: true, contactId, deleted };
 }

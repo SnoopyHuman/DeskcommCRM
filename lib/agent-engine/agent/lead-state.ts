@@ -163,19 +163,28 @@ export function estadoVigente(row: LeadStateRow | null, cutoff: string | null): 
 }
 
 /**
- * Relê `contacts.context_reset_at` a cada chamada (mesmo princípio de
- * `is_blocked` em get-lead-context.ts) e aplica `estadoVigente` — os DOIS
- * chamadores (abertura do turno E a validação de transição dentro de
- * `applyLeadStateUpdate`) precisam enxergar o MESMO estado neutralizado,
- * senão o modelo é informado "stage=new" no contexto e tem a própria
- * transição rejeitada por `isValidTransition` contra o estágio real —
- * inconsistência que só existe se o filtro vivesse fora daqui.
+ * Lê `lead_state` e aplica `estadoVigente` com o corte do turno.
+ *
+ * Na abertura do turno, `contextResetAt` é o snapshot único (Spec 16 §5).
+ * Em `applyLeadStateUpdate` (meio do turno), passa-se `undefined` para
+ * reler o contato — a escrita precisa do corte vigente no instante da
+ * transição, não do snapshot da abertura.
  */
 export async function getLeadState(
   db: Queryable,
   tenantId: string,
   leadId: string,
+  contextResetAt?: string | null,
 ): Promise<LeadStateRow | null> {
+  if (contextResetAt !== undefined) {
+    const { rows } = await db.query<LeadStateRow>(
+      `select * from lead_state
+        where organization_id = $1 and contact_id = $2`,
+      [tenantId, leadId],
+    );
+    return estadoVigente(rows[0] ?? null, contextResetAt);
+  }
+
   const { rows } = await db.query<LeadStateRow & { _context_reset_at: string | null }>(
     `select ls.*,
             (select context_reset_at::text from contacts where organization_id = $1 and id = $2) as _context_reset_at

@@ -168,7 +168,13 @@ interface HistoryRow {
 export async function getLeadContext(
   db: Queryable,
   _cfg: CrmEdgeConfig,
-  input: { tenantId: string; leadId: string; conversationId?: string | null },
+  input: {
+    tenantId: string;
+    leadId: string;
+    conversationId?: string | null;
+    /** Snapshot do turno (Spec 16 §5). Se omitido, usa o valor lido do contato. */
+    contextResetAt?: string | null;
+  },
   knobs: LeadContextKnobs,
 ): Promise<LeadContextResult> {
   const { rows: contactRows } = await db.query<ContactRow>(
@@ -184,6 +190,11 @@ export async function getLeadContext(
       'não encontrei esse lead nesta organização — confira o lead antes de continuar; se o problema persistir, peça handoff humano.',
     );
   }
+
+  // Snapshot do turno tem precedência sobre a coluna recém-lida — evita o
+  // prompt misturar corte A no checkpoint com mensagens sob corte B.
+  const cutoff =
+    input.contextResetAt !== undefined ? input.contextResetAt : contact.context_reset_at;
 
   // Conversa: a do job quando informada (fonte confiável); senão a 1:1 mais
   // recente do contato. Grupos NUNCA (regra dura nº 12).
@@ -233,7 +244,7 @@ export async function getLeadContext(
              and sent_at > coalesce($4::timestamptz, '-infinity'::timestamptz)
            order by sent_at desc, id desc
            limit $3`,
-          [input.tenantId, conversationId, knobs.historyLimit, contact.context_reset_at],
+          [input.tenantId, conversationId, knobs.historyLimit, cutoff],
         )
       ).rows.reverse()
     : [];

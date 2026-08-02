@@ -186,7 +186,7 @@ function estadoVigente(row: LeadStateRow | null, cutoff: string | null): LeadSta
 
 `null` faz o turno operar como `stage='new'`, `qualification={}` — que é exatamente "novo ciclo" do PRD §3.6, sem escrever nada e sem tocar no Kanban.
 
-**Regra dura:** nenhuma dessas três leituras pode usar `context_reset_at` vindo do payload do job. O valor é sempre relido de `contacts` no turno, pela mesma closure org-scoped que já resolve `is_blocked`.
+**Regra dura:** nenhuma dessas três leituras pode usar `context_reset_at` vindo do payload do job. O valor é lido **uma vez** de `contacts` no início do turno (`loadContextResetAt`) e o mesmo snapshot alimenta checkpoint, `lead_state` e histórico — nunca três re-leituras independentes que possam divergir se a marca mudar no meio.
 
 ---
 
@@ -205,23 +205,22 @@ function estadoVigente(row: LeadStateRow | null, cutoff: string | null): LeadSta
 }
 ```
 
-Ordem de execução (transação única, `organization_id` da sessão):
+A mutação destrutiva roda em **`fn_hard_reset_contact_context`** (SECURITY DEFINER, `service_role`, TX única — mesmo padrão de `fn_lgpd_cascade_redact_contact`). A rota só faz RBAC + Zod + audit/atividade após `ok: true`. Erro no meio da RPC reverte tudo; não existe reset parcial com 500.
+
+Ordem (RPC + envelope HTTP; `organization_id` da sessão):
 
 1. `requireRole("manager")` — admin incluso por hierarquia.
 2. Rejeita se `confirmation !== "APAGAR"` → `422 invalid_confirmation`.
-3. Rejeita se houver `agent_cases` aberto do contato — resolve via `agent_cases.conversation_id → conversations.contact_id` (`agent_cases` **não** tem `contact_id`; `status not in ('resolved','cancelled')` — ver §7) → `409 open_case_blocks_reset`, com `details.case_id`.
-4. Cancela jobs pendentes do contato em `job_queue` (status pendente/agendado).
-5. `delete from lead_checkpoints where organization_id=$1 and contact_id=$2`
-6. `delete from lead_state where organization_id=$1 and contact_id=$2`
-7. `delete from lead_notes where organization_id=$1 and contact_id=$2` — notas duráveis entram no hard reset: o agente as injeta no turno (`memória do lead`) e preservar só elas fazia o reset "falhar" (ex.: interesse em produto de conversa antiga).
-8. Coletar ids das conversas do contato (`select id from conversations where organization_id=$1 and contact_id=$2`).
-9. Se `purge_knowledge_base`: `delete from ai_chunks` cujos `metadata->>'conversation_id'` estejam entre as conversas (ids do passo 8).
-10. `delete from conversations where organization_id=$1 and contact_id=$2` — cascade apaga `messages` e `conversation_notes`.
-11. `update contacts set context_reset_at = null, context_reset_reason = null` — sem histórico, a marca perde sentido
-12. Atividade `context.reset_manual` em `crm_lead_activities`
-13. `audit({ action: "context.reset_manual", resourceType: "contact", resourceId, metadata: { purge_knowledge_base, reason, deleted: {...} } })`
+3. RPC: contato inexistente → `ok:false` / `404 not_found`.
+4. RPC: `agent_cases` aberto do contato — join via `agent_cases.conversation_id → conversations.contact_id` (`status not in ('resolved','cancelled')` — ver §7) → `409 open_case_blocks_reset`, com `details.case_id`.
+5. RPC: job `running` do contato → `409 job_in_flight_blocks_reset` (marcar `failed` **não** para o handler em memória; esperar o turno terminar evita recriar checkpoint/estado depois do delete).
+6. RPC: cancela jobs `pending` do contato (`failed` + `canceled_by_context_hard_reset`).
+7. RPC: `delete` `lead_checkpoints`, `lead_state`, `lead_notes` do par org+contato.
+8. RPC: se `purge_knowledge_base`, `delete` `ai_chunks` cujos `metadata->>'conversation_id'` estejam entre as conversas do contato.
+9. RPC: `delete` `conversations` — cascade apaga `messages` e `conversation_notes`; zera `context_reset_at`/`context_reset_reason`.
+10. Rota (após `ok`): atividade `context.reset_manual` em `crm_lead_activities` + `audit({ action: "context.reset_manual", … })`.
 
-**Nunca tocados:** `contacts`, `crm_leads`, `crm_lead_activities` (exceto a inserção do passo 12), `orders`, `org_memory_entries`, `lead_state_transitions`.
+**Nunca tocados:** `contacts` (linha), `crm_leads`, `crm_lead_activities` (exceto a inserção do passo 10), `orders`, `org_memory_entries`, `lead_state_transitions`.
 
 **Soft reset vs hard reset:** soft reset (marca `context_reset_at`) **não** apaga `lead_notes` — só corta o que o agente lê. Hard reset é a borracha: notas, conversa e resumo somem.
 

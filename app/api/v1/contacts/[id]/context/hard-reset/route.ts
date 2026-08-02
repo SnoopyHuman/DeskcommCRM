@@ -13,7 +13,6 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { hardResetContactContext } from "@/lib/contacts/hard-reset-context";
 import { hardResetContextSchema } from "@/lib/schemas";
-import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -55,10 +54,8 @@ export async function POST(
   }
 
   const { purge_knowledge_base, reason } = parsed.data;
-  const supabase = await createClient();
 
   const result = await hardResetContactContext({
-    supabase,
     organizationId,
     contactId,
     actor: { type: "user", id: user.id },
@@ -70,8 +67,11 @@ export async function POST(
     if (result.code === "not_found") {
       return fail("not_found", result.message, 404, { requestId });
     }
-    if (result.code === "open_case_blocks_reset") {
-      return fail("open_case_blocks_reset", result.message, 409, {
+    if (
+      result.code === "open_case_blocks_reset" ||
+      result.code === "job_in_flight_blocks_reset"
+    ) {
+      return fail(result.code, result.message, 409, {
         requestId,
         details: result.details,
       });

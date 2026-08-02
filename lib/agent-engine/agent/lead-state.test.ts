@@ -78,4 +78,19 @@ describe('getLeadState — relê context_reset_at do contato a cada chamada', ()
     const result = await getLeadState(db, 'org-1', 'contact-1');
     expect(result).not.toHaveProperty('_context_reset_at');
   });
+
+  it('com snapshot do turno, usa o corte passado e não depende da subquery', async () => {
+    // dbFake ainda devolve _context_reset_at, mas com snapshot explícito o
+    // helper ignora a coluna e aplica estadoVigente no valor passado.
+    const db = dbFake({ ...BASE_ROW, _context_reset_at: '2026-08-01T09:00:00.000Z' });
+    const neutralized = await getLeadState(
+      db,
+      'org-1',
+      'contact-1',
+      '2026-08-01T11:00:00.000Z',
+    );
+    expect(neutralized).toBeNull();
+    const kept = await getLeadState(db, 'org-1', 'contact-1', null);
+    expect(kept?.stage).toBe('negotiating');
+  });
 });
