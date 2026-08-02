@@ -112,7 +112,12 @@
       "priority": 8,
       "lane": "core",
       "kind": "schema",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "pnpm test:db: install (ON_ERROR_STOP=1) e update aplicam a migration 0098 sem NENHUM erro/notice associado a context_reset_at/resets_context/crm_stages_context_reset_days_range (grep confirmado). 398-399/400 invariantes verdes; a 1 falha ocasional (followup-reactivity.test.ts, teste de relógio real) é PRÉ-EXISTENTE — reproduzida também SEM a migration (1 falha em 3 runs de cada lado, taxa equivalente), não é regressão desta feature. database.types.ts regenerado manualmente (contacts + crm_stages) e pnpm typecheck 0 erros. MANIFEST.md e baseline.sql atualizados."
+      }
     },
     {
       "id": "C2-02",

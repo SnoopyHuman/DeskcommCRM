@@ -8715,3 +8715,44 @@ CREATE OR REPLACE FUNCTION "public"."retrieve_top_k_chunks"("p_organization_id" 
   order by c.embedding <=> p_embedding asc
   limit greatest(p_k, 0);
 $$;
+
+-- ---- ciclo de vida do contexto do agente (migration 0098) ----
+-- Duas peças não-destrutivas e reversíveis (Spec 16 §3): marca de corte em
+-- contacts (nada apagado — limpar o campo restaura), e a política de
+-- expiração vivendo na etapa que o TENANT nomeou (nunca is_won/is_lost).
+-- Defaults reproduzem o comportamento anterior: nenhuma etapa existente
+-- passa a expirar contexto sozinha.
+alter table public.contacts
+  add column if not exists context_reset_at timestamptz,
+  add column if not exists context_reset_reason text;
+
+comment on column public.contacts.context_reset_at is
+  'Corte do contexto do agente: mensagens, checkpoints e lead_state anteriores a este instante deixam de ser lidos pelo turno. NADA é apagado — limpar o campo restaura.';
+
+comment on column public.contacts.context_reset_reason is
+  'Motivo do corte (ex.: stage_policy, manual) — só telemetria/UI, nunca lido pelo turno.';
+
+create index if not exists idx_contacts_context_reset_at
+  on public.contacts (organization_id, context_reset_at)
+  where context_reset_at is not null;
+
+alter table public.crm_stages
+  add column if not exists resets_context boolean not null default false,
+  add column if not exists context_reset_after_days integer not null default 7;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'crm_stages_context_reset_days_range'
+  ) then
+    alter table public.crm_stages
+      add constraint crm_stages_context_reset_days_range
+      check (context_reset_after_days >= 0 and context_reset_after_days <= 365);
+  end if;
+end $$;
+
+comment on column public.crm_stages.resets_context is
+  'Quando true, negócio parado nesta etapa por context_reset_after_days dias tem o contexto do agente expirado. Padrão de fábrica false — nada expira sem escolha do tenant.';
+
+comment on column public.crm_stages.context_reset_after_days is
+  'Carência em dias antes de expirar, contada de crm_leads.stage_changed_at. Default 7 — dá tempo ao pós-venda antes de cortar o contexto.';

@@ -1885,6 +1885,8 @@ export type Database = {
           blocked_at: string | null
           blocked_reason: string | null
           consent: Json
+          context_reset_at: string | null
+          context_reset_reason: string | null
           cpf_encrypted: string | null
           cpf_hash: string | null
           created_at: string
@@ -1914,6 +1916,8 @@ export type Database = {
           blocked_at?: string | null
           blocked_reason?: string | null
           consent?: Json
+          context_reset_at?: string | null
+          context_reset_reason?: string | null
           cpf_encrypted?: string | null
           cpf_hash?: string | null
           created_at?: string
@@ -1943,6 +1947,8 @@ export type Database = {
           blocked_at?: string | null
           blocked_reason?: string | null
           consent?: Json
+          context_reset_at?: string | null
+          context_reset_reason?: string | null
           cpf_encrypted?: string | null
           cpf_hash?: string | null
           created_at?: string
@@ -2539,6 +2545,7 @@ export type Database = {
         Row: {
           agent_stage_hint: string | null
           color: string | null
+          context_reset_after_days: number
           created_at: string
           description: string | null
           expected_duration_hours: number | null
@@ -2551,12 +2558,14 @@ export type Database = {
           pipeline_id: string
           position: number
           requires_human: boolean
+          resets_context: boolean
           slug: string
           updated_at: string
         }
         Insert: {
           agent_stage_hint?: string | null
           color?: string | null
+          context_reset_after_days?: number
           created_at?: string
           description?: string | null
           expected_duration_hours?: number | null
@@ -2569,12 +2578,14 @@ export type Database = {
           pipeline_id: string
           position: number
           requires_human?: boolean
+          resets_context?: boolean
           slug: string
           updated_at?: string
         }
         Update: {
           agent_stage_hint?: string | null
           color?: string | null
+          context_reset_after_days?: number
           created_at?: string
           description?: string | null
           expected_duration_hours?: number | null
@@ -2587,6 +2598,7 @@ export type Database = {
           pipeline_id?: string
           position?: number
           requires_human?: boolean
+          resets_context?: boolean
           slug?: string
           updated_at?: string
         }
