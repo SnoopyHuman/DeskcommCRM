@@ -35,7 +35,12 @@
       "priority": 10,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "8/8 testes verdes; grep sem Date.now/new Date(); typecheck 0 erros; lint 0 erros no arquivo novo"
+      }
     },
     {
       "id": "C1-02",
