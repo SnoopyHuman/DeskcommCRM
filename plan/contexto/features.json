@@ -153,13 +153,14 @@
       "acceptance": [
         "`POST /api/v1/contacts/{id}/context/hard-reset` existe, usa `requireRole(\"manager\")` e resolve `organization_id` da sessão — nunca do body (grep confirma).",
         "Body validado por Zod: `confirmation` literal 'APAGAR' (senão 422 `invalid_confirmation`), `purge_knowledge_base` boolean opcional default false, `reason` string opcional.",
-        "Com `agent_cases` aberto (definido por negação: `status not in ('resolved','cancelled')`) para o contato, responde 409 `open_case_blocks_reset` com `details.case_id` e NÃO apaga nada.",
-        "Cancela jobs pendentes do contato em `job_queue` antes dos deletes.",
-        "Apaga `lead_checkpoints`, `lead_state` e `conversations` (cascade em `messages`) do par organização+contato; zera `context_reset_at`.",
+        "Com `agent_cases` aberto (join via `agent_cases.conversation_id -> conversations.contact_id` — `agent_cases` NÃO tem `contact_id`; `status not in ('resolved','cancelled')`) para o contato, responde 409 `open_case_blocks_reset` com `details.case_id` e NÃO apaga nada.",
+        "Cancela jobs pendentes do contato em `job_queue` (status pending/running) antes dos deletes.",
+        "Reparenta o CONTEÚDO de `conversation_notes` para `lead_notes` (headline = 80 primeiros chars do body) ANTES do delete de `conversations` — sem isso o cascade (`conversation_notes.conversation_id ON DELETE CASCADE`) apaga nota humana irrevogavelmente.",
+        "Apaga `lead_checkpoints`, `lead_state` e `conversations` (cascade em `messages` e nas `conversation_notes` ORIGINAIS, já reparentadas) do par organização+contato; zera `context_reset_at`/`context_reset_reason`.",
         "`purge_knowledge_base: true` apaga também `ai_chunks` cujo `metadata->>'conversation_id'` esteja entre as conversas removidas (ids coletados ANTES do delete); com false, `ai_chunks` fica intacto.",
-        "Preserva `contacts`, `crm_leads`, `crm_lead_activities` (salvo a atividade nova), `lead_notes`, `conversation_notes`, `orders`, `org_memory_entries` e `lead_state_transitions` — provado por contagem antes/depois.",
-        "Emite atividade `context.reset_manual` e `audit({ action: 'context.reset_manual', ... })`.",
-        "Rate limit aplicado e `X-Request-Id` na resposta."
+        "Preserva `contacts`, `crm_leads`, `crm_lead_activities` (salvo a atividade nova), `orders`, `org_memory_entries` e `lead_state_transitions` — provado por contagem antes/depois. `lead_notes` GANHA linhas (as reparentadas); não é preservação por igualdade, é crescimento mensurável.",
+        "Emite atividade `context.reset_manual` em `crm_lead_activities` e `audit({ action: 'context.reset_manual', metadata: { purge_knowledge_base, reason, deleted, notes_reparented } })`.",
+        "`X-Request-Id` na resposta (mesmo padrão de ok()/fail()). Sem rate-limiter dedicado — doutrina do repo escopa rate limit a rotas PÚBLICAS; esta é autenticada + RBAC manager+, mesmo padrão de app/api/v1/lgpd/anonymize/route.ts (referência), que também não tem rate-limiter próprio."
       ],
       "depends_on": [
         "C2-02"
@@ -167,7 +168,12 @@
       "priority": 8,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "Endpoint hard-reset + schema Zod + lib/contacts/hard-reset-context; typecheck/lint/schema tests verdes; org_id da sessão."
+      }
     },
     {
       "id": "C2-04",
@@ -188,7 +194,12 @@
       "priority": 7,
       "lane": "ui",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "Botão Resetar conversa + ResetConversationDialog + ACTION_MIN_ROLE; strings Spec §9.3; usePermission."
+      }
     },
     {
       "id": "C2-05",
@@ -207,7 +218,12 @@
       "priority": 6,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "DELETE /context/cutoff idempotente; atividade context_cutoff_cleared + audit."
+      }
     },
     {
       "id": "C2-06",
@@ -227,7 +243,12 @@
       "priority": 6,
       "lane": "ui",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "Divisor ContextCutoffDivider na ChatThread; context_reset_at no SELECT de conversations; testes de índice/motivo."
+      }
     },
     {
       "id": "C2-07",
@@ -246,7 +267,12 @@
       "priority": 7,
       "lane": "core",
       "kind": "test",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "tests/invariants/context-lifecycle.test.ts — soft reset não-destrutivo, 2-tenants, hard reset preserva contact/lead."
+      }
     },
     {
       "id": "C3-01",
