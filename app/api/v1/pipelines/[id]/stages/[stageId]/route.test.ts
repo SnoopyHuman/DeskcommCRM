@@ -374,6 +374,147 @@ describe("PATCH /api/v1/pipelines/[id]/stages/[stageId]", () => {
   });
 });
 
+/**
+ * C3-01 — política de expiração do contexto (Spec 16 §9.1). O resto da rota é
+ * manager+; só estes dois campos exigem admin, e a checagem é uma SEGUNDA
+ * chamada a `requireRole` (nunca uma comparação de rank na mão — anti-padrão
+ * "matriz advisória").
+ */
+describe("PATCH — política de expiração do contexto (Spec 16 §9.1)", () => {
+  it("tocar só nome/papel/ordem → UMA chamada de requireRole (manager), sem segunda checagem", async () => {
+    authOk();
+    makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    await PATCH(reqPatch({ name: "Orçamento" }), ctx());
+
+    expect(vi.mocked(requireRole).mock.calls).toEqual([["manager", expect.anything()]]);
+  });
+
+  it("tocar resets_context → SEGUNDA chamada de requireRole pede admin", async () => {
+    authOk();
+    makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    await PATCH(reqPatch({ resets_context: true }), ctx());
+
+    expect(vi.mocked(requireRole).mock.calls[0]?.[0]).toBe("manager");
+    expect(vi.mocked(requireRole).mock.calls[1]?.[0]).toBe("admin");
+  });
+
+  it("tocar context_reset_after_days sozinho → também pede admin", async () => {
+    authOk();
+    makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    await PATCH(reqPatch({ context_reset_after_days: 14 }), ctx());
+
+    expect(vi.mocked(requireRole).mock.calls[1]?.[0]).toBe("admin");
+  });
+
+  /**
+   * ⭐ O teste que prova a fronteira de verdade: manager (sem admin) tenta mudar
+   * a política. `authOk` sozinho não discrimina o `min` pedido — quem prova que
+   * a rota RECUSA é um mock que simula o `requireRole` de verdade negando `admin`
+   * para um role `manager`.
+   */
+  it("manager sem admin tenta mudar a política → 403 e NENHUMA escrita", async () => {
+    vi.mocked(requireRole).mockImplementation(async (min) => {
+      if (min === "admin") {
+        return {
+          ok: false,
+          response: fail("forbidden_role", "Permissão insuficiente. Requer role >= admin.", 403, {}),
+        };
+      }
+      return {
+        ok: true,
+        user: {
+          id: USER_ID,
+          email: "a@example.com",
+          full_name: null,
+          avatar_url: null,
+          is_platform_admin: false,
+          organizations: [{ organization_id: ORG_ID, organization_name: "Org", role: "manager" }],
+        },
+        org: { orgId: ORG_ID, name: "Org", role: "manager" },
+      };
+    });
+    const db = makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    const res = await PATCH(reqPatch({ resets_context: true }), ctx());
+
+    expect(res.status).toBe(403);
+    expect(db.escritas).toEqual([]);
+  });
+
+  it("dias fora de 0..365 → 422, e nenhuma escrita", async () => {
+    authOk();
+    const db = makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    const res = await PATCH(reqPatch({ context_reset_after_days: 366 }), ctx());
+
+    expect(res.status).toBe(422);
+    expect(db.escritas).toEqual([]);
+  });
+
+  it("dias negativos → 422, e nenhuma escrita", async () => {
+    authOk();
+    const db = makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    const res = await PATCH(reqPatch({ context_reset_after_days: -1 }), ctx());
+
+    expect(res.status).toBe(422);
+    expect(db.escritas).toEqual([]);
+  });
+
+  it("grava os dois campos no update do alvo, e a resposta os devolve", async () => {
+    authOk();
+    const db = makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    const res = await PATCH(
+      reqPatch({ resets_context: true, context_reset_after_days: 14 }),
+      ctx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(db.escritas).toHaveLength(1);
+    expect(db.escritas[0]?.patch).toEqual({ resets_context: true, context_reset_after_days: 14 });
+
+    const body = (await res.json()) as {
+      data: { etapas: Array<{ id: string; resets_context: boolean; context_reset_after_days: number }> };
+    };
+    const e2 = body.data.etapas.find((e) => e.id === "e2");
+    expect(e2?.resets_context).toBe(true);
+    expect(e2?.context_reset_after_days).toBe(14);
+  });
+
+  it("audita context.policy_changed — e NÃO pipeline.stage_updated, quando só a política mudou", async () => {
+    authOk();
+    makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    await PATCH(reqPatch({ resets_context: true, context_reset_after_days: 3 }), ctx());
+
+    expect(vi.mocked(audit)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "context.policy_changed",
+        organizationId: ORG_ID,
+        resourceType: "crm_stage",
+        resourceId: "e2",
+        metadata: expect.objectContaining({ resets_context: true, context_reset_after_days: 3 }),
+      }),
+    );
+  });
+
+  it("renomear JUNTO com a política → audita as DUAS ações", async () => {
+    authOk();
+    makeDb({ stages: funil() });
+    const { PATCH } = await import("./route");
+    await PATCH(reqPatch({ name: "Orçamento", resets_context: true }), ctx());
+
+    const acoes = vi.mocked(audit).mock.calls.map(([entry]) => entry.action);
+    expect(acoes).toContain("pipeline.stage_updated");
+    expect(acoes).toContain("context.policy_changed");
+  });
+});
+
 describe("DELETE /api/v1/pipelines/[id]/stages/[stageId]", () => {
   it("exige manager", async () => {
     authOk();

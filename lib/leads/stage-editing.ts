@@ -32,6 +32,9 @@ export interface EtapaEditavel extends EtapaDoMapa {
   slug: string;
   position: number;
   is_archived: boolean;
+  /** Política de expiração do contexto do agente (Spec 16 §9.1) — coluna da etapa, não do nome. */
+  resets_context: boolean;
+  context_reset_after_days: number;
 }
 
 export type Resultado = { ok: true } | { ok: false; erro: string };

@@ -24,6 +24,9 @@ export interface EtapaDoFunil {
   name: string;
   is_won: boolean;
   is_lost: boolean;
+  /** Política de expiração do contexto do agente nesta etapa (Spec 16 §9.1). */
+  resets_context: boolean;
+  context_reset_after_days: number;
 }
 
 /** Os sete passos sempre presentes; `null` = "não mover o card". */

@@ -65,6 +65,17 @@ const bodySchema = z.object({
 });
 
 /**
+ * `EtapaDoMapa` + a política de expiração do contexto do agente (Spec 16 §9.1).
+ * Vive aqui, não em `EtapaDoMapa`: as regras de mapeamento (`validarMapeamento`,
+ * `diffParaUpdates`) não precisam desses dois campos, e a interface compartilhada
+ * não deveria crescer por causa de um consumidor que não é ela.
+ */
+interface EtapaDoMapaComPolitica extends EtapaDoMapa {
+  resets_context: boolean;
+  context_reset_after_days: number;
+}
+
+/**
  * Estado do funil como a tela precisa dele. Devolve `null` quando o pipeline não
  * é desta organização — para o chamador isso é 404, e é a MESMA resposta de um
  * pipeline inexistente: dizer "existe, mas não é seu" já é vazar a existência.
@@ -81,7 +92,7 @@ async function lerFunil(
   supabase: Awaited<ReturnType<typeof createClient>>,
   orgId: string,
   pipelineId: string,
-): Promise<{ etapas: EtapaDoMapa[] } | null> {
+): Promise<{ etapas: EtapaDoMapaComPolitica[] } | null> {
   const { data: pipeline, error: pipeErr } = await supabase
     .from("crm_pipelines")
     .select("id")
@@ -93,14 +104,16 @@ async function lerFunil(
 
   const { data, error } = await supabase
     .from("crm_stages")
-    .select("id, name, is_won, is_lost, agent_stage_hint")
+    .select(
+      "id, name, is_won, is_lost, agent_stage_hint, resets_context, context_reset_after_days",
+    )
     .eq("organization_id", orgId)
     .eq("pipeline_id", pipelineId)
     .eq("is_archived", false)
     .order("position", { ascending: true });
   if (error) throw new Error(error.message);
 
-  return { etapas: (data ?? []) as unknown as EtapaDoMapa[] };
+  return { etapas: (data ?? []) as unknown as EtapaDoMapaComPolitica[] };
 }
 
 /** Os sete passos sempre presentes: quem lê não precisa saber quais faltam. */
@@ -118,13 +131,15 @@ function mapaDeEtapas(etapas: EtapaDoMapa[]): Record<LeadStage, string | null> {
   return mapa;
 }
 
-function corpo(etapas: EtapaDoMapa[]) {
+function corpo(etapas: EtapaDoMapaComPolitica[]) {
   return {
     etapas: etapas.map((e) => ({
       id: e.id,
       name: e.name,
       is_won: e.is_won,
       is_lost: e.is_lost,
+      resets_context: e.resets_context,
+      context_reset_after_days: e.context_reset_after_days,
     })),
     mapeamento: mapaDeEtapas(etapas),
   };

@@ -24,8 +24,12 @@ vi.mock("@/lib/api/client", () => ({
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
+// Padrão true (admin): as regras de negócio testadas neste arquivo não são
+// sobre RBAC. Quem testa "manager não vê o bloco" troca o retorno por teste.
+vi.mock("@/hooks/auth/AuthProvider", () => ({ usePermission: vi.fn(() => true) }));
 
 import { apiClient } from "@/lib/api/client";
+import { usePermission } from "@/hooks/auth/AuthProvider";
 import {
   StagesSection,
   contagemDeNegocios,
@@ -51,10 +55,10 @@ const PIPE = "11111111-1111-4111-8111-111111111111";
 
 /** O funil que o gatilho semeia — o que a clínica vê no primeiro login, encurtado. */
 const ETAPAS: EtapaDoFunil[] = [
-  { id: "e1", name: "Carrinho abandonado", is_won: false, is_lost: false },
-  { id: "e2", name: "Aguardando pagamento", is_won: false, is_lost: false },
-  { id: "e3", name: "Pago", is_won: true, is_lost: false },
-  { id: "e4", name: "Cancelado", is_won: false, is_lost: true },
+  { id: "e1", name: "Carrinho abandonado", is_won: false, is_lost: false, resets_context: false, context_reset_after_days: 7 },
+  { id: "e2", name: "Aguardando pagamento", is_won: false, is_lost: false, resets_context: false, context_reset_after_days: 7 },
+  { id: "e3", name: "Pago", is_won: true, is_lost: false, resets_context: false, context_reset_after_days: 7 },
+  { id: "e4", name: "Cancelado", is_won: false, is_lost: true, resets_context: false, context_reset_after_days: 7 },
 ];
 
 const VAZIO = {
@@ -97,6 +101,10 @@ async function opcoesNaTela(user: ReturnType<typeof userEvent.setup>, testid: st
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.get).mockResolvedValue({ data: estado() });
+  // `clearAllMocks` não apaga a implementação do mock do módulo — só as
+  // chamadas registradas. Reafirmar aqui evita que um teste de RBAC (que troca
+  // para `false`) vaze para o próximo.
+  vi.mocked(usePermission).mockReturnValue(true);
 });
 
 describe("patchDePapel — só o que muda viaja", () => {
@@ -314,8 +322,8 @@ describe("StagesSection — a marcação de fechamento", () => {
   it("funil SEM etapa de fechamento não inventa aviso — marca direto", async () => {
     const user = userEvent.setup();
     const semGanho: EtapaDoFunil[] = [
-      { id: "e1", name: "Primeiro contato", is_won: false, is_lost: false },
-      { id: "e2", name: "Avaliação", is_won: false, is_lost: false },
+      { id: "e1", name: "Primeiro contato", is_won: false, is_lost: false, resets_context: false, context_reset_after_days: 7 },
+      { id: "e2", name: "Avaliação", is_won: false, is_lost: false, resets_context: false, context_reset_after_days: 7 },
     ];
     vi.mocked(apiClient.get).mockResolvedValue({ data: estado({}, semGanho) });
     vi.mocked(apiClient.patch).mockResolvedValue({ data: { etapas: [] } });
@@ -600,5 +608,126 @@ describe("StagesSection — arquivar", () => {
     expect(aviso).not.toHaveTextContent("violates");
     expect(aviso).not.toHaveTextContent("crm_leads");
     expect(aviso).toHaveTextContent("Não deu para salvar");
+  });
+});
+
+/**
+ * C3-01 (Spec 16 §9.1) — política de expiração do contexto do agente, por
+ * etapa. Só admin (`context.policy_write`) pode gravar; a rota já garante isso
+ * (409/403 testados em route.test.ts) — o que este bloco garante é que a TELA
+ * não oferece o controle a quem a rota recusaria, e que as strings são as
+ * EXATAS da spec, sem jargão técnico.
+ */
+describe("StagesSection — política de expiração do contexto (Spec 16 §9.1)", () => {
+  it("mostra as strings exatas da spec, incluindo os textos de ajuda", async () => {
+    montar();
+    const bloco = within(await screen.findByTestId("politica-contexto-e1"));
+
+    expect(bloco.getByText("Recomeçar o atendimento nesta etapa")).toBeInTheDocument();
+    expect(
+      bloco.getByText("Quando o negócio chegar aqui, a IA recomeça do zero"),
+    ).toBeInTheDocument();
+    expect(
+      bloco.getByText(
+        "A IA esquece o que foi conversado, mas continua sabendo quem é o cliente e o que ele já comprou. O histórico completo continua visível para a sua equipe.",
+      ),
+    ).toBeInTheDocument();
+    expect(bloco.getByText("dias antes de recomeçar")).toBeInTheDocument();
+    expect(
+      bloco.getByText(
+        "Tempo para o pós-venda acontecer. Se o cliente voltar antes disso, a IA ainda lembra da conversa.",
+      ),
+    ).toBeInTheDocument();
+
+    // Nenhum jargão técnico nesta tela.
+    expect(bloco.queryByText(/checkpoint/i)).not.toBeInTheDocument();
+    expect(bloco.queryByText(/cutoff/i)).not.toBeInTheDocument();
+    expect(bloco.queryByText(/lead_state/i)).not.toBeInTheDocument();
+  });
+
+  it("reflete o que está salvo: switch e dias partem do valor da etapa", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({
+      data: estado({}, [
+        { ...ETAPAS[0]!, resets_context: true, context_reset_after_days: 14 },
+        ETAPAS[1]!,
+        ETAPAS[2]!,
+        ETAPAS[3]!,
+      ]),
+    });
+    montar();
+
+    expect(await screen.findByTestId("resets-context-e1")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("dias-contexto-e1")).toHaveValue(14);
+    expect(screen.getByTestId("resets-context-e2")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("dias-contexto-e2")).toHaveValue(7);
+  });
+
+  it("marcar o switch grava resets_context NA HORA", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.patch).mockResolvedValue({ data: { etapas: [] } });
+    montar();
+    await screen.findByTestId("nome-e1");
+
+    await user.click(screen.getByTestId("resets-context-e1"));
+
+    await waitFor(() => expect(apiClient.patch).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(apiClient.patch).mock.calls[0]).toEqual([
+      `/api/v1/pipelines/${PIPE}/stages/e1`,
+      { resets_context: true },
+    ]);
+  });
+
+  it("mudar os dias salva ao CONFIRMAR (blur), nunca a cada tecla", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.patch).mockResolvedValue({ data: { etapas: [] } });
+    montar();
+    const campo = await screen.findByTestId("dias-contexto-e1");
+
+    await user.clear(campo);
+    await user.type(campo, "14");
+    // Dois dígitos digitados, zero PATCH — um por tecla gravaria "1" e depois "14".
+    expect(apiClient.patch).not.toHaveBeenCalled();
+
+    await user.tab();
+    await waitFor(() => expect(apiClient.patch).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(apiClient.patch).mock.calls[0]).toEqual([
+      `/api/v1/pipelines/${PIPE}/stages/e1`,
+      { context_reset_after_days: 14 },
+    ]);
+  });
+
+  it("dias fora de 0..365: volta ao valor salvo, sem gravar", async () => {
+    const user = userEvent.setup();
+    montar();
+    const campo = await screen.findByTestId("dias-contexto-e1");
+
+    await user.clear(campo);
+    await user.type(campo, "400");
+    await user.tab();
+
+    expect(apiClient.patch).not.toHaveBeenCalled();
+    await waitFor(() => expect(campo).toHaveValue(7));
+  });
+
+  it("sair do campo sem mudar os dias não manda pedido nenhum", async () => {
+    const user = userEvent.setup();
+    montar();
+    const campo = await screen.findByTestId("dias-contexto-e1");
+    await user.click(campo);
+    await user.tab();
+    expect(apiClient.patch).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⭐ Espelha o precedente do vocabulário/custom fields desta MESMA página:
+   * esconder o que a rota recusaria (admin) é honestidade, não permissão nova —
+   * por isso o bloco some inteiro, e não aparece desabilitado.
+   */
+  it("sem context.policy_write, o bloco não aparece — nem desabilitado", async () => {
+    vi.mocked(usePermission).mockReturnValue(false);
+    montar();
+    await screen.findByTestId("nome-e1");
+
+    expect(screen.queryByTestId("politica-contexto-e1")).not.toBeInTheDocument();
   });
 });

@@ -46,10 +46,10 @@ globalThis.ResizeObserver = class {
 const PIPE = "11111111-1111-4111-8111-111111111111";
 
 const ETAPAS = [
-  { id: "e1", name: "Carrinho abandonado", is_won: false, is_lost: false },
-  { id: "e2", name: "Aguardando pagamento", is_won: false, is_lost: false },
-  { id: "e3", name: "Pago", is_won: true, is_lost: false },
-  { id: "e4", name: "Cancelado", is_won: false, is_lost: true },
+  { id: "e1", name: "Carrinho abandonado", is_won: false, is_lost: false, resets_context: false, context_reset_after_days: 7 },
+  { id: "e2", name: "Aguardando pagamento", is_won: false, is_lost: false, resets_context: false, context_reset_after_days: 7 },
+  { id: "e3", name: "Pago", is_won: true, is_lost: false, resets_context: false, context_reset_after_days: 7 },
+  { id: "e4", name: "Cancelado", is_won: false, is_lost: true, resets_context: false, context_reset_after_days: 7 },
 ];
 
 const VAZIO = {

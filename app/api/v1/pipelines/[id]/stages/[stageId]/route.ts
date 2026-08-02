@@ -53,9 +53,18 @@ const bodySchema = z
     is_won: z.boolean().optional(),
     is_lost: z.boolean().optional(),
     depois_de: z.string().min(1).nullable().optional(),
+    // Spec 16 §9.1 — política de expiração do contexto do agente. Faixa 0..365
+    // espelha o CHECK `crm_stages_context_reset_days_range` da migration 0098.
+    resets_context: z.boolean().optional(),
+    context_reset_after_days: z.number().int().min(0).max(365).optional(),
   })
   .strict()
   .refine((b) => Object.keys(b).length > 0, { message: "Nada para alterar." });
+
+/** Só estes dois campos são a política de contexto — o resto da rota é manager+. */
+function tocaPoliticaDeContexto(pedido: z.infer<typeof bodySchema>): boolean {
+  return pedido.resets_context !== undefined || pedido.context_reset_after_days !== undefined;
+}
 
 export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const requestId = randomUUID();
@@ -80,6 +89,17 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     });
   }
   const pedido = parsed.data;
+
+  // ⚠️ POLÍTICA DE CONTEXTO É ADMIN, O RESTO DA ROTA É MANAGER+. `requireRole` é
+  // o helper ÚNICO de autorização (reimplementar a comparação de rank aqui seria
+  // o anti-padrão "matriz advisória") — por isso o gate mais alto é uma SEGUNDA
+  // chamada a ele, não uma conta de ROLE_RANK na mão. Só dispara quando o corpo
+  // toca `resets_context`/`context_reset_after_days`; nome, papel e ordem
+  // continuam manager+ como sempre.
+  if (tocaPoliticaDeContexto(pedido)) {
+    const authzPolitica = await requireRole("admin", { requestId, resource: "crm_stages" });
+    if (!authzPolitica.ok) return authzPolitica.response;
+  }
 
   const supabase = await createClient();
 
@@ -126,8 +146,17 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     if (!veredito.ok) return fail("unprocessable_entity", veredito.erro, 422, { requestId });
   }
 
-  const patchDoAlvo: PatchDeMarcacao & { name?: string; position?: number } = {};
+  const patchDoAlvo: PatchDeMarcacao & {
+    name?: string;
+    position?: number;
+    resets_context?: boolean;
+    context_reset_after_days?: number;
+  } = {};
   if (pedido.name !== undefined) patchDoAlvo.name = pedido.name.trim();
+  if (pedido.resets_context !== undefined) patchDoAlvo.resets_context = pedido.resets_context;
+  if (pedido.context_reset_after_days !== undefined) {
+    patchDoAlvo.context_reset_after_days = pedido.context_reset_after_days;
+  }
 
   if (pedido.depois_de !== undefined) {
     // Só as ativas compõem a régua: arquivada não ocupa lugar no quadro.
@@ -193,7 +222,13 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     return fail("internal_error", error.message, 500, { requestId });
   }
 
-  if (updates.length > 0) {
+  // ⚠️ AUDIT SEPARADO PARA POLÍTICA DE CONTEXTO. `context.policy_changed` é a
+  // ação de governança que a Spec 16 exige para este par de campos — distinta de
+  // `pipeline.stage_updated` (nome/papel/ordem), que só dispara quando o pedido
+  // toca algo ALÉM da política (senão duas linhas de audit narrariam a mesma
+  // edição de duas formas diferentes).
+  const tocaOutraCoisa = pedido.name !== undefined || temMarcacao || pedido.depois_de !== undefined;
+  if (updates.length > 0 && tocaOutraCoisa) {
     void audit({
       action: "pipeline.stage_updated",
       actorUserId: authz.user.id,
@@ -202,6 +237,21 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
       resourceId: stageId,
       requestId,
       metadata: { pipeline_id: pipelineId, pedido, updates },
+    });
+  }
+  if (tocaPoliticaDeContexto(pedido)) {
+    void audit({
+      action: "context.policy_changed",
+      actorUserId: authz.user.id,
+      organizationId: orgId,
+      resourceType: "crm_stage",
+      resourceId: stageId,
+      requestId,
+      metadata: {
+        pipeline_id: pipelineId,
+        resets_context: pedido.resets_context,
+        context_reset_after_days: pedido.context_reset_after_days,
+      },
     });
   }
 
