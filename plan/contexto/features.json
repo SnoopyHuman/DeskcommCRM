@@ -2,7 +2,7 @@
   "_meta": {
     "loop": "contexto-loop",
     "repo": "DeskcommCRM",
-    "active_phase": "C1",
+    "active_phase": "C2",
     "loop_doctrine": "Doutrina de DOMÍNIO soberana: CLAUDE.md deste repo + docs/specs/ (multi-tenancy, migrations em tripla, idempotência, RBAC, LGPD, anti-patterns). Backlog SEPARADO do plan/ raiz, que pertence ao gov-loop (fase G1 ativa) — não compartilham máquina, checkpoints nem numeração.",
     "session_ritual": "Uma sessão = UMA feature. Maker≠checker: passes:true só com PASS de verificação sob hash-check.",
     "spec": "docs/specs/16-spec-gestao-contexto-agente.md · PRD: docs/prd/07-prd-gestao-contexto-agente.md",
@@ -85,7 +85,12 @@
       "priority": 9,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "4/4 testes novos verdes (corte/retomada/null/ausente/contínua); 210/210 testes de agent-engine+schemas sem regressão; typecheck e lint 0 erros"
+      }
     },
     {
       "id": "C2-01",
