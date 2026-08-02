@@ -323,7 +323,12 @@
       "priority": 6,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "Cron novo com auth fail-closed e force-dynamic; seleção de políticas ativas, carência calculada por stage_changed_at, filtro tenant-aware e deduplicação por contato (teto 500). Claim atômico em contacts impede duplicata concorrente; caso humano aberto bloqueia por join agent_cases→conversations com status novo bloqueando; cancela somente jobs pending, emite atividade context_reset_auto com stage_name/after_days e audit context.reset_auto. Teste de rota cobre 6 vs 8 dias, 2 tenants, caso aberto, jobs, lead duplicado e segunda execução idempotente; typecheck e lint zerados (lint apenas warnings preexistentes)."
+      }
     },
     {
       "id": "C3-03",
