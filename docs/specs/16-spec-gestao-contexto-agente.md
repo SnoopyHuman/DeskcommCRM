@@ -186,7 +186,7 @@ function estadoVigente(row: LeadStateRow | null, cutoff: string | null): LeadSta
 
 `null` faz o turno operar como `stage='new'`, `qualification={}` — que é exatamente "novo ciclo" do PRD §3.6, sem escrever nada e sem tocar no Kanban.
 
-**Regra dura:** nenhuma dessas três leituras pode usar `context_reset_at` vindo do payload do job. O valor é sempre relido de `contacts` no turno, pela mesma closure org-scoped que já resolve `is_blocked`.
+**Regra dura:** nenhuma dessas três leituras pode usar `context_reset_at` vindo do payload do job. O valor é lido **uma vez** de `contacts` no início do turno (`loadContextResetAt`) e o mesmo snapshot alimenta checkpoint, `lead_state` e histórico — nunca três re-leituras independentes que possam divergir se a marca mudar no meio.
 
 ---
 
@@ -205,38 +205,24 @@ function estadoVigente(row: LeadStateRow | null, cutoff: string | null): LeadSta
 }
 ```
 
-Ordem de execução (transação única, `organization_id` da sessão):
+A mutação destrutiva roda em **`fn_hard_reset_contact_context`** (SECURITY DEFINER, `service_role`, TX única — mesmo padrão de `fn_lgpd_cascade_redact_contact`). A rota só faz RBAC + Zod + audit/atividade após `ok: true`. Erro no meio da RPC reverte tudo; não existe reset parcial com 500.
+
+Ordem (RPC + envelope HTTP; `organization_id` da sessão):
 
 1. `requireRole("manager")` — admin incluso por hierarquia.
 2. Rejeita se `confirmation !== "APAGAR"` → `422 invalid_confirmation`.
-3. Rejeita se houver `agent_cases` aberto do contato — resolve via `agent_cases.conversation_id → conversations.contact_id` (`agent_cases` **não** tem `contact_id`; `status not in ('resolved','cancelled')` — ver §7) → `409 open_case_blocks_reset`, com `details.case_id`.
-4. Cancela jobs pendentes do contato em `job_queue` (status pendente/agendado).
-5. `delete from lead_checkpoints where organization_id=$1 and contact_id=$2`
-6. `delete from lead_state where organization_id=$1 and contact_id=$2`
-7. Coletar ids das conversas do contato (`select id from conversations where organization_id=$1 and contact_id=$2`).
-8. Reparentar notas humanas **antes** do delete — `conversation_notes.conversation_id` é `ON DELETE CASCADE`, então apagar conversas sem este passo destruiria notas humanas irrevogavelmente:
+3. RPC: contato inexistente → `ok:false` / `404 not_found`.
+4. RPC: `agent_cases` aberto do contato — join via `agent_cases.conversation_id → conversations.contact_id` (`status not in ('resolved','cancelled')` — ver §7) → `409 open_case_blocks_reset`, com `details.case_id`.
+5. RPC: job `running` do contato → `409 job_in_flight_blocks_reset` (marcar `failed` **não** para o handler em memória; esperar o turno terminar evita recriar checkpoint/estado depois do delete).
+6. RPC: cancela jobs `pending` do contato (`failed` + `canceled_by_context_hard_reset`).
+7. RPC: `delete` `lead_checkpoints`, `lead_state`, `lead_notes` do par org+contato.
+8. RPC: se `purge_knowledge_base`, `delete` `ai_chunks` cujos `metadata->>'conversation_id'` estejam entre as conversas do contato.
+9. RPC: `delete` `conversations` — cascade apaga `messages` e `conversation_notes`; zera `context_reset_at`/`context_reset_reason`.
+10. Rota (após `ok`): atividade `context.reset_manual` em `crm_lead_activities` + `audit({ action: "context.reset_manual", … })`.
 
-   ```sql
-   insert into lead_notes (organization_id, contact_id, headline, body)
-   select cn.organization_id,
-          conv.contact_id,
-          left(cn.body, 80),
-          cn.body
-     from conversation_notes cn
-     join conversations conv on conv.id = cn.conversation_id
-    where conv.organization_id = $1
-      and conv.contact_id = $2
-   ```
+**Nunca tocados:** `contacts` (linha), `crm_leads`, `crm_lead_activities` (exceto a inserção do passo 10), `orders`, `org_memory_entries`, `lead_state_transitions`.
 
-9. `delete from conversations where organization_id=$1 and contact_id=$2` — cascade apaga `messages` e as `conversation_notes` originais (já copiadas no passo 8).
-10. Se `purge_knowledge_base`: `delete from ai_chunks` cujos `metadata->>'conversation_id'` estejam entre as conversas apagadas (ids coletados no passo 7).
-11. `update contacts set context_reset_at = null, context_reset_reason = null` — sem histórico, a marca perde sentido
-12. Atividade `context.reset_manual` em `crm_lead_activities`
-13. `audit({ action: "context.reset_manual", resourceType: "contact", resourceId, metadata: { purge_knowledge_base, reason, deleted: {...}, notes_reparented: N } })`
-
-**Nunca tocados:** `contacts`, `crm_leads`, `crm_lead_activities` (exceto a inserção do passo 12), `lead_notes` (acrescidas pelas notas reparentadas no passo 8), `orders`, `org_memory_entries`, `lead_state_transitions`.
-
-**Preservados por reparent:** o *conteúdo* de `conversation_notes` sobrevive em `lead_notes` (passo 8). As linhas originais somem no cascade do passo 9 — não há como mantê-las: `conversation_id` é `NOT NULL` + `ON DELETE CASCADE`.
+**Soft reset vs hard reset:** soft reset (marca `context_reset_at`) **não** apaga `lead_notes` — só corta o que o agente lê. Hard reset é a borracha: notas, conversa e resumo somem.
 
 `ai_agent_runs` e `ai_invocations` referenciam mensagens/conversas com `ON DELETE SET NULL` — ficam órfãos por design, preservando telemetria e custo.
 
@@ -358,7 +344,7 @@ Diálogo:
 
 > **Apagar o contexto deste contato**
 >
-> Isso apaga as mensagens, o resumo e o estado do funil da IA para **{nome}**. O contato e o negócio continuam existindo, com toda a ficha e o histórico de pedidos.
+> Isso apaga as mensagens, o resumo, as notas e o estado do funil da IA para **{nome}**. O contato e o negócio continuam existindo, com toda a ficha e o histórico de pedidos.
 >
 > **Esta ação não pode ser desfeita.**
 >
@@ -417,7 +403,7 @@ Sem backfill: as colunas nascem com default que reproduz o comportamento atual (
 - Idempotência do worker: rodar 2× produz 1 marca e 1 atividade.
 - Não-destrutividade: após expiração automática, `count(messages)` do contato é idêntico ao de antes.
 - Ficha e aviso nunca contêm substring de `rolling_summary` nem de `messages.body`.
-- Hard reset preserva `contacts`, `crm_leads`, `crm_lead_activities`, `lead_notes` (incluindo conteúdo reparentado de `conversation_notes`) e `orders`.
+- Hard reset preserva `contacts`, `crm_leads`, `crm_lead_activities` e `orders`; após o reset, `count(lead_notes)` do contato é 0 (notas duráveis entram na borracha — o agente as injeta no turno).
 - Worker de expiração: contato com 2+ deals elegíveis gera exatamente 1 marca, 1 atividade e 1 audit.
 - `baseline.sql` aplica em modos install (`ON_ERROR_STOP=1`) e update num `pgvector/pgvector:pg17` descartável.
 

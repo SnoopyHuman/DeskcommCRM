@@ -9,11 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useContact } from "@/hooks/contacts/useContact";
-import { useAuth } from "@/hooks/auth/AuthProvider";
+import { useAuth, usePermission } from "@/hooks/auth/AuthProvider";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { TimelineView } from "@/components/contacts/TimelineView";
 import { EditContactDialog } from "@/components/contacts/EditContactDialog";
 import { AnonymizeDialog } from "@/components/contacts/AnonymizeDialog";
+import { ResetConversationDialog } from "@/components/contacts/ResetConversationDialog";
 
 interface Props {
   contactId: string;
@@ -22,8 +23,10 @@ interface Props {
 export function ContactDetailClient({ contactId }: Props) {
   const q = useContact(contactId);
   const { user, activeOrg } = useAuth();
+  const canResetContext = usePermission("context.reset_manual");
   const [editOpen, setEditOpen] = useState(false);
   const [anonOpen, setAnonOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
 
   if (q.isLoading) {
     return (
@@ -86,10 +89,17 @@ export function ContactDetailClient({ contactId }: Props) {
           </div>
         </div>
         {!contact.is_anonymized && (
-          <Button variant="outline" onClick={() => setEditOpen(true)}>
-            <PencilSimple size={16} weight="bold" aria-hidden />
-            <span>Editar</span>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => setEditOpen(true)}>
+              <PencilSimple size={16} weight="bold" aria-hidden />
+              <span>Editar</span>
+            </Button>
+            {canResetContext && (
+              <Button variant="outline" onClick={() => setResetOpen(true)}>
+                <span>Resetar conversa</span>
+              </Button>
+            )}
+          </div>
         )}
       </header>
 
@@ -193,6 +203,12 @@ export function ContactDetailClient({ contactId }: Props) {
         contactId={contactId}
         open={anonOpen}
         onOpenChange={setAnonOpen}
+      />
+      <ResetConversationDialog
+        contactId={contactId}
+        contactName={displayName}
+        open={resetOpen}
+        onOpenChange={setResetOpen}
       />
     </div>
   );

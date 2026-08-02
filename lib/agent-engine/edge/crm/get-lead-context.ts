@@ -123,6 +123,8 @@ interface ContactRow {
   source: string | null;
   consent: Record<string, unknown> | null;
   is_anonymized: boolean;
+  /** Spec 16 §5: corte do contexto — relido do contato a cada turno, nunca de payload. */
+  context_reset_at: string | null;
 }
 
 interface DecisionRow {
@@ -166,11 +168,18 @@ interface HistoryRow {
 export async function getLeadContext(
   db: Queryable,
   _cfg: CrmEdgeConfig,
-  input: { tenantId: string; leadId: string; conversationId?: string | null },
+  input: {
+    tenantId: string;
+    leadId: string;
+    conversationId?: string | null;
+    /** Snapshot do turno (Spec 16 §5). Se omitido, usa o valor lido do contato. */
+    contextResetAt?: string | null;
+  },
   knobs: LeadContextKnobs,
 ): Promise<LeadContextResult> {
   const { rows: contactRows } = await db.query<ContactRow>(
-    `select name, display_name, email, phone_number, tags, is_blocked, source, consent, is_anonymized
+    `select name, display_name, email, phone_number, tags, is_blocked, source, consent, is_anonymized,
+            context_reset_at::text as context_reset_at
      from contacts where organization_id = $1 and id = $2`,
     [input.tenantId, input.leadId],
   );
@@ -181,6 +190,11 @@ export async function getLeadContext(
       'não encontrei esse lead nesta organização — confira o lead antes de continuar; se o problema persistir, peça handoff humano.',
     );
   }
+
+  // Snapshot do turno tem precedência sobre a coluna recém-lida — evita o
+  // prompt misturar corte A no checkpoint com mensagens sob corte B.
+  const cutoff =
+    input.contextResetAt !== undefined ? input.contextResetAt : contact.context_reset_at;
 
   // Conversa: a do job quando informada (fonte confiável); senão a 1:1 mais
   // recente do contato. Grupos NUNCA (regra dura nº 12).
@@ -214,6 +228,11 @@ export async function getLeadContext(
   );
   const lastHumanDecision = decisaoRows[0] ? paraDecisao(decisaoRows[0]) : null;
 
+  // Spec 16 §5.1: mensagens anteriores ao corte (hard reset ou expiração por
+  // etapa) somem da leitura — NADA é apagado, é filtro. `context_reset_at`
+  // nulo cai no `coalesce(..., '-infinity')`: idêntico ao comportamento
+  // anterior a esta feature (distinto da fronteira de sessão de §4, que corta
+  // por SILÊNCIO; aqui o corte é por um instante fixo gravado no contato).
   const history: HistoryRow[] = conversationId
     ? (
         await db.query<HistoryRow>(
@@ -222,9 +241,10 @@ export async function getLeadContext(
            from messages
            where organization_id = $1 and conversation_id = $2
              and direction in ('inbound', 'outbound')
+             and sent_at > coalesce($4::timestamptz, '-infinity'::timestamptz)
            order by sent_at desc, id desc
            limit $3`,
-          [input.tenantId, conversationId, knobs.historyLimit],
+          [input.tenantId, conversationId, knobs.historyLimit, cutoff],
         )
       ).rows.reverse()
     : [];

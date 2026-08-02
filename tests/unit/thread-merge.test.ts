@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeThreadItems } from "@/components/inbox/ChatThread";
+import { indexDoDivisorDeCorte, mergeThreadItems } from "@/components/inbox/ChatThread";
 
 describe("mergeThreadItems", () => {
   it("intercala mensagens e notas por tempo", () => {
@@ -27,5 +27,44 @@ describe("mergeThreadItems", () => {
 
   it("array vazio de ambos retorna vazio", () => {
     expect(mergeThreadItems([], [])).toEqual([]);
+  });
+});
+
+describe("indexDoDivisorDeCorte", () => {
+  const items = [
+    { kind: "message" as const, ts: "2026-08-01T10:00:00Z", data: { id: "m1" } },
+    { kind: "message" as const, ts: "2026-08-01T12:00:00Z", data: { id: "m2" } },
+    { kind: "message" as const, ts: "2026-08-02T09:00:00Z", data: { id: "m3" } },
+  ] as never;
+
+  it("sem corte → -1", () => {
+    expect(indexDoDivisorDeCorte(items, null)).toBe(-1);
+    expect(indexDoDivisorDeCorte(items, undefined)).toBe(-1);
+  });
+
+  it("corte no meio → após o último item pré-corte", () => {
+    expect(indexDoDivisorDeCorte(items, "2026-08-01T13:00:00Z")).toBe(2);
+  });
+
+  it("corte antes de tudo → índice 0", () => {
+    expect(indexDoDivisorDeCorte(items, "2026-07-31T00:00:00Z")).toBe(0);
+  });
+
+  it("corte depois de tudo → após o último", () => {
+    expect(indexDoDivisorDeCorte(items, "2026-08-03T00:00:00Z")).toBe(3);
+  });
+
+  it("cutoff com string inválida/malformada → -1, igual a sem corte", () => {
+    expect(indexDoDivisorDeCorte(items, "não-é-uma-data")).toBe(-1);
+    expect(indexDoDivisorDeCorte(items, "")).toBe(-1);
+  });
+
+  it("empate entre nota interna e mensagem no exato instante do corte → divisor entra depois dos dois", () => {
+    // mergeThreadItems mantém mensagem antes da nota no empate (ordem estável);
+    // o corte no MESMO instante precisa varrer os dois, não parar no primeiro.
+    const msgs = [{ id: "m1", sent_at: "2026-08-01T10:00:00Z" }] as never;
+    const notesFixture = [{ id: "n1", created_at: "2026-08-01T10:00:00Z" }] as never;
+    const merged = mergeThreadItems(msgs, notesFixture);
+    expect(indexDoDivisorDeCorte(merged, "2026-08-01T10:00:00Z")).toBe(2);
   });
 });

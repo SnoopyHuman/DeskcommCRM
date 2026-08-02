@@ -122,6 +122,25 @@ Andar por TODAS as rotas navegáveis logado como admin e como agent: settings, c
 LGPD anonymize, /admin (platform), error pages (403/503/not-found), estados vazios.
 Critério: nenhuma tela quebra, nenhum stack trace, nenhum texto de erro cru.
 
+## J8 — Ciclo de vida do contexto do agente (C2 — Spec 16) `[P1]`
+
+Spec: `docs/specs/16-spec-gestao-contexto-agente.md`. Regressão permanente em
+`tests/e2e/context-lifecycle.spec.ts` (seed: `scripts/seed-e2e-context.ts`).
+
+| # | Caso | Expectativa | Cobertura |
+|---|------|-------------|-----------|
+| J8.1 | Hard reset com caso humano aberto (`agent_cases.status='awaiting_human'`) | 409 com a mensagem exata da Spec §9.3, diálogo continua aberto, nada é apagado | `context-lifecycle.spec.ts` (E2E) + `hard_reset_context_rpc` (SQL, migration 0099) |
+| J8.2 | Divisor de corte na thread (`contexts.context_reset_at` setado) | renderiza na posição temporal certa; mensagem anterior ao corte continua visível pro humano | `context-lifecycle.spec.ts` (E2E) + `thread-merge.test.ts` (unit, `indexDoDivisorDeCorte`: início/meio/fim/empate com nota/cutoff inválido) |
+| J8.3 | `DELETE /api/v1/contacts/{id}/context/cutoff` real | 200/`cleared:true`, campo zera, audit + atividade emitidos; 2ª chamada 200/`cleared:false` (idempotente); 404 sem vazamento cross-tenant; role < manager barrado | `app/api/v1/contacts/[id]/context/cutoff/route.test.ts` (integração, rota real) + `context-lifecycle.spec.ts` (E2E, chamada via `page.request` autenticado) |
+| J8.4 | IA volta a ler o histórico depois do corte desfeito | fato anterior ao corte some do `get_lead_context` com o corte setado, reaparece com `context_reset_at=null` (efeito do DELETE) | `get-lead-context.test.ts` (round-trip do fato) + `latest-checkpoint.test.ts`/`lead-state.test.ts` (mesmo round-trip pro checkpoint/lead_state) |
+| J8.5 | 409 de claim de conversa (corrida entre 2 atendentes) | code `conversation_already_claimed` + mensagem exata da Spec 04 §9.3 | `tests/unit/conversation-assignment.test.ts` (rota real, 2 chamadas sequenciais simulando a corrida) |
+
+**Nota de execução (2026-08-02):** J8.1-J8.4 têm cobertura de unit/integração
+verde (`pnpm test:unit`, 1752 testes). O spec E2E (J8.1-J8.3) foi ESCRITO mas
+**não executado** nesta sessão — o Docker local não estava disponível pra
+subir o Postgres/Supabase efêmero. Rodar `pnpm test:e2e -g "C2"` com o stack
+local de pé (doutrina de QA Visual) antes de considerar J8 fechado.
+
 ---
 
 ## Achados do mapeamento (pré-execução) — candidatos a correção

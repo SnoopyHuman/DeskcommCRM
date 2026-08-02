@@ -14,6 +14,7 @@ const CONTACT_ROW = {
   source: 'manual',
   consent: {},
   is_anonymized: false,
+  context_reset_at: null as string | null,
 };
 
 const CONVERSATION_ID = 'conv-1';
@@ -38,14 +39,26 @@ function historyRow(horas: number, direction: 'inbound' | 'outbound', body: stri
 const ANTES = [historyRow(0, 'inbound', 'oi'), historyRow(0.2, 'outbound', 'oi, tudo bem?')];
 const DEPOIS = [historyRow(9, 'inbound', 'fechado, pode mandar'), historyRow(9.1, 'outbound', 'combinado!')];
 
-/** Db fake: identifica a query pelo texto e devolve rows fixas — sem SQL real. */
-function dbFake(historyDesc: typeof ANTES): Queryable {
+/**
+ * Db fake: identifica a query pelo texto e devolve rows fixas — sem SQL real.
+ * O filtro de corte (`sent_at > coalesce($4, '-infinity')`) é aplicado AQUI
+ * mesmo, imitando o Postgres, porque é o 4º parâmetro (`contact.context_reset_at`)
+ * que prova que o valor lido de `contacts` chegou até a query de `messages`.
+ */
+function dbFake(historyDesc: typeof ANTES, contactOverrides: Partial<typeof CONTACT_ROW> = {}): Queryable {
+  const contact = { ...CONTACT_ROW, ...contactOverrides };
   return {
-    async query(text: string) {
-      if (text.includes('from contacts')) return { rows: [CONTACT_ROW] } as never;
+    async query(text: string, values: unknown[] = []) {
+      if (text.includes('from contacts')) return { rows: [contact] } as never;
       if (text.includes('from conversations')) return { rows: [{ id: CONVERSATION_ID }] } as never;
       if (text.includes('from crm_lead_activities')) return { rows: [] } as never;
-      if (text.includes('from messages')) return { rows: [...historyDesc].reverse() } as never;
+      if (text.includes('from messages')) {
+        const cutoff = values[3] as string | null;
+        const filtrado = cutoff === null || cutoff === undefined
+          ? historyDesc
+          : historyDesc.filter((m) => Date.parse(m.sent_at) > Date.parse(cutoff));
+        return { rows: [...filtrado].reverse() } as never;
+      }
       throw new Error(`query inesperada no teste: ${text}`);
     },
   };
@@ -111,5 +124,92 @@ describe('getLeadContext — fronteira de sessão (Spec 16 §4)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.context.messages).toHaveLength(6);
+  });
+});
+
+describe('getLeadContext — marca de corte contacts.context_reset_at (Spec 16 §5.1)', () => {
+  it('com contact_reset_at setado, mensagens anteriores ao corte somem da leitura', async () => {
+    const cutoff = iso(5); // entre ANTES (h0/h0.2) e DEPOIS (h9/h9.1)
+    const db = dbFake([...ANTES, ...DEPOIS], { context_reset_at: cutoff });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.messages.map((m) => m.body)).toEqual(['fechado, pode mandar', 'combinado!']);
+  });
+
+  it('context_reset_at nulo mantém o payload idêntico ao comportamento anterior (sem corte)', async () => {
+    const db = dbFake([...ANTES, ...DEPOIS], { context_reset_at: null });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.messages).toHaveLength(4);
+  });
+
+  it('corte + fronteira de sessão combinam: o mais restritivo prevalece', async () => {
+    // corte deixa passar ANTES+DEPOIS (h-1), mas a fronteira de sessão (6h)
+    // ainda corta ANTES por causa do silêncio de 9h até DEPOIS.
+    const db = dbFake([...ANTES, ...DEPOIS], { context_reset_at: iso(-1) });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      { ...KNOBS_BASE, sessionGapHours: 6 },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.messages.map((m) => m.body)).toEqual(['fechado, pode mandar', 'combinado!']);
+  });
+});
+
+describe('getLeadContext — round-trip do corte desfeito (Achado B da review PR #4)', () => {
+  /**
+   * Prova comportamental pedida na review: um FATO verificável anterior ao
+   * corte precisa sumir do contexto com o corte setado, e voltar quando o
+   * corte é desfeito. `DELETE /api/v1/contacts/[id]/context/cutoff` (provado
+   * em app/api/v1/contacts/[id]/context/cutoff/route.test.ts) faz exatamente
+   * isso: grava `contacts.context_reset_at = null`. `inbound-turn.ts` relê
+   * essa coluna a cada turno (`loadContextResetAt`, sem cache) — logo o efeito
+   * do DELETE real é byte-a-byte o `context_reset_at: null` simulado abaixo.
+   * `latest-checkpoint.test.ts` e `lead-state.test.ts` já provam o mesmo
+   * round-trip para checkpoint/lead_state (Spec 16 §5); este teste fecha o
+   * trio cobrindo get_lead_context, a tool que o modelo lê a cada turno.
+   */
+  const FATO = 'meu endereço de entrega é Rua das Flores, 42, apto 3';
+  const historicoComFato = [historyRow(0, 'inbound', FATO), ...DEPOIS];
+
+  it('com o corte setado, o fato anterior ao corte NÃO aparece no contexto', async () => {
+    const db = dbFake(historicoComFato, { context_reset_at: iso(5) });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.messages.some((m) => m.body === FATO)).toBe(false);
+  });
+
+  it('depois do DELETE /context/cutoff (context_reset_at volta a null), o fato reaparece', async () => {
+    const db = dbFake(historicoComFato, { context_reset_at: null });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.messages.some((m) => m.body === FATO)).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MessageBubble } from "./MessageBubble";
 import { NoteCard } from "./NoteCard";
+import { ContextCutoffDivider } from "./ContextCutoffDivider";
 import { useMessagesRealtime } from "@/hooks/inbox/useMessagesRealtime";
 import { useConversationNotes } from "@/hooks/inbox/useConversationNotes";
 import { useDeleteNote } from "@/hooks/inbox/useDeleteNote";
@@ -16,6 +17,9 @@ import type { Message, Note } from "@/lib/types/messaging";
 
 interface Props {
   conversationId: string | null;
+  /** Spec 16 §9.4 — marca de corte do contato (null = sem divisor). */
+  contextResetAt?: string | null;
+  contextResetReason?: string | null;
 }
 
 /** Onda 5.2: union de item do thread — mensagem real ou nota interna (nunca vai ao cliente). */
@@ -35,13 +39,36 @@ export function mergeThreadItems(messages: Message[], notes: Note[]): ThreadItem
   return items;
 }
 
+/**
+ * Índice onde o divisor de corte deve ser inserido: logo após o último item
+ * com ts <= contextResetAt. -1 = sem divisor.
+ */
+export function indexDoDivisorDeCorte(
+  items: ThreadItem[],
+  contextResetAt: string | null | undefined,
+): number {
+  if (!contextResetAt) return -1;
+  const cutoffMs = new Date(contextResetAt).getTime();
+  if (Number.isNaN(cutoffMs)) return -1;
+  let lastAtOrBefore = -1;
+  for (let i = 0; i < items.length; i++) {
+    if (new Date(items[i]!.ts).getTime() <= cutoffMs) lastAtOrBefore = i;
+  }
+  // Inserir DEPOIS do último item pré-corte (ou no início se todos forem pós-corte).
+  return lastAtOrBefore + 1;
+}
+
 function dayLabel(d: Date): string {
   if (isToday(d)) return "Hoje";
   if (isYesterday(d)) return "Ontem";
   return format(d, "dd/MM/yyyy", { locale: ptBR });
 }
 
-export function ChatThread({ conversationId }: Props) {
+export function ChatThread({
+  conversationId,
+  contextResetAt = null,
+  contextResetReason = null,
+}: Props) {
   const q = useMessagesRealtime(conversationId);
   const notes = useConversationNotes(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -59,6 +86,11 @@ export function ChatThread({ conversationId }: Props) {
   const items: ThreadItem[] = useMemo(
     () => mergeThreadItems(messages, notes),
     [messages, notes],
+  );
+
+  const divisorIndex = useMemo(
+    () => indexDoDivisorDeCorte(items, contextResetAt),
+    [items, contextResetAt],
   );
 
   // Scroll to bottom on first load + new message/note arrival.
@@ -105,13 +137,15 @@ export function ChatThread({ conversationId }: Props) {
   }
 
   // Group by day for separators (usa o timestamp do item — sent_at pra mensagem, created_at pra nota).
-  const groups: { key: string; date: Date; items: ThreadItem[] }[] = [];
-  for (const item of items) {
+  // O divisor de corte é renderizado entre itens, cruzando dias se necessário.
+  const groups: { key: string; date: Date; items: ThreadItem[]; startIndex: number }[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
     const d = new Date(item.ts);
     const key = format(d, "yyyy-MM-dd");
     const last = groups[groups.length - 1];
     if (last && last.key === key) last.items.push(item);
-    else groups.push({ key, date: d, items: [item] });
+    else groups.push({ key, date: d, items: [item], startIndex: i });
   }
 
   return (
@@ -130,6 +164,10 @@ export function ChatThread({ conversationId }: Props) {
           </div>
         )}
 
+        {divisorIndex === 0 && contextResetAt && (
+          <ContextCutoffDivider resetAt={contextResetAt} reason={contextResetReason} />
+        )}
+
         {groups.map((g) => (
           <div key={g.key} className="space-y-1">
             <div className="sticky top-0 z-10 flex justify-center py-1">
@@ -137,27 +175,36 @@ export function ChatThread({ conversationId }: Props) {
                 {dayLabel(g.date)}
               </span>
             </div>
-            {g.items.map((item) =>
-              item.kind === "note" ? (
-                <NoteCard
-                  key={`note-${item.data.id}`}
-                  note={item.data}
-                  // Só o autor ou manager+ vê o excluir — o backend barra o resto (403),
-                  // então não mostramos um botão que daria erro.
-                  onDelete={
-                    item.data.created_by_user_id === currentUser.id || canManage
-                      ? () => deleteNote.mutate(item.data.id)
-                      : undefined
-                  }
-                />
-              ) : (
-                <MessageBubble
-                  key={`msg-${item.data.id}`}
-                  message={item.data}
-                  debugCitations={debugCitations}
-                />
-              ),
-            )}
+            {g.items.map((item, localIdx) => {
+              const globalIdx = g.startIndex + localIdx;
+              const showDividerAfter =
+                contextResetAt != null && divisorIndex === globalIdx + 1;
+              return (
+                <div key={item.kind === "note" ? `note-${item.data.id}` : `msg-${item.data.id}`}>
+                  {item.kind === "note" ? (
+                    <NoteCard
+                      note={item.data}
+                      onDelete={
+                        item.data.created_by_user_id === currentUser.id || canManage
+                          ? () => deleteNote.mutate(item.data.id)
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <MessageBubble
+                      message={item.data}
+                      debugCitations={debugCitations}
+                    />
+                  )}
+                  {showDividerAfter && (
+                    <ContextCutoffDivider
+                      resetAt={contextResetAt}
+                      reason={contextResetReason}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
         ))}
 

@@ -8715,3 +8715,175 @@ CREATE OR REPLACE FUNCTION "public"."retrieve_top_k_chunks"("p_organization_id" 
   order by c.embedding <=> p_embedding asc
   limit greatest(p_k, 0);
 $$;
+
+-- ---- ciclo de vida do contexto do agente (migration 0098) ----
+-- Duas peças não-destrutivas e reversíveis (Spec 16 §3): marca de corte em
+-- contacts (nada apagado — limpar o campo restaura), e a política de
+-- expiração vivendo na etapa que o TENANT nomeou (nunca is_won/is_lost).
+-- Defaults reproduzem o comportamento anterior: nenhuma etapa existente
+-- passa a expirar contexto sozinha.
+alter table public.contacts
+  add column if not exists context_reset_at timestamptz,
+  add column if not exists context_reset_reason text;
+
+comment on column public.contacts.context_reset_at is
+  'Corte do contexto do agente: mensagens, checkpoints e lead_state anteriores a este instante deixam de ser lidos pelo turno. NADA é apagado — limpar o campo restaura.';
+
+comment on column public.contacts.context_reset_reason is
+  'Motivo do corte (ex.: stage_policy, manual) — só telemetria/UI, nunca lido pelo turno.';
+
+create index if not exists idx_contacts_context_reset_at
+  on public.contacts (organization_id, context_reset_at)
+  where context_reset_at is not null;
+
+alter table public.crm_stages
+  add column if not exists resets_context boolean not null default false,
+  add column if not exists context_reset_after_days integer not null default 7;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'crm_stages_context_reset_days_range'
+  ) then
+    alter table public.crm_stages
+      add constraint crm_stages_context_reset_days_range
+      check (context_reset_after_days >= 0 and context_reset_after_days <= 365);
+  end if;
+end $$;
+
+comment on column public.crm_stages.resets_context is
+  'Quando true, negócio parado nesta etapa por context_reset_after_days dias tem o contexto do agente expirado. Padrão de fábrica false — nada expira sem escolha do tenant.';
+
+comment on column public.crm_stages.context_reset_after_days is
+  'Carência em dias antes de expirar, contada de crm_leads.stage_changed_at. Default 7 — dá tempo ao pós-venda antes de cortar o contexto.';
+
+-- ---- hard reset atômico do contexto (migration 0099) ----
+-- SECURITY DEFINER + service_role: mesma doutrina de fn_lgpd_cascade_redact_contact.
+-- TX única evita reset parcial (checkpoint sumiu + 500 sem audit).
+CREATE OR REPLACE FUNCTION "public"."fn_hard_reset_contact_context"(
+  "p_organization_id" "uuid",
+  "p_contact_id" "uuid",
+  "p_purge_knowledge_base" boolean DEFAULT false
+) RETURNS "jsonb"
+LANGUAGE "plpgsql" SECURITY DEFINER
+SET "search_path" TO 'public'
+AS $$
+declare
+  v_exists boolean;
+  v_open_case_id uuid;
+  v_running_job_id uuid;
+  v_conversation_ids uuid[];
+  v_count int;
+  v_deleted jsonb := '{}'::jsonb;
+begin
+  select exists(
+    select 1 from contacts
+     where id = p_contact_id and organization_id = p_organization_id
+  ) into v_exists;
+
+  if not v_exists then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'not_found',
+      'message', 'Contato não encontrado.'
+    );
+  end if;
+
+  select ac.id into v_open_case_id
+    from agent_cases ac
+    join conversations conv on conv.id = ac.conversation_id
+   where ac.organization_id = p_organization_id
+     and conv.organization_id = p_organization_id
+     and conv.contact_id = p_contact_id
+     and ac.status not in ('resolved', 'cancelled')
+   limit 1;
+
+  if v_open_case_id is not null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'open_case_blocks_reset',
+      'message',
+        'Existe um caso aberto para este contato. Resolva o caso antes de apagar o contexto — senão quem estiver cuidando dele perde a referência.',
+      'details', jsonb_build_object('case_id', v_open_case_id)
+    );
+  end if;
+
+  select id into v_running_job_id
+    from job_queue
+   where organization_id = p_organization_id
+     and contact_id = p_contact_id
+     and status = 'running'
+   limit 1;
+
+  if v_running_job_id is not null then
+    return jsonb_build_object(
+      'ok', false,
+      'code', 'job_in_flight_blocks_reset',
+      'message',
+        'Há um atendimento da IA em andamento para este contato. Espere ele terminar e tente de novo — senão o contexto pode reaparecer no meio do reset.',
+      'details', jsonb_build_object('job_id', v_running_job_id)
+    );
+  end if;
+
+  select coalesce(array_agg(id), '{}') into v_conversation_ids
+    from conversations
+   where organization_id = p_organization_id
+     and contact_id = p_contact_id;
+
+  update job_queue
+     set status = 'failed',
+         last_error = 'canceled_by_context_hard_reset',
+         locked_by = null,
+         locked_at = null
+   where organization_id = p_organization_id
+     and contact_id = p_contact_id
+     and status = 'pending';
+  get diagnostics v_count = row_count;
+  v_deleted := v_deleted || jsonb_build_object('jobs_canceled', v_count);
+
+  delete from lead_checkpoints
+   where organization_id = p_organization_id and contact_id = p_contact_id;
+  get diagnostics v_count = row_count;
+  v_deleted := v_deleted || jsonb_build_object('lead_checkpoints', v_count);
+
+  delete from lead_state
+   where organization_id = p_organization_id and contact_id = p_contact_id;
+  get diagnostics v_count = row_count;
+  v_deleted := v_deleted || jsonb_build_object('lead_state', v_count);
+
+  delete from lead_notes
+   where organization_id = p_organization_id and contact_id = p_contact_id;
+  get diagnostics v_count = row_count;
+  v_deleted := v_deleted || jsonb_build_object('lead_notes', v_count);
+
+  v_count := 0;
+  if p_purge_knowledge_base and cardinality(v_conversation_ids) > 0 then
+    delete from ai_chunks
+     where organization_id = p_organization_id
+       and (metadata->>'conversation_id')::uuid = any (v_conversation_ids);
+    get diagnostics v_count = row_count;
+  end if;
+  v_deleted := v_deleted || jsonb_build_object('ai_chunks', v_count);
+
+  delete from conversations
+   where organization_id = p_organization_id and contact_id = p_contact_id;
+  get diagnostics v_count = row_count;
+  v_deleted := v_deleted || jsonb_build_object('conversations', v_count);
+
+  update contacts
+     set context_reset_at = null,
+         context_reset_reason = null
+   where id = p_contact_id and organization_id = p_organization_id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'contact_id', p_contact_id,
+    'deleted', v_deleted
+  );
+end;
+$$;
+
+ALTER FUNCTION "public"."fn_hard_reset_contact_context"("p_organization_id" "uuid", "p_contact_id" "uuid", "p_purge_knowledge_base" boolean) OWNER TO "postgres";
+
+REVOKE ALL ON FUNCTION "public"."fn_hard_reset_contact_context"("p_organization_id" "uuid", "p_contact_id" "uuid", "p_purge_knowledge_base" boolean) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."fn_hard_reset_contact_context"("p_organization_id" "uuid", "p_contact_id" "uuid", "p_purge_knowledge_base" boolean) TO "service_role";

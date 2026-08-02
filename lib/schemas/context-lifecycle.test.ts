@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveSessionGapHours } from "./context-lifecycle";
+import { hardResetContextSchema, resolveSessionGapHours } from "./context-lifecycle";
 
 describe("resolveSessionGapHours", () => {
   it("chave ausente resolve para o default 6", () => {
@@ -30,5 +30,35 @@ describe("resolveSessionGapHours", () => {
     expect(() => resolveSessionGapHours("nao-e-objeto")).not.toThrow();
     expect(resolveSessionGapHours("nao-e-objeto")).toBe(6);
     expect(resolveSessionGapHours(null)).toBe(6);
+  });
+});
+
+describe("hardResetContextSchema", () => {
+  it("aceita confirmation literal APAGAR com defaults", () => {
+    const r = hardResetContextSchema.safeParse({ confirmation: "APAGAR" });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.purge_knowledge_base).toBe(false);
+      expect(r.data.reason).toBeUndefined();
+    }
+  });
+
+  it("rejeita confirmation diferente de APAGAR", () => {
+    expect(hardResetContextSchema.safeParse({ confirmation: "apagar" }).success).toBe(false);
+    expect(hardResetContextSchema.safeParse({ confirmation: "DELETAR" }).success).toBe(false);
+    expect(hardResetContextSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("aceita purge_knowledge_base e reason opcionais", () => {
+    const r = hardResetContextSchema.safeParse({
+      confirmation: "APAGAR",
+      purge_knowledge_base: true,
+      reason: "dado de teste",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.purge_knowledge_base).toBe(true);
+      expect(r.data.reason).toBe("dado de teste");
+    }
   });
 });

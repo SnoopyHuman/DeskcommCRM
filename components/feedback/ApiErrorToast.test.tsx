@@ -53,7 +53,8 @@ describe("ApiErrorToast", () => {
     showApiError(new ApiError(409, "conversation_already_claimed", undefined, "req-1"));
     expect(toast.warning).toHaveBeenCalledTimes(1);
     expect(toast.warning).toHaveBeenCalledWith(
-      "Outro atendente já assumiu.",
+      // Spec 04 §9.3 — string exata; string curta divergia do contrato (PR #4 review).
+      "Outro atendente já assumiu esta conversa.",
       expect.objectContaining({ description: "ID: req-1" }),
     );
   });

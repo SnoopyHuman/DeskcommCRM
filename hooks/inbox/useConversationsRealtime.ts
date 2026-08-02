@@ -14,6 +14,9 @@ export interface ContactSummary {
   tags: string[];
   is_blocked: boolean;
   is_anonymized: boolean;
+  /** Spec 16 — marca de corte do contexto do agente (C2-06). */
+  context_reset_at?: string | null;
+  context_reset_reason?: string | null;
 }
 
 export type ConversationWithContact = Conversation & {

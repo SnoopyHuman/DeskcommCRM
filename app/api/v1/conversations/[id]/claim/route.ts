@@ -65,7 +65,11 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   }
   const row = data?.[0];
   if (!row) {
-    return fail("state_conflict", "Outro atendente já assumiu.", 409, { requestId });
+    // Spec 04 §9.2/§9.3: code e mensagem exatos que o front (ApiErrorToast)
+    // mapeia — divergir aqui faz o toast cair no fallback genérico de err.message.
+    return fail("conversation_already_claimed", "Outro atendente já assumiu esta conversa.", 409, {
+      requestId,
+    });
   }
 
   const conv = row as unknown as Conversation;

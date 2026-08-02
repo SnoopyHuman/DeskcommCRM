@@ -113,6 +113,9 @@ const ACTION_MIN_ROLE: Record<string, Role> = {
   "ai.credentials.view": "manager",
   "ai.credentials.write": "admin",
   "webhooks.manage": "manager",
+  // Spec 16 — ciclo de vida do contexto
+  "context.reset_manual": "manager",
+  "context.policy_write": "admin",
 };
 
 export function usePermission(action: string): boolean {

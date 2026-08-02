@@ -148,16 +148,54 @@ export function findForbiddenKey(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Neutraliza `lead_state` no corte do contexto (Spec 16 §5.3): devolve `null`
+ * quando o estado é ANTERIOR ao corte — o turno passa a operar como
+ * `stage='new'` (mesmo default de `applyLeadStateUpdate` pra lead sem linha),
+ * SEM tocar a linha em `lead_state`. É o que torna o reset reversível de
+ * graça: limpar `context_reset_at` no contato faz o estado real reaparecer,
+ * porque ele nunca foi sobrescrito. Pura — não lê banco nem relógio, só
+ * compara os dois instantes que já chegaram prontos.
+ */
+export function estadoVigente(row: LeadStateRow | null, cutoff: string | null): LeadStateRow | null {
+  if (row === null || cutoff === null) return row;
+  return row.updated_at.getTime() > Date.parse(cutoff) ? row : null;
+}
+
+/**
+ * Lê `lead_state` e aplica `estadoVigente` com o corte do turno.
+ *
+ * Na abertura do turno, `contextResetAt` é o snapshot único (Spec 16 §5).
+ * Em `applyLeadStateUpdate` (meio do turno), passa-se `undefined` para
+ * reler o contato — a escrita precisa do corte vigente no instante da
+ * transição, não do snapshot da abertura.
+ */
 export async function getLeadState(
   db: Queryable,
   tenantId: string,
   leadId: string,
+  contextResetAt?: string | null,
 ): Promise<LeadStateRow | null> {
-  const { rows } = await db.query<LeadStateRow>(
-    'select * from lead_state where organization_id = $1 and contact_id = $2',
+  if (contextResetAt !== undefined) {
+    const { rows } = await db.query<LeadStateRow>(
+      `select * from lead_state
+        where organization_id = $1 and contact_id = $2`,
+      [tenantId, leadId],
+    );
+    return estadoVigente(rows[0] ?? null, contextResetAt);
+  }
+
+  const { rows } = await db.query<LeadStateRow & { _context_reset_at: string | null }>(
+    `select ls.*,
+            (select context_reset_at::text from contacts where organization_id = $1 and id = $2) as _context_reset_at
+     from lead_state ls
+     where ls.organization_id = $1 and ls.contact_id = $2`,
     [tenantId, leadId],
   );
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  const { _context_reset_at, ...rest } = row;
+  return estadoVigente(rest, _context_reset_at);
 }
 
 /**

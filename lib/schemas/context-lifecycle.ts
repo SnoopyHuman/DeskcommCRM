@@ -22,3 +22,15 @@ export function resolveSessionGapHours(settings: unknown): number | null {
     ?.context_lifecycle as Record<string, unknown> | undefined;
   return sessionGapHoursSchema.parse(contextLifecycle?.session_gap_hours);
 }
+
+/**
+ * Body de `POST /api/v1/contacts/{id}/context/hard-reset` (Spec 16 §6.1).
+ * `confirmation` é literal — a rota mapeia falha desse campo para
+ * `422 invalid_confirmation` (não o `validation_error` genérico).
+ */
+export const hardResetContextSchema = z.object({
+  confirmation: z.literal("APAGAR"),
+  purge_knowledge_base: z.boolean().optional().default(false),
+  reason: z.string().trim().max(500).optional(),
+});
+export type HardResetContextInput = z.infer<typeof hardResetContextSchema>;
