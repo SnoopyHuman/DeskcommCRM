@@ -3,8 +3,9 @@
  *
  * Prova, contra os Route Handlers REAIS (auth e Supabase mockados):
  *  - claim duplicado: rpc fn_conversation_assign devolve 0 rows → 409
- *    state_conflict e NENHUM audit de claim (o evento estruturado nem existe,
- *    porque a função só insere quando o UPDATE vence — mesma transação);
+ *    conversation_already_claimed (Spec 04 §9.2/§9.3) e NENHUM audit de claim
+ *    (o evento estruturado nem existe, porque a função só insere quando o
+ *    UPDATE vence — mesma transação);
  *  - claim ok: rpc chamado com reason='claim' + optimistic lock ligado;
  *  - release: rpc com reason='release', expected = caller;
  *  - transfer: imediata (G1-06d — enforce_expected=false), Zod valida
@@ -118,17 +119,48 @@ beforeEach(() => {
 });
 
 describe("POST /claim — idempotência do claim atômico", () => {
-  it("claim duplicado (0 rows do rpc) → 409 state_conflict, sem audit de claim", async () => {
+  it("claim duplicado (0 rows do rpc) → 409 conversation_already_claimed, mensagem da Spec 04 §9.3, sem audit de claim", async () => {
     const state = stubState({ assignRows: [] });
     agentSession(state);
     const { POST } = await import("@/app/api/v1/conversations/[id]/claim/route");
     const res = await POST(postReq("claim", {}), params);
     expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("state_conflict");
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("conversation_already_claimed");
+    expect(body.error.message).toBe("Outro atendente já assumiu esta conversa.");
     expect(vi.mocked(audit).mock.calls.some(([e]) => e.action === "conversation.claimed")).toBe(
       false,
     );
+  });
+
+  /**
+   * Corrida real: duas abas chamam POST /claim quase ao mesmo tempo. A RPC
+   * (fn_conversation_assign) é quem decide atomicamente no Postgres — aqui
+   * simulamos os dois desfechos que ela produz (1ª chamada vence com row
+   * preenchida, 2ª perde com array vazio) e provamos que o handler traduz
+   * cada um para a resposta certa, sem duplo-claim nem duplo-audit.
+   */
+  it("duas chamadas quase simultâneas → a 1ª vence (200), a 2ª perde (409) e só uma audita", async () => {
+    const state = stubState();
+    agentSession(state);
+    const { POST } = await import("@/app/api/v1/conversations/[id]/claim/route");
+
+    const first = await POST(postReq("claim", {}), params);
+    expect(first.status).toBe(200);
+
+    // A vitória já commitou no Postgres: a 2ª chamada da corrida encontra
+    // 0 assignee livre e a RPC devolve array vazio (mesmo comportamento do
+    // stub duplicado acima, mas encadeado após um claim que já venceu).
+    state.assignRows = [];
+    const second = await POST(postReq("claim", {}), params);
+    expect(second.status).toBe(409);
+    const body = (await second.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("conversation_already_claimed");
+    expect(body.error.message).toBe("Outro atendente já assumiu esta conversa.");
+
+    expect(
+      vi.mocked(audit).mock.calls.filter(([e]) => e.action === "conversation.claimed"),
+    ).toHaveLength(1);
   });
 
   it("claim livre → 200, rpc com reason='claim' e optimistic lock ligado", async () => {

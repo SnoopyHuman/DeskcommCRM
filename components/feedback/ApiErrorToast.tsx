@@ -40,7 +40,7 @@ const COPY: Record<string, { variant: Variant; msg: string }> = {
   },
   conversation_already_claimed: {
     variant: "warning",
-    msg: "Outro atendente já assumiu.",
+    msg: "Outro atendente já assumiu esta conversa.",
   },
   invalid_state: {
     variant: "warning",

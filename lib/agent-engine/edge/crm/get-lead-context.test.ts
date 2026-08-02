@@ -170,3 +170,46 @@ describe('getLeadContext — marca de corte contacts.context_reset_at (Spec 16 �
     expect(result.context.messages.map((m) => m.body)).toEqual(['fechado, pode mandar', 'combinado!']);
   });
 });
+
+describe('getLeadContext — round-trip do corte desfeito (Achado B da review PR #4)', () => {
+  /**
+   * Prova comportamental pedida na review: um FATO verificável anterior ao
+   * corte precisa sumir do contexto com o corte setado, e voltar quando o
+   * corte é desfeito. `DELETE /api/v1/contacts/[id]/context/cutoff` (provado
+   * em app/api/v1/contacts/[id]/context/cutoff/route.test.ts) faz exatamente
+   * isso: grava `contacts.context_reset_at = null`. `inbound-turn.ts` relê
+   * essa coluna a cada turno (`loadContextResetAt`, sem cache) — logo o efeito
+   * do DELETE real é byte-a-byte o `context_reset_at: null` simulado abaixo.
+   * `latest-checkpoint.test.ts` e `lead-state.test.ts` já provam o mesmo
+   * round-trip para checkpoint/lead_state (Spec 16 §5); este teste fecha o
+   * trio cobrindo get_lead_context, a tool que o modelo lê a cada turno.
+   */
+  const FATO = 'meu endereço de entrega é Rua das Flores, 42, apto 3';
+  const historicoComFato = [historyRow(0, 'inbound', FATO), ...DEPOIS];
+
+  it('com o corte setado, o fato anterior ao corte NÃO aparece no contexto', async () => {
+    const db = dbFake(historicoComFato, { context_reset_at: iso(5) });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.messages.some((m) => m.body === FATO)).toBe(false);
+  });
+
+  it('depois do DELETE /context/cutoff (context_reset_at volta a null), o fato reaparece', async () => {
+    const db = dbFake(historicoComFato, { context_reset_at: null });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.messages.some((m) => m.body === FATO)).toBe(true);
+  });
+});

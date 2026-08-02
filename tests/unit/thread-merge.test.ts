@@ -53,4 +53,18 @@ describe("indexDoDivisorDeCorte", () => {
   it("corte depois de tudo → após o último", () => {
     expect(indexDoDivisorDeCorte(items, "2026-08-03T00:00:00Z")).toBe(3);
   });
+
+  it("cutoff com string inválida/malformada → -1, igual a sem corte", () => {
+    expect(indexDoDivisorDeCorte(items, "não-é-uma-data")).toBe(-1);
+    expect(indexDoDivisorDeCorte(items, "")).toBe(-1);
+  });
+
+  it("empate entre nota interna e mensagem no exato instante do corte → divisor entra depois dos dois", () => {
+    // mergeThreadItems mantém mensagem antes da nota no empate (ordem estável);
+    // o corte no MESMO instante precisa varrer os dois, não parar no primeiro.
+    const msgs = [{ id: "m1", sent_at: "2026-08-01T10:00:00Z" }] as never;
+    const notesFixture = [{ id: "n1", created_at: "2026-08-01T10:00:00Z" }] as never;
+    const merged = mergeThreadItems(msgs, notesFixture);
+    expect(indexDoDivisorDeCorte(merged, "2026-08-01T10:00:00Z")).toBe(2);
+  });
 });
