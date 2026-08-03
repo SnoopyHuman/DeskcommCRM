@@ -15,6 +15,7 @@ import { audit } from "@/lib/audit";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { ackToStatus } from "@/lib/types/messaging";
 import { bareWaMessageId } from "@/lib/waha/message-id";
+import { conexaoWahaDoEnv, marcarComoLida } from "@/lib/waha/presence";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -555,6 +556,15 @@ export async function dispatchWahaEvent(
     if (payload.fromMe) {
       await handleOutboundFromUserPhone(admin, session, payload, requestId);
     } else {
+      // ✓✓ azul IMEDIATO, antes de qualquer processamento: é o primeiro sinal de
+      // vida que o cliente recebe, dezenas de segundos antes de a resposta
+      // existir. Sem await — o webhook precisa devolver 200 rápido, e presença
+      // que falha não pode segurar a ingestão da mensagem.
+      const conn = conexaoWahaDoEnv();
+      const chatId = payload.from ?? "";
+      if (conn && envelope.session && chatId && !chatId.endsWith("@g.us")) {
+        void marcarComoLida(conn, envelope.session, chatId);
+      }
       await handleInbound(admin, session, payload, requestId);
     }
   } else if (eventType === "message.ack") {

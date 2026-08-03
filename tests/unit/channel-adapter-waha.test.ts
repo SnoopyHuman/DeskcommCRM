@@ -104,13 +104,38 @@ describe('adapter WAHA', () => {
     });
 
     expect(res).toEqual({ externalId: 'ABC123' });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(`${WAHA_BASE}/api/sendText`);
     expect(JSON.parse(String(init.body))).toEqual({
       session: 'default',
       chatId: '5531999998888@c.us',
       text: 'oi',
+    });
+  });
+
+  // Onda 4: apaga o "digitando…" assim que a resposta sai — fire-and-forget
+  // (o adapter não espera o presence antes de devolver o resultado do envio).
+  it('após enviar, dispara presence=paused (apaga o "digitando…"), sem bloquear o resultado', async () => {
+    const fetchMock = stubWaha({ id: { _serialized: 'ABC123' } });
+
+    const res = await getAdapter('waha').send({
+      sessionRef: 'default',
+      to: '5531999998888@c.us',
+      kind: 'text',
+      body: 'oi',
+    });
+    expect(res).toEqual({ externalId: 'ABC123' });
+
+    // A chamada de presence é disparada (não aguardada) dentro de send(); dar
+    // um tick garante que o fetch síncrono dela já foi registrado no mock.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(url).toBe(`${WAHA_BASE}/api/default/presence`);
+    expect(JSON.parse(String(init.body))).toEqual({
+      chatId: '5531999998888@c.us',
+      presence: 'paused',
     });
   });
 

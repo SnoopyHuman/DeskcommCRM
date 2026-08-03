@@ -8,6 +8,8 @@
  * stored in container env). Plaintext-then-hash is NOT used in this version.
  * So WAHA_API_KEY in .env.local IS the hex hash.
  */
+import { definirPresenca, marcarComoLida, type PresencaChat } from "@/lib/waha/presence";
+
 export class WahaClient {
   constructor(
     private readonly baseUrl: string,
@@ -90,6 +92,23 @@ export class WahaClient {
     });
     if (!res.ok) throw new Error(`waha_${res.status}`);
     return res.json();
+  }
+
+  /**
+   * Presença ("digitando…") e ✓✓ azul. A implementação vive em
+   * `lib/waha/presence.ts` porque o drain do worker também precisa dela sem ter
+   * este client à mão. Best-effort por contrato: não lançam.
+   */
+  async setPresence(
+    session: string,
+    chatId: string,
+    presence: PresencaChat,
+  ): Promise<void> {
+    await definirPresenca({ baseUrl: this.baseUrl, apiKey: this.apiKey }, session, chatId, presence);
+  }
+
+  async sendSeen(session: string, chatId: string): Promise<void> {
+    await marcarComoLida({ baseUrl: this.baseUrl, apiKey: this.apiKey }, session, chatId);
   }
 
   async sendMedia(
