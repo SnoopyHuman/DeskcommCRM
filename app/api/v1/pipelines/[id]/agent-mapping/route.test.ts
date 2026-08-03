@@ -39,6 +39,8 @@ interface StageRow {
   agent_stage_hint: string | null;
   pipeline_id: string;
   organization_id: string;
+  resets_context: boolean;
+  context_reset_after_days: number;
 }
 
 function etapa(over: Partial<StageRow> & { id: string; name: string }): StageRow {
@@ -50,6 +52,8 @@ function etapa(over: Partial<StageRow> & { id: string; name: string }): StageRow
     agent_stage_hint: null,
     pipeline_id: PIPE,
     organization_id: ORG_ID,
+    resets_context: false,
+    context_reset_after_days: 7,
     ...over,
   };
 }
@@ -241,7 +245,14 @@ describe("GET /api/v1/pipelines/[id]/agent-mapping", () => {
 
     const body = (await res.json()) as {
       data: {
-        etapas: Array<{ id: string; name: string; is_won: boolean; is_lost: boolean }>;
+        etapas: Array<{
+          id: string;
+          name: string;
+          is_won: boolean;
+          is_lost: boolean;
+          resets_context: boolean;
+          context_reset_after_days: number;
+        }>;
         mapeamento: Record<string, string | null>;
       };
     };
@@ -251,13 +262,45 @@ describe("GET /api/v1/pipelines/[id]/agent-mapping", () => {
     // oferecida — o board não a mostra e o índice único do banco a ignora, então
     // escolhê-la seria um mapeamento invisível.
     expect(body.data.etapas.map((e) => e.id)).toEqual(["e1", "e2", "e3", "e4"]);
-    expect(body.data.etapas[0]).toEqual({ id: "e1", name: "Novo", is_won: false, is_lost: false });
+    expect(body.data.etapas[0]).toEqual({
+      id: "e1",
+      name: "Novo",
+      is_won: false,
+      is_lost: false,
+      resets_context: false,
+      context_reset_after_days: 7,
+    });
 
     expect(body.data.mapeamento).toEqual(
       mapa({ negotiating: "e2", won: "e3", lost: "e4" }),
     );
     // O hint da arquivada não vaza para o mapa.
     expect(body.data.mapeamento.qualifying).toBeNull();
+  });
+
+  /**
+   * C3-01 (Spec 16 §9.1) — é este GET que `useAgentMapping` lê para a tela de
+   * etapas. Sem os dois campos aqui, o checkbox e o campo de carência nunca
+   * refletiriam o que está salvo — sempre nasceriam desmarcados.
+   */
+  it("devolve a política de expiração do contexto de cada etapa", async () => {
+    authOk();
+    makeDb({
+      stages: [
+        ...funil(),
+      ].map((e) => (e.id === "e2" ? { ...e, resets_context: true, context_reset_after_days: 14 } : e)),
+    });
+    const { GET } = await import("./route");
+    const res = await GET(reqGet(), ctx);
+
+    const body = (await res.json()) as {
+      data: { etapas: Array<{ id: string; resets_context: boolean; context_reset_after_days: number }> };
+    };
+    const e2 = body.data.etapas.find((e) => e.id === "e2");
+    expect(e2?.resets_context).toBe(true);
+    expect(e2?.context_reset_after_days).toBe(14);
+    // Padrão de fábrica não esquece: as outras etapas continuam desmarcadas.
+    expect(body.data.etapas.find((e) => e.id === "e1")?.resets_context).toBe(false);
   });
 });
 

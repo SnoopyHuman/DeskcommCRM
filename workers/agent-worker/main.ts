@@ -36,6 +36,7 @@ import { runFlywheelLoop } from '@/lib/agent-engine/flywheel/live';
 import { llmEdgeConfigFromEnv } from '@/lib/agent-engine/edge/llm/run-model-call';
 import { loadEnv, type Env } from '@/lib/agent-engine/env';
 import { createLogger, type Logger } from '@/lib/agent-engine/obs/logger';
+import { runAppCronTicker } from '@/workers/agent-worker/app-cron-ticker';
 import {
   evaluateCacheHitAlert,
   metricsSnapshot,
@@ -251,6 +252,21 @@ export async function startWorker(
     loopsAbort.signal,
   );
 
+  // Crons HTTP do app (paridade com o `scheduler` do compose.prod). No Railway
+  // free não cabe outro serviço — o worker 24/7 assume o crond.
+  const appCronLoop =
+    env.APP_CRON_TICKER_ENABLED && env.APP_CRON_BASE_URL && env.INTERNAL_SECRET
+      ? runAppCronTicker(
+          { baseUrl: env.APP_CRON_BASE_URL, secret: env.INTERNAL_SECRET },
+          log,
+          loopsAbort.signal,
+        )
+      : (log.warn(
+          'app-cron-ticker OFF — defina APP_CRON_BASE_URL + INTERNAL_SECRET (e APP_CRON_TICKER_ENABLED=true)',
+          {},
+        ),
+        Promise.resolve());
+
   const cacheAlertKnobs: CacheAlertKnobs = {
     windowMs: env.METRICS_WINDOW_MS,
     cacheHitAlertThreshold: env.CACHE_HIT_ALERT_THRESHOLD,
@@ -323,7 +339,14 @@ export async function startWorker(
     server.close();
     server.closeIdleConnections();
     loopsAbort.abort();
-    await Promise.all([drainLoop, healthLoop, cronLoop, sessionWatchdogLoop, flywheelLoop]);
+    await Promise.all([
+      drainLoop,
+      healthLoop,
+      cronLoop,
+      sessionWatchdogLoop,
+      flywheelLoop,
+      appCronLoop,
+    ]);
     await workerLoop;
     let graceTimer: NodeJS.Timeout | undefined;
     const grace = new Promise<'grace'>((resolve) => {

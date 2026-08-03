@@ -5,9 +5,9 @@ import {
 } from './stage-editing';
 
 const etapas = [
-  { id: 'e1', name: 'Novo',     slug: 'novo',     position: 1000, is_won: false, is_lost: false, is_archived: false, agent_stage_hint: null },
-  { id: 'e2', name: 'Proposta', slug: 'proposta', position: 2000, is_won: false, is_lost: false, is_archived: false, agent_stage_hint: 'negotiating' },
-  { id: 'e3', name: 'Fechado',  slug: 'fechado',  position: 3000, is_won: true,  is_lost: false, is_archived: false, agent_stage_hint: 'won' },
+  { id: 'e1', name: 'Novo',     slug: 'novo',     position: 1000, is_won: false, is_lost: false, is_archived: false, agent_stage_hint: null,          resets_context: false, context_reset_after_days: 7 },
+  { id: 'e2', name: 'Proposta', slug: 'proposta', position: 2000, is_won: false, is_lost: false, is_archived: false, agent_stage_hint: 'negotiating', resets_context: false, context_reset_after_days: 7 },
+  { id: 'e3', name: 'Fechado',  slug: 'fechado',  position: 3000, is_won: true,  is_lost: false, is_archived: false, agent_stage_hint: 'won',         resets_context: false, context_reset_after_days: 7 },
 ];
 
 describe('validarNomeDeEtapa', () => {

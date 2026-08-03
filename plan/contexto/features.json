@@ -2,7 +2,7 @@
   "_meta": {
     "loop": "contexto-loop",
     "repo": "DeskcommCRM",
-    "active_phase": "C2",
+    "active_phase": "C3",
     "loop_doctrine": "Doutrina de DOMÍNIO soberana: CLAUDE.md deste repo + docs/specs/ (multi-tenancy, migrations em tripla, idempotência, RBAC, LGPD, anti-patterns). Backlog SEPARADO do plan/ raiz, que pertence ao gov-loop (fase G1 ativa) — não compartilham máquina, checkpoints nem numeração.",
     "session_ritual": "Uma sessão = UMA feature. Maker≠checker: passes:true só com PASS de verificação sob hash-check.",
     "spec": "docs/specs/16-spec-gestao-contexto-agente.md · PRD: docs/prd/07-prd-gestao-contexto-agente.md",
@@ -295,7 +295,12 @@
       "priority": 6,
       "lane": "ui",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "Checkbox+carência com strings exatas §9.1 em _stages.tsx (bloco PoliticaDeContexto), escondido — não desabilitado — sem context.policy_write. PATCH aceita os 2 campos, 2ª chamada requireRole('admin') só quando o patch os toca (409/403 testado com mock que nega admin mantendo manager). audit context.policy_changed separado de pipeline.stage_updated. 60 testes de rota + 60 de UI verdes; typecheck/lint/test:unit (1769 testes) zerados. E2E real executado (não só escrito): pnpm build + next start contra o projeto Supabase remoto de teste, login admin com MFA TOTP + manager sem, PATCH real, reload real — 2/2 passed, evidência em .superpowers/evidence/C3/. Sem migration nova (usa colunas da 0098)."
+      }
     },
     {
       "id": "C3-02",
@@ -318,7 +323,12 @@
       "priority": 6,
       "lane": "core",
       "kind": "build",
-      "passes": false
+      "passes": true,
+      "verification": {
+        "verdict": "PASS",
+        "by": "self",
+        "note": "Cron novo com auth fail-closed e force-dynamic; seleção de políticas ativas, carência calculada por stage_changed_at, filtro tenant-aware e deduplicação por contato (teto 500). Claim atômico em contacts impede duplicata concorrente; caso humano aberto bloqueia por join agent_cases→conversations com status novo bloqueando; cancela somente jobs pending, emite atividade context_reset_auto com stage_name/after_days e audit context.reset_auto. Teste de rota cobre 6 vs 8 dias, 2 tenants, caso aberto, jobs, lead duplicado e segunda execução idempotente; typecheck e lint zerados (lint apenas warnings preexistentes)."
+      }
     },
     {
       "id": "C3-03",

@@ -141,6 +141,28 @@ verde (`pnpm test:unit`, 1752 testes). O spec E2E (J8.1-J8.3) foi ESCRITO mas
 subir o Postgres/Supabase efêmero. Rodar `pnpm test:e2e -g "C2"` com o stack
 local de pé (doutrina de QA Visual) antes de considerar J8 fechado.
 
+## J9 — Política de expiração do contexto por etapa (C3-01 — Spec 16) `[P1]`
+
+Spec: `docs/specs/16-spec-gestao-contexto-agente.md` §9.1. Regressão permanente
+em `tests/e2e/pipeline-context-policy.spec.ts` (seed:
+`scripts/seed-e2e-pipeline-policy.ts`, etapa dedicada "Etapa E2E Política de
+Contexto" no funil default, resetada ao baseline de fábrica a cada run).
+
+| # | Caso | Expectativa | Cobertura |
+|---|------|-------------|-----------|
+| J9.1 | Admin marca "a IA recomeça do zero" e define a carência numa etapa | Switch e campo de dias gravam via `PATCH .../stages/{id}`, persistem após reload, strings exatas da Spec §9.1 na tela, sem jargão técnico | `pipeline-context-policy.spec.ts` (E2E) + `route.test.ts` (integração, rota real) |
+| J9.2 | Manager (abaixo de admin) abre a mesma tela | Bloco de política **não aparece** (escondido, não desabilitado — mesmo precedente do vocabulário/custom fields desta página); resto da etapa (nome, papel, ordem) continua editável | `pipeline-context-policy.spec.ts` (E2E) |
+| J9.3 | `context.policy_changed` auditado | Audit emitido só quando o patch toca `resets_context`/`context_reset_after_days`; `pipeline.stage_updated` seguem separado quando só nome/papel/ordem mudam | `route.test.ts` (integração) |
+| J9.4 | Org nova não tem etapa marcada | `resets_context=false`/`context_reset_after_days=7` nascem do DEFAULT da coluna (migration 0098); `trg_seed_default_pipeline_for_org` não referencia os campos | inspeção do trigger (`baseline.sql`) — nenhuma migration/backfill necessária |
+
+**Nota de execução (2026-08-02):** J9.1 e J9.2 EXECUTADOS de ponta a ponta —
+`pnpm build` + `next start` local contra o projeto Supabase remoto dedicado a
+E2E ("E2E Test Org", o mesmo de J8), login real (admin com MFA TOTP, manager
+sem), PATCH real, reload real. As duas passaram (`2 passed`). Evidência visual
+em `.superpowers/evidence/C3/`. Docker não foi necessário — esta suíte não
+depende de Postgres efêmero local, só do dev server + do projeto de teste
+remoto já usado por `context-lifecycle.spec.ts`.
+
 ---
 
 ## Achados do mapeamento (pré-execução) — candidatos a correção

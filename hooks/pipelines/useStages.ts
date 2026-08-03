@@ -37,6 +37,9 @@ export interface PatchDeEtapa {
   is_won?: boolean;
   is_lost?: boolean;
   depois_de?: string | null;
+  /** Política de expiração do contexto do agente (Spec 16 §9.1) — grava sozinha, exige admin no servidor. */
+  resets_context?: boolean;
+  context_reset_after_days?: number;
 }
 
 function useReler(pipelineId: string) {

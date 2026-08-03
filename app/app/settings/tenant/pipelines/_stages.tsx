@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { usePermission } from "@/hooks/auth/AuthProvider";
 import {
   useAgentMapping,
   type EtapaDoFunil,
@@ -203,6 +205,9 @@ export function StagesSection({
   const criar = useCriarEtapa(pipelineId);
   const editar = useEditarEtapa(pipelineId);
   const arquivar = useArquivarEtapa(pipelineId);
+  // Espelha o precedente do vocabulário/custom fields desta MESMA página:
+  // esconder o que a rota recusaria é honestidade, não permissão nova.
+  const podeEditarPolitica = usePermission("context.policy_write");
 
   const [erro, setErro] = useState<
     { etapaId: string | null; texto: string; sobrePapel?: boolean } | null
@@ -466,6 +471,18 @@ export function StagesSection({
                 </p>
               )}
 
+              {/* Spec 16 §9.1 — admin apenas. Escondido, não desabilitado, para
+                  quem não tem `context.policy_write`: mesma regra do vocabulário/
+                  custom fields desta página, e pelo mesmo motivo — oferecer um
+                  controle que a rota vai recusar não é ajuda, é ruído. */}
+              {podeEditarPolitica && (
+                <PoliticaDeContexto
+                  etapa={etapa}
+                  desabilitado={ocupado}
+                  aoAlterar={(patch) => aplicar(etapa.id, patch)}
+                />
+              )}
+
               {confirmandoAqui && (
                 <Card
                   className="flex flex-col gap-3 border-warning bg-warning-bg p-4"
@@ -712,5 +729,101 @@ function NomeDaEtapa({
       }}
       className="min-w-0 flex-1"
     />
+  );
+}
+
+/**
+ * Recomeçar o atendimento nesta etapa — Spec 16 §9.1 (ciclo de vida do
+ * contexto do agente). Strings EXATAS da spec: nenhum texto aqui usa "contexto"
+ * sem a explicação de efeito ao lado, e nenhum jargão técnico (`checkpoint`,
+ * `cutoff`, `lead_state`) aparece nesta tela.
+ *
+ * ⚠️ O SWITCH GRAVA NA HORA (como o seletor de papel); só os DIAS têm rascunho
+ * local, pelo mesmo motivo do nome da etapa — um PATCH por dígito digitado.
+ */
+function PoliticaDeContexto({
+  etapa,
+  desabilitado,
+  aoAlterar,
+}: {
+  etapa: EtapaDoFunil;
+  desabilitado: boolean;
+  aoAlterar: (patch: PatchDeEtapa) => void;
+}) {
+  const [dias, setDias] = useState(String(etapa.context_reset_after_days));
+
+  // Reflete o que o servidor tem quando outra edição desta etapa recarrega a
+  // lista (ex.: renomear e mudar a política na mesma sessão) — mesmo princípio
+  // do remount por `key` do nome, sem precisar de uma chave nova na `li`.
+  useEffect(() => {
+    setDias(String(etapa.context_reset_after_days));
+  }, [etapa.context_reset_after_days]);
+
+  function confirmarDias() {
+    const n = Number(dias);
+    if (!Number.isInteger(n) || n < 0 || n > 365 || n === etapa.context_reset_after_days) {
+      setDias(String(etapa.context_reset_after_days));
+      return;
+    }
+    aoAlterar({ context_reset_after_days: n });
+  }
+
+  return (
+    <Card
+      className="flex flex-col gap-3 border-border p-4"
+      data-testid={`politica-contexto-${etapa.id}`}
+    >
+      <p className="text-sm font-medium">Recomeçar o atendimento nesta etapa</p>
+
+      <label className="flex items-start gap-3">
+        <Switch
+          checked={etapa.resets_context}
+          disabled={desabilitado}
+          aria-label={`Quando o negócio chegar em «${etapa.name}», a IA recomeça do zero`}
+          data-testid={`resets-context-${etapa.id}`}
+          onCheckedChange={(v) => aoAlterar({ resets_context: v })}
+        />
+        <span className="space-y-0.5">
+          <span className="block text-sm leading-relaxed">
+            Quando o negócio chegar aqui, a IA recomeça do zero
+          </span>
+          <span className="block text-xs italic text-muted-foreground">
+            A IA esquece o que foi conversado, mas continua sabendo quem é o cliente e o que ele
+            já comprou. O histórico completo continua visível para a sua equipe.
+          </span>
+        </span>
+      </label>
+
+      <div className="space-y-1">
+        <div className="flex items-center gap-2 text-sm">
+          <label htmlFor={`dias-contexto-${etapa.id}`}>Esperar</label>
+          <Input
+            id={`dias-contexto-${etapa.id}`}
+            type="number"
+            min={0}
+            max={365}
+            value={dias}
+            disabled={desabilitado}
+            aria-label={`Dias de carência antes de recomeçar em «${etapa.name}»`}
+            data-testid={`dias-contexto-${etapa.id}`}
+            onChange={(e) => setDias(e.target.value)}
+            onBlur={confirmarDias}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                setDias(String(etapa.context_reset_after_days));
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-20"
+          />
+          <span>dias antes de recomeçar</span>
+        </div>
+        <p className="text-xs italic text-muted-foreground">
+          Tempo para o pós-venda acontecer. Se o cliente voltar antes disso, a IA ainda lembra da
+          conversa.
+        </p>
+      </div>
+    </Card>
   );
 }

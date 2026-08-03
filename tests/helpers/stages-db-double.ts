@@ -33,6 +33,8 @@ export interface StageRow {
   agent_stage_hint: string | null;
   pipeline_id: string;
   organization_id: string;
+  resets_context: boolean;
+  context_reset_after_days: number;
 }
 
 export function etapa(over: Partial<StageRow> & { id: string; name: string }): StageRow {
@@ -45,6 +47,9 @@ export function etapa(over: Partial<StageRow> & { id: string; name: string }): S
     agent_stage_hint: null,
     pipeline_id: PIPE,
     organization_id: ORG_ID,
+    // Default de fábrica da migration 0098 — org nova não tem etapa marcada.
+    resets_context: false,
+    context_reset_after_days: 7,
     ...over,
   };
 }

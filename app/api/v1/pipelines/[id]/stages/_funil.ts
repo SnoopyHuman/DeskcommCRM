@@ -15,7 +15,8 @@ import type { createClient } from "@/lib/supabase/server";
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 
 /** As colunas que a tela e as regras usam. `position` entra: a reordenação calcula em cima dela. */
-const COLUNAS = "id, name, slug, position, is_won, is_lost, is_archived, agent_stage_hint";
+const COLUNAS =
+  "id, name, slug, position, is_won, is_lost, is_archived, agent_stage_hint, resets_context, context_reset_after_days";
 
 /**
  * O funil como as regras precisam dele, ou `null` quando não é desta organização.
@@ -51,18 +52,32 @@ export async function lerFunil(
 
 /** O que a tela recebe de volta: o funil vivo, na ordem das colunas. */
 export function corpo(etapas: EtapaEditavel[]): {
-  etapas: Array<Pick<EtapaEditavel, "id" | "name" | "slug" | "position" | "is_won" | "is_lost">>;
+  etapas: Array<
+    Pick<
+      EtapaEditavel,
+      | "id"
+      | "name"
+      | "slug"
+      | "position"
+      | "is_won"
+      | "is_lost"
+      | "resets_context"
+      | "context_reset_after_days"
+    >
+  >;
 } {
   return {
     etapas: etapas
       .filter((e) => !e.is_archived)
-      .map(({ id, name, slug, position, is_won, is_lost }) => ({
+      .map(({ id, name, slug, position, is_won, is_lost, resets_context, context_reset_after_days }) => ({
         id,
         name,
         slug,
         position,
         is_won,
         is_lost,
+        resets_context,
+        context_reset_after_days,
       })),
   };
 }
