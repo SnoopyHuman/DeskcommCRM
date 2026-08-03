@@ -211,9 +211,12 @@ function buildCustomerFile(
   const nome = contact.display_name ?? contact.name ?? 'sem nome';
   const tags = contact.tags && contact.tags.length > 0 ? ` (tags: ${contact.tags.join(', ')})` : '';
   const linhas = [`Cliente: ${nome}${tags}`];
-  if (orders.total > 0 && orders.ultimo_em !== null && orders.ultimo_status !== null) {
+  if (orders.total > 0 && orders.ultimo_em !== null) {
     const valor = formatMoneyBR(Number(orders.ultimo_valor_cents ?? 0), orders.moeda ?? 'BRL');
-    const status = FULFILLMENT_STATUS_PT[orders.ultimo_status] ?? orders.ultimo_status;
+    const status =
+      orders.ultimo_status !== null
+        ? (FULFILLMENT_STATUS_PT[orders.ultimo_status] ?? orders.ultimo_status)
+        : 'status não informado';
     const pedidos = orders.total === 1 ? 'pedido' : 'pedidos';
     linhas.push(`Relação: ${orders.total} ${pedidos} · último em ${formatDateBR(orders.ultimo_em)} · ${valor} · ${status}`);
   }

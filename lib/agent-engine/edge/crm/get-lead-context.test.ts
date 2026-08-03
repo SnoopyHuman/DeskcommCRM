@@ -270,6 +270,27 @@ describe('getLeadContext — ficha do cliente (Spec 16 §8.1)', () => {
     );
   });
 
+  it('pedido sem fulfillment_status ainda mostra a linha "Relação" (status não informado)', async () => {
+    const db = dbFake([...ANTES], {}, {
+      total: 2,
+      ultimo_em: '2026-03-12T14:00:00.000Z',
+      ultimo_valor_cents: 12000,
+      moeda: 'BRL',
+      ultimo_status: null,
+    });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.customer_file).toBe(
+      'Cliente: Renan\nRelação: 2 pedidos · último em 12/03/2026 · R$ 120,00 · status não informado',
+    );
+  });
+
   it('contato anonimizado não gera ficha, mesmo com pedidos', async () => {
     const db = dbFake([...ANTES], { is_anonymized: true }, {
       total: 3,
