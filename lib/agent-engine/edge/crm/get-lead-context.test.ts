@@ -9,7 +9,7 @@ const CONTACT_ROW = {
   display_name: null,
   email: null,
   phone_number: '5511999999999',
-  tags: [],
+  tags: [] as string[],
   is_blocked: false,
   source: 'manual',
   consent: {},
@@ -45,13 +45,34 @@ const DEPOIS = [historyRow(9, 'inbound', 'fechado, pode mandar'), historyRow(9.1
  * mesmo, imitando o Postgres, porque é o 4º parâmetro (`contact.context_reset_at`)
  * que prova que o valor lido de `contacts` chegou até a query de `messages`.
  */
-function dbFake(historyDesc: typeof ANTES, contactOverrides: Partial<typeof CONTACT_ROW> = {}): Queryable {
+interface OrderSummaryFixture {
+  total: number;
+  ultimo_em: string | null;
+  ultimo_valor_cents: number | null;
+  moeda: string | null;
+  ultimo_status: string | null;
+}
+
+const NO_ORDERS: OrderSummaryFixture = {
+  total: 0,
+  ultimo_em: null,
+  ultimo_valor_cents: null,
+  moeda: null,
+  ultimo_status: null,
+};
+
+function dbFake(
+  historyDesc: typeof ANTES,
+  contactOverrides: Partial<typeof CONTACT_ROW> = {},
+  orderSummary: OrderSummaryFixture = NO_ORDERS,
+): Queryable {
   const contact = { ...CONTACT_ROW, ...contactOverrides };
   return {
     async query(text: string, values: unknown[] = []) {
       if (text.includes('from contacts')) return { rows: [contact] } as never;
       if (text.includes('from conversations')) return { rows: [{ id: CONVERSATION_ID }] } as never;
       if (text.includes('from crm_lead_activities')) return { rows: [] } as never;
+      if (text.includes('from orders')) return { rows: [orderSummary] } as never;
       if (text.includes('from messages')) {
         const cutoff = values[3] as string | null;
         const filtrado = cutoff === null || cutoff === undefined
@@ -211,5 +232,172 @@ describe('getLeadContext — round-trip do corte desfeito (Achado B da review PR
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.context.messages.some((m) => m.body === FATO)).toBe(true);
+  });
+});
+
+describe('getLeadContext — ficha do cliente (Spec 16 §8.1)', () => {
+  it('contato sem pedido: identidade sem bloco "Relação"', async () => {
+    const db = dbFake([...ANTES], { tags: ['atacado'] });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.customer_file).toBe('Cliente: Renan (tags: atacado)');
+  });
+
+  it('contato com pedidos: identidade + relação comercial formatada em pt-BR', async () => {
+    const db = dbFake([...ANTES], {}, {
+      total: 3,
+      ultimo_em: '2026-03-12T14:00:00.000Z',
+      ultimo_valor_cents: 48000,
+      moeda: 'BRL',
+      ultimo_status: 'delivered',
+    });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.customer_file).toBe(
+      'Cliente: Renan\nRelação: 3 pedidos · último em 12/03/2026 · R$ 480,00 · entregue',
+    );
+  });
+
+  it('pedido sem fulfillment_status ainda mostra a linha "Relação" (status não informado)', async () => {
+    const db = dbFake([...ANTES], {}, {
+      total: 2,
+      ultimo_em: '2026-03-12T14:00:00.000Z',
+      ultimo_valor_cents: 12000,
+      moeda: 'BRL',
+      ultimo_status: null,
+    });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.customer_file).toBe(
+      'Cliente: Renan\nRelação: 2 pedidos · último em 12/03/2026 · R$ 120,00 · status não informado',
+    );
+  });
+
+  it('contato anonimizado não gera ficha, mesmo com pedidos', async () => {
+    const db = dbFake([...ANTES], { is_anonymized: true }, {
+      total: 3,
+      ultimo_em: '2026-03-12T14:00:00.000Z',
+      ultimo_valor_cents: 48000,
+      moeda: 'BRL',
+      ultimo_status: 'delivered',
+    });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.customer_file).toBeNull();
+  });
+
+  it('ficha nunca contém substring do rolling_summary nem de messages.body', async () => {
+    const FATO = 'segredo-da-conversa-que-nao-pode-vazar-pra-ficha';
+    const db = dbFake([historyRow(0, 'inbound', FATO)], {}, {
+      total: 1,
+      ultimo_em: '2026-03-12T14:00:00.000Z',
+      ultimo_valor_cents: 1000,
+      moeda: 'BRL',
+      ultimo_status: 'shipped',
+    });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.customer_file).not.toContain(FATO);
+  });
+});
+
+describe('getLeadContext — aviso de atendimento anterior (Spec 16 §8.2)', () => {
+  it('contato genuinamente novo (sem corte, sem fronteira) não recebe aviso', async () => {
+    const db = dbFake([...ANTES]);
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.previous_service_notice).toBeNull();
+  });
+
+  it('com context_reset_at setado (hard reset/expiração), recebe o aviso', async () => {
+    const db = dbFake([...ANTES, ...DEPOIS], { context_reset_at: iso(5) });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.previous_service_notice).toContain('Houve atendimento anterior');
+  });
+
+  it('sem context_reset_at, mas a fronteira de sessão cortou mensagens, recebe o aviso', async () => {
+    const db = dbFake([...ANTES, ...DEPOIS]);
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      { ...KNOBS_BASE, sessionGapHours: 6 },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.previous_service_notice).toContain('Houve atendimento anterior');
+  });
+
+  it('conversa contínua sob a fronteira (sem silêncio ≥ gap) não recebe aviso', async () => {
+    const contínuas = Array.from({ length: 6 }, (_, i) =>
+      historyRow(i * 0.5, i % 2 === 0 ? 'inbound' : 'outbound', `msg ${i}`),
+    );
+    const db = dbFake(contínuas);
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      { ...KNOBS_BASE, sessionGapHours: 6 },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.previous_service_notice).toBeNull();
+  });
+
+  it('aviso nunca contém substring de messages.body', async () => {
+    const FATO = 'endereco-secreto-da-conversa-anterior';
+    const db = dbFake([historyRow(0, 'inbound', FATO), ...DEPOIS], { context_reset_at: iso(5) });
+    const result = await getLeadContext(
+      db,
+      {} as CrmEdgeConfig,
+      { tenantId: 'org-1', leadId: 'contact-1', conversationId: CONVERSATION_ID },
+      KNOBS_BASE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.previous_service_notice).not.toContain(FATO);
   });
 });
