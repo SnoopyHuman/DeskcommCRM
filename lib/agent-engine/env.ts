@@ -130,6 +130,14 @@ const envSchema = z.object({
   FLYWHEEL_BATCH_LIMIT: z.coerce.number().int().positive().default(10),
   // Contenção de egress — hosts EXTRA além do Supabase/WAHA (CSV). Fail-closed.
   EGRESS_EXTRA_ALLOWED_HOSTS: z.string().optional(),
+  // Ticker dos crons HTTP do app (substitui o serviço `scheduler` do compose
+  // quando o plano Railway não permite mais um serviço). OFF sem base URL + secret.
+  APP_CRON_BASE_URL: z.string().url().optional(),
+  INTERNAL_SECRET: z.string().min(1).optional(),
+  APP_CRON_TICKER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 });
 
 export type Env = z.infer<typeof envSchema>;
