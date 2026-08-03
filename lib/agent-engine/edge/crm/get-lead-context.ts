@@ -85,6 +85,22 @@ export interface LeadContext {
   };
   conversation_id: string | null;
   /**
+   * Identidade + relação comercial (Spec 16 §8.1), montada SÓ de dado
+   * estruturado (`contacts` + `orders`) — nunca do `rolling_summary` nem de
+   * `messages.body`. Sobrevive à fronteira de sessão e à expiração por etapa
+   * (é o que impede o agente de tratar cliente recorrente como estranho).
+   * `null` só para contato anonimizado (LGPD).
+   */
+  customer_file: string | null;
+  /**
+   * Aviso fixo (Spec 16 §8.2) para quando o corte tirou histórico da leitura —
+   * por hard reset/expiração (`context_reset_at`) OU pela fronteira de sessão
+   * (silêncio ≥ gap). Sem isto o modelo afirma "primeira conversa" para quem
+   * já comprou — troca uma alucinação por outra. `null` quando nada foi
+   * cortado neste turno.
+   */
+  previous_service_notice: string | null;
+  /**
    * `null` quando nenhum humano decidiu nada sobre propostas deste contato.
    *
    * OBRIGATÓRIO, e a interrogação já foi tentada e revertida: com `?:` o
@@ -153,6 +169,62 @@ function paraDecisao(row: DecisionRow): UltimaDecisaoHumana | null {
     at: row.performed_at,
   };
 }
+
+interface OrderSummaryRow {
+  total: number;
+  ultimo_em: string | null;
+  ultimo_valor_cents: string | number | null;
+  moeda: string | null;
+  ultimo_status: string | null;
+}
+
+/** pt-BR — só os 4 valores do check constraint de `orders.fulfillment_status`. */
+const FULFILLMENT_STATUS_PT: Record<string, string> = {
+  unpacked: 'aguardando separação',
+  packed: 'embalado',
+  shipped: 'enviado',
+  delivered: 'entregue',
+};
+
+function formatDateBR(iso: string): string {
+  const [data] = iso.split('T');
+  const [ano, mes, dia] = (data ?? '').split('-');
+  return dia && mes && ano ? `${dia}/${mes}/${ano}` : iso;
+}
+
+function formatMoneyBR(cents: number, currency: string): string {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: currency.trim() }).format(
+    cents / 100,
+  );
+}
+
+/**
+ * Spec 16 §8.1 — identidade sempre; relação comercial só com pedido. Contato
+ * anonimizado não gera ficha alguma (o veto LGPD vale antes de qualquer
+ * outra regra). Consulta agregada sobre `orders` já filtra `is_anonymized`.
+ */
+function buildCustomerFile(
+  contact: Pick<ContactRow, 'name' | 'display_name' | 'tags' | 'is_anonymized'>,
+  orders: OrderSummaryRow,
+): string | null {
+  if (contact.is_anonymized) return null;
+  const nome = contact.display_name ?? contact.name ?? 'sem nome';
+  const tags = contact.tags && contact.tags.length > 0 ? ` (tags: ${contact.tags.join(', ')})` : '';
+  const linhas = [`Cliente: ${nome}${tags}`];
+  if (orders.total > 0 && orders.ultimo_em !== null && orders.ultimo_status !== null) {
+    const valor = formatMoneyBR(Number(orders.ultimo_valor_cents ?? 0), orders.moeda ?? 'BRL');
+    const status = FULFILLMENT_STATUS_PT[orders.ultimo_status] ?? orders.ultimo_status;
+    const pedidos = orders.total === 1 ? 'pedido' : 'pedidos';
+    linhas.push(`Relação: ${orders.total} ${pedidos} · último em ${formatDateBR(orders.ultimo_em)} · ${valor} · ${status}`);
+  }
+  return linhas.join('\n');
+}
+
+/** Spec 16 §8.2 — texto fixo, sem espaço pra especulação sobre o conteúdo perdido. */
+const PREVIOUS_SERVICE_NOTICE =
+  '[Houve atendimento anterior com este cliente. O conteúdo daquelas conversas não está ' +
+  'disponível neste turno — não afirme que é o primeiro contato, e não tente adivinhar o que ' +
+  'foi conversado. Se precisar de algo de lá, pergunte ao cliente.]';
 
 interface HistoryRow {
   direction: 'inbound' | 'outbound';
@@ -257,6 +329,38 @@ export async function getLeadContext(
   // comportamento anterior a esta feature.
   const historyNaFronteira = cortarNaFronteiraDeSessao(history, knobs.sessionGapHours ?? null);
 
+  // Spec 16 §8.1: ficha SEMPRE (exceto anonimizado) — consulta separada da de
+  // mensagens porque sobrevive a QUALQUER corte (não depende de `cutoff`).
+  // Contato anonimizado nem dispara a query: o veto LGPD é anterior a tudo.
+  let orderSummary: OrderSummaryRow = {
+    total: 0,
+    ultimo_em: null,
+    ultimo_valor_cents: null,
+    moeda: null,
+    ultimo_status: null,
+  };
+  if (!contact.is_anonymized) {
+    const { rows: orderRows } = await db.query<OrderSummaryRow>(
+      `select count(*)::int as total,
+              max(ordered_at)::text as ultimo_em,
+              (array_agg(total_cents order by ordered_at desc))[1] as ultimo_valor_cents,
+              (array_agg(currency   order by ordered_at desc))[1] as moeda,
+              (array_agg(fulfillment_status order by ordered_at desc))[1] as ultimo_status
+         from orders
+        where organization_id = $1 and contact_id = $2 and is_anonymized = false`,
+      [input.tenantId, input.leadId],
+    );
+    if (orderRows[0]) orderSummary = orderRows[0];
+  }
+  const customerFile = buildCustomerFile(contact, orderSummary);
+
+  // Spec 16 §8.2: aviso quando o corte tirou histórico da leitura — por marca
+  // (`cutoff`, hard reset/expiração) OU pela fronteira de sessão ter cortado
+  // mensagens que a query já trouxe. Comparar tamanhos ANTES/DEPOIS da
+  // fronteira é o que distingue "cortou" de "não tinha silêncio pra cortar".
+  const cortouPelaFronteira = historyNaFronteira.length < history.length;
+  const previousServiceNotice = cutoff !== null || cortouPelaFronteira ? PREVIOUS_SERVICE_NOTICE : null;
+
   // LGPD: base legal derivada DIRETO do contato (fonte da verdade, mesmo banco).
   // isProspecting=false: o MVP é inbound + follow-up — ambos respondem a lead que
   // já engajou, nunca 1º toque frio (o veto de is_anonymized vale SEMPRE).
@@ -280,6 +384,8 @@ export async function getLeadContext(
         is_blocked: contact.is_blocked,
       },
       conversation_id: conversationId,
+      customer_file: customerFile,
+      previous_service_notice: previousServiceNotice,
       last_human_decision: lastHumanDecision,
     },
     historyNaFronteira,
