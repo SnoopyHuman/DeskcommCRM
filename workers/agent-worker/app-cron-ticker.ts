@@ -22,7 +22,12 @@ export interface AppCronJob {
 export const DEFAULT_APP_CRON_JOBS: AppCronJob[] = [
   { path: "agent-dispatcher", everyMs: 60_000, timeoutMs: 25_000 },
   { path: "followup-flow-worker", everyMs: 60_000, timeoutMs: 25_000 },
-  { path: "event-log-drain", everyMs: 60_000, timeoutMs: 45_000 },
+  // 3s, não 60s: este drain está no CAMINHO CRÍTICO da resposta ao cliente —
+  // é ele que move media.persist_requested → media.derive_requested (áudio
+  // virando texto antes de o agente responder). A 60s eram DOIS hops de até um
+  // minuto cada, o que colocava a transcrição em ~75s e, de quebra, estourava a
+  // validade da URL de mídia do WAHA (áudio perdido com waha_media_404).
+  { path: "event-log-drain", everyMs: 3_000, timeoutMs: 45_000 },
   { path: "routing-worker", everyMs: 60_000, timeoutMs: 25_000 },
   { path: "storage-redaction?limit=50", everyMs: 5 * 60_000, timeoutMs: 25_000 },
   { path: "snooze-watcher", everyMs: 5 * 60_000, timeoutMs: 25_000 },
@@ -37,7 +42,7 @@ export interface AppCronTickerOpts {
   baseUrl: string;
   secret: string;
   jobs?: AppCronJob[];
-  /** Resolução do loop (default 15s). */
+  /** Resolução do loop (default 1s — precisa ser ≤ o menor everyMs). */
   tickMs?: number;
 }
 
@@ -52,9 +57,15 @@ export async function runAppCronTicker(
   signal: AbortSignal,
 ): Promise<void> {
   const jobs = opts.jobs ?? DEFAULT_APP_CRON_JOBS;
-  const tickMs = opts.tickMs ?? 15_000;
+  const tickMs = opts.tickMs ?? 1_000;
   const base = opts.baseUrl.replace(/\/$/, "");
   const lastRun = new Map<string, number>();
+  // Um cron LENTO não pode segurar um cron RÁPIDO. Antes o loop era sequencial
+  // com `await` por job: um kb-conversations-batch de 120s congelava o
+  // event-log-drain junto, e com ele a resposta ao cliente. Agora cada job voa
+  // solto e este set garante que ele não empilhe consigo mesmo.
+  const inFlight = new Set<string>();
+  const voando = new Set<Promise<void>>();
 
   log.info("app-cron-ticker: ligado", {
     base_url: base,
@@ -62,42 +73,57 @@ export async function runAppCronTicker(
     tick_ms: tickMs,
   });
 
+  const dispara = async (job: AppCronJob): Promise<void> => {
+    const url = `${base}/api/v1/cron/${job.path}`;
+    const timeoutMs = job.timeoutMs ?? 25_000;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    const abortaJunto = (): void => ac.abort();
+    signal.addEventListener("abort", abortaJunto, { once: true });
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${opts.secret}` },
+        signal: ac.signal,
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        // 404 = rota ainda não deployada (ex.: feature em branch) — warn, não fatal.
+        log.warn("app-cron-ticker: cron respondeu não-OK", {
+          path: job.path,
+          status: res.status,
+        });
+      }
+    } catch (err) {
+      log.error("app-cron-ticker: falha ao disparar cron", {
+        path: job.path,
+        error: errMsg(err),
+      });
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abortaJunto);
+      // Avança SEMPRE (inclusive em falha): quem dita o ritmo de retentativa é o
+      // everyMs do job. Não avançar aqui, com tick de 1s, viraria martelada no
+      // app fora do ar.
+      lastRun.set(job.path, Date.now());
+      inFlight.delete(job.path);
+    }
+  };
+
   while (!signal.aborted) {
     const now = Date.now();
     for (const job of jobs) {
       if (signal.aborted) break;
+      if (inFlight.has(job.path)) continue;
       const prev = lastRun.get(job.path) ?? 0;
       if (now - prev < job.everyMs) continue;
-
-      const url = `${base}/api/v1/cron/${job.path}`;
-      const timeoutMs = job.timeoutMs ?? 25_000;
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), timeoutMs);
-      try {
-        const res = await fetch(url, {
-          method: "GET",
-          headers: { Authorization: `Bearer ${opts.secret}` },
-          signal: ac.signal,
-          cache: "no-store",
-        });
-        lastRun.set(job.path, Date.now());
-        if (!res.ok) {
-          // 404 = rota ainda não deployada (ex.: feature em branch) — warn, não fatal.
-          log.warn("app-cron-ticker: cron respondeu não-OK", {
-            path: job.path,
-            status: res.status,
-          });
-        }
-      } catch (err) {
-        log.error("app-cron-ticker: falha ao disparar cron", {
-          path: job.path,
-          error: errMsg(err),
-        });
-        // Não avança lastRun em falha de rede — tenta de novo no próximo tick.
-      } finally {
-        clearTimeout(timer);
-      }
+      inFlight.add(job.path);
+      const p = dispara(job).finally(() => voando.delete(p));
+      voando.add(p);
     }
     await sleep(tickMs, undefined, { signal }).catch(() => undefined);
   }
+  // Shutdown limpo: o abort acima já cancelou os fetches em voo; aqui só
+  // esperamos eles assentarem antes de devolver o controle ao main.
+  await Promise.allSettled([...voando]);
 }

@@ -123,8 +123,16 @@ const ESPERA_DERIVACAO_MS = 4_000;
  * Teto da espera. Passado isto o turno segue SEM o texto derivado: melhor uma
  * resposta tarde e sem transcrição do que cliente esperando para sempre porque
  * a derivação travou.
+ *
+ * Era 45s — MENOR que o piso estrutural da própria derivação, que dependia de
+ * dois hops do cron HTTP de 60s (persist → derive). O teto estourava sempre e o
+ * agente respondia "recebi seu áudio, mas não consigo ouvir" em 100% dos casos,
+ * às vezes segundos antes de a transcrição ficar pronta. Com a mídia drenada em
+ * ritmo próprio (app-cron-ticker), a derivação passa a levar poucos segundos e
+ * este teto vira o que sempre devia ter sido: rede de segurança para derivação
+ * TRAVADA, não o caso normal.
  */
-const TETO_ESPERA_DERIVACAO_MS = 45_000;
+const TETO_ESPERA_DERIVACAO_MS = 90_000;
 
 type DesfechoEvento = 'processado' | 'adiar';
 

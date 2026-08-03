@@ -15,7 +15,16 @@ export interface TranscriptionCreds {
 }
 
 const DEFAULT_BASE = "https://api.openai.com";
-const DEFAULT_MODEL = "whisper-1";
+/**
+ * `gpt-4o-transcribe`, não `whisper-1`: a OpenAI aposentou o whisper-1 como
+ * ponto de partida recomendado, e o substituto é mais rápido e erra menos —
+ * ganho direto no caminho crítico (o agente espera este texto para responder).
+ * Contrato de request/response é o mesmo `/v1/audio/transcriptions` devolvendo
+ * `{ text }`, então a troca é só o id do modelo. Override por
+ * `TRANSCRIPTION_MODEL` para quem roda endpoint OpenAI-compatível (ex.: Whisper
+ * self-hosted), onde `whisper-1` segue sendo o nome válido.
+ */
+const DEFAULT_MODEL = "gpt-4o-transcribe";
 
 function extFor(mime: string): string {
   const base = mime.split(";")[0]!.trim().toLowerCase();
