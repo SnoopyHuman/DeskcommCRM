@@ -34,4 +34,13 @@ describe("esforcoParaChamada", () => {
     // Case-insensitive e tolerante a provider capitalizado.
     expect(esforcoParaChamada("OpenAI", "GPT-5-MINI", "agent_turn")).toBe("low");
   });
+
+  it("o-series não recebe 'minimal' (API rejeita) — classificadores caem para 'low'", () => {
+    for (const model of ["o1", "o1-mini", "o3", "o3-mini", "o4-mini"]) {
+      expect(esforcoParaChamada("openai", model, "jailbreak_detect")).toBe("low");
+      expect(esforcoParaChamada("openai", model, "stage_classifier")).toBe("low");
+    }
+    // gpt-5* continua com 'minimal' (valor suportado pela família).
+    expect(esforcoParaChamada("openai", "gpt-5-mini", "jailbreak_detect")).toBe("minimal");
+  });
 });

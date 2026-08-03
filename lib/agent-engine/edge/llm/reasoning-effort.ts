@@ -6,7 +6,9 @@
  * gastava 276 tokens de saída e 6,8s, quase todo em raciocínio invisível.
  *
  * A regra é simples e conservadora:
- *  - classificação pura (saída minúscula, decisão binária/enum) → `minimal`;
+ *  - classificação pura (saída minúscula, decisão binária/enum) → `minimal`
+ *    (em o-series, que NÃO aceitam `minimal`, cai para `low` — ver
+ *    `esforcoSuportadoPeloModelo`);
  *  - geração no caminho crítico (o turno que o cliente espera) → `low`;
  *  - todo o resto → `undefined`, ou seja, NÃO mexemos (mantém o default do
  *    provider). Silêncio é a resposta segura para propósito desconhecido.
@@ -37,6 +39,20 @@ function ehModeloDeRaciocinio(modelId: string): boolean {
 }
 
 /**
+ * o1/o3/o4 aceitam `reasoning_effort`, mas NÃO o valor `minimal` (só
+ * low|medium|high) — mandar `minimal` devolve 400 e derruba o turno no
+ * caminho crítico (stage/jailbreak rethrow). gpt-5* aceita `minimal`.
+ */
+function esforcoSuportadoPeloModelo(
+  modelId: string,
+  effort: EsforcoRaciocinio,
+): EsforcoRaciocinio {
+  const id = (modelId ?? '').toLowerCase();
+  if (effort === 'minimal' && /^(o1|o3|o4)/.test(id)) return 'low';
+  return effort;
+}
+
+/**
  * Devolve o esforço a aplicar, ou `undefined` quando não devemos opinar
  * (provider não-OpenAI, modelo sem raciocínio, ou propósito não mapeado).
  */
@@ -48,5 +64,7 @@ export function esforcoParaChamada(
   if ((provider ?? '').toLowerCase() !== 'openai') return undefined;
   if (!ehModeloDeRaciocinio(modelId)) return undefined;
   if (purpose === undefined) return undefined;
-  return POR_PROPOSITO[purpose];
+  const desired = POR_PROPOSITO[purpose];
+  if (desired === undefined) return undefined;
+  return esforcoSuportadoPeloModelo(modelId, desired);
 }
