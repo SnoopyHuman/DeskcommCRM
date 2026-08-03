@@ -21,6 +21,26 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export const dynamic = "force-dynamic";
 
 const CONTACT_LIMIT = 500;
+// supabase/config.toml define max_rows = 1000 no PostgREST. Sem paginar por
+// .range(), instalações com mais candidatos/casos abertos que isso recebem
+// sempre a mesma primeira página e nunca avançam.
+const POSTGREST_PAGE_SIZE = 1000;
+
+async function fetchAllRows<T>(
+  buildQuery: () => { range: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }> },
+): Promise<{ data: T[] | null; error: string | null }> {
+  const rows: T[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await buildQuery().range(from, from + POSTGREST_PAGE_SIZE - 1);
+    if (error) return { data: null, error: error.message };
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < POSTGREST_PAGE_SIZE) break;
+    from += POSTGREST_PAGE_SIZE;
+  }
+  return { data: rows, error: null };
+}
 
 interface StagePolicy {
   organization_id: string;
@@ -179,23 +199,25 @@ async function handle(req: NextRequest): Promise<Response> {
   // por linha. Buscamos apenas políticas ativas e aplicamos a comparação de
   // relógio em `isDue`; a deduplicação e o teto continuam sendo por contato,
   // como na DISTINCT ON da Spec §7.
-  const { data, error } = await admin
-    .from("crm_leads")
-    .select(
-      "id, contact_id, organization_id, stage_changed_at, crm_stages!inner(organization_id, name, resets_context, context_reset_after_days, is_archived), contacts!inner(organization_id, context_reset_at)",
-    )
-    .not("contact_id", "is", null)
-    .not("stage_changed_at", "is", null)
-    .eq("crm_stages.resets_context", true)
-    .eq("crm_stages.is_archived", false)
-    .order("organization_id", { ascending: true })
-    .order("contact_id", { ascending: true })
-    .order("stage_changed_at", { ascending: true })
-    .order("id", { ascending: true });
+  const { data, error } = await fetchAllRows<WatcherCandidate>(() =>
+    admin
+      .from("crm_leads")
+      .select(
+        "id, contact_id, organization_id, stage_changed_at, crm_stages!inner(organization_id, name, resets_context, context_reset_after_days, is_archived), contacts!inner(organization_id, context_reset_at)",
+      )
+      .not("contact_id", "is", null)
+      .not("stage_changed_at", "is", null)
+      .eq("crm_stages.resets_context", true)
+      .eq("crm_stages.is_archived", false)
+      .order("organization_id", { ascending: true })
+      .order("contact_id", { ascending: true })
+      .order("stage_changed_at", { ascending: true })
+      .order("id", { ascending: true }),
+  );
 
   if (error) {
     logger.error("[context-lifecycle-watcher] candidate query failed", {
-      error: error.message,
+      error,
       requestId,
     });
     return fail("internal_error", "Failed to query context lifecycle candidates.", 500, {
@@ -205,13 +227,16 @@ async function handle(req: NextRequest): Promise<Response> {
 
   // `agent_cases` não expõe contact_id. O join obrigatório é pelo conversation;
   // status novo continua bloqueando por usar negação (`not in`) — fail-safe.
-  const { data: openCaseRows, error: openCaseError } = await admin
-    .from("agent_cases")
-    .select("organization_id, conversations!inner(organization_id, contact_id)")
-    .not("status", "in", "(resolved,cancelled)");
+  const { data: openCaseRows, error: openCaseError } = await fetchAllRows<OpenCaseRow>(() =>
+    admin
+      .from("agent_cases")
+      .select("organization_id, conversations!inner(organization_id, contact_id)")
+      .not("status", "in", "(resolved,cancelled)")
+      .order("organization_id", { ascending: true }),
+  );
   if (openCaseError) {
     logger.error("[context-lifecycle-watcher] open cases query failed", {
-      error: openCaseError.message,
+      error: openCaseError,
       requestId,
     });
     return fail("internal_error", "Failed to query open human cases.", 500, { requestId });

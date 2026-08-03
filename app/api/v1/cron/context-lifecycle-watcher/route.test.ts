@@ -55,6 +55,13 @@ function queryFor(state: FakeState, table: string) {
     return query;
   });
   query.order = vi.fn(() => query);
+  let rangeFrom = 0;
+  let rangeTo = Number.POSITIVE_INFINITY;
+  query.range = vi.fn((from: number, to: number) => {
+    rangeFrom = from;
+    rangeTo = to;
+    return query;
+  });
   query.maybeSingle = vi.fn(() => query);
   query.then = vi.fn((resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => {
     try {
@@ -64,19 +71,26 @@ function queryFor(state: FakeState, table: string) {
       );
 
       if (table === "crm_leads") {
-        const candidates = state.candidates.map((row) => {
-          const candidate = row as { contact_id?: string; contacts?: unknown };
-          return {
-            ...candidate,
-            contacts: {
-              organization_id: (candidate as { organization_id?: string }).organization_id ?? "",
-              context_reset_at: state.contacts.get(candidate.contact_id ?? "") ?? null,
-            },
-          };
-        });
+        const candidates = state.candidates
+          .map((row) => {
+            const candidate = row as { contact_id?: string; contacts?: unknown };
+            return {
+              ...candidate,
+              contacts: {
+                organization_id: (candidate as { organization_id?: string }).organization_id ?? "",
+                context_reset_at: state.contacts.get(candidate.contact_id ?? "") ?? null,
+              },
+            };
+          })
+          .slice(rangeFrom, rangeTo + 1);
         return Promise.resolve({ data: candidates, error: null }).then(resolve, reject);
       }
-      if (table === "agent_cases") return Promise.resolve({ data: state.openCases, error: null }).then(resolve, reject);
+      if (table === "agent_cases") {
+        return Promise.resolve({
+          data: state.openCases.slice(rangeFrom, rangeTo + 1),
+          error: null,
+        }).then(resolve, reject);
+      }
 
       if (table === "contacts" && operation === "update") {
         const current = state.contacts.get(contactId) ?? null;
@@ -218,5 +232,46 @@ describe("context-lifecycle-watcher", () => {
     });
     expect(emitLeadActivityMock).toHaveBeenCalledTimes(2);
     expect(auditMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("pagina além do limite de 1000 linhas do PostgREST em vez de travar na primeira página", async () => {
+    const now = Date.now();
+    // As primeiras 1000 linhas (posição 0-999, mesma ordenação da query real)
+    // ainda estão dentro da carência de 7 dias — não vencidas. Só as linhas
+    // 1000 e 1001 venceram. Sem paginar por .range(), o antigo código lia só
+    // a primeira página de 1000 linhas do PostgREST e nunca via essas duas.
+    const notYetDue = Array.from({ length: 1000 }, (_, i) =>
+      candidate(
+        `lead-wait-${i}`,
+        "org-a",
+        `contact-wait-${i}`,
+        new Date(now - 1 * 86_400_000).toISOString(),
+        "Entregue",
+        7,
+      ),
+    );
+    const due = [
+      candidate("lead-due-0", "org-a", "contact-due-0", new Date(now - 8 * 86_400_000).toISOString(), "Entregue", 7),
+      candidate("lead-due-1", "org-a", "contact-due-1", new Date(now - 8 * 86_400_000).toISOString(), "Entregue", 7),
+    ];
+    const candidates = [...notYetDue, ...due];
+    const state: FakeState = {
+      candidates,
+      openCases: [],
+      contacts: new Map(candidates.map((c) => [(c as { contact_id: string }).contact_id, null])),
+      pendingJobs: [],
+    };
+    createAdminClientMock.mockReturnValue(fakeAdmin(state));
+
+    const response = await callRoute();
+    expect(response.status).toBe(200);
+    const body = (await response.json()).data;
+    expect(body.marked).toBe(2);
+    expect(state.contacts.get("contact-due-0")).not.toBeNull();
+    expect(state.contacts.get("contact-due-1")).not.toBeNull();
+    for (const row of notYetDue) {
+      const contactId = (row as { contact_id: string }).contact_id;
+      expect(state.contacts.get(contactId)).toBeNull();
+    }
   });
 });

@@ -29,6 +29,7 @@ export const DEFAULT_APP_CRON_JOBS: AppCronJob[] = [
   { path: "attendant-heartbeat", everyMs: 5 * 60_000, timeoutMs: 25_000 },
   { path: "risk-watcher", everyMs: 5 * 60_000, timeoutMs: 25_000 },
   { path: "lgpd-sla-watcher", everyMs: 60 * 60_000, timeoutMs: 60_000 },
+  { path: "context-lifecycle-watcher", everyMs: 60 * 60_000, timeoutMs: 60_000 },
   { path: "kb-conversations-batch", everyMs: 24 * 60 * 60_000, timeoutMs: 120_000 },
 ];
 
