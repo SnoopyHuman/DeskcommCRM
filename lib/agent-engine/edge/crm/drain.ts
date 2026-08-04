@@ -17,6 +17,8 @@ import type pg from 'pg';
 
 import type { Logger } from '../../obs/logger';
 import { enqueueJob } from '../../queue/queue';
+import { resolveInboundDebounce } from '../../inbound-debounce/resolve';
+import { nowIso, stampJobPipeline, stampMessagePipeline } from '../../obs/pipeline-timestamps';
 import { TIPOS_DERIVAVEIS, DERIVACAO_TERMINADA } from '@/lib/messaging/media/derivable';
 
 const DRAIN_CONSUMER = 'agent-engine';
@@ -42,7 +44,10 @@ export interface DrainKnobs {
   batchSize: number;
   intervalMs: number;
   idleIntervalMs: number;
-  /** Janela de coalescência de rajada inbound por contato (0 = sem debounce). */
+  /**
+   * Default global de debounce (env INBOUND_DEBOUNCE_MS). A org sobrepõe via
+   * `organizations.settings.inbound_debounce` (Onda 5) — resolvido por evento.
+   */
   debounceMs: number;
   /** Evento 'processing' órfão volta a 'pending' após isto. */
   reapTimeoutMs: number;
@@ -155,14 +160,24 @@ async function processEvent(
 
   // Spec 14: org em modo 'external' tem agente EXTERNO como dono da conversa —
   // o engine não responde por cima. Evento é consumido (done) sem job.
-  const { rows: modeRows } = await pool.query<{ mode: string | null }>(
-    `select settings->>'ai_dispatch_mode' as mode from organizations where id = $1`,
+  // Mesma leitura puxa inbound_debounce (Onda 5) — zero round-trip extra.
+  const { rows: orgRows } = await pool.query<{
+    mode: string | null;
+    inbound_debounce: unknown;
+  }>(
+    `select settings->>'ai_dispatch_mode' as mode,
+            settings->'inbound_debounce' as inbound_debounce
+     from organizations where id = $1`,
     [event.organization_id],
   );
-  if (modeRows[0]?.mode === 'external') {
+  if (orgRows[0]?.mode === 'external') {
     log.info('drain: org em modo external (spec 14) — evento pulado', { event_id: event.id });
     return 'processado';
   }
+  const { debounceMs, maxWindowMs } = resolveInboundDebounce(
+    orgRows[0]?.inbound_debounce,
+    knobs.debounceMs,
+  );
 
   // Grupos: skip, sem exceção (regra dura nº 12).
   const { rows: convRows } = await pool.query<{ is_group: boolean }>(
@@ -255,26 +270,44 @@ async function processEvent(
     });
   }
 
-  // Coalescência: já existe job PENDING futuro deste contato → esta mensagem
-  // entra de carona (o turno lê o histórico completo). Evento vira done.
-  if (knobs.debounceMs > 0) {
-    const { rows: pendingRows } = await pool.query<{ id: string }>(
-      `select id from job_queue
+  // Coalescência deslizante (Onda 5): já existe job PENDING futuro deste contato
+  // → esta mensagem entra de carona e EMPURRA run_after (+window), sem passar do
+  // teto gravado no 1º enqueue (debounce_deadline). Evento vira done.
+  if (debounceMs > 0) {
+    const { rows: pendingRows } = await pool.query<{
+      id: string;
+      debounce_deadline: string | null;
+    }>(
+      `select id, payload->>'debounce_deadline' as debounce_deadline
+       from job_queue
        where organization_id = $1 and contact_id = $2
          and kind = 'inbound_turn' and status = 'pending' and run_after > now()
        limit 1`,
       [event.organization_id, p.contact_id],
     );
     if (pendingRows[0]) {
-      log.info('drain: rajada coalescida em job pendente', {
+      const candidate = Date.now() + debounceMs;
+      const deadlineMs = pendingRows[0].debounce_deadline
+        ? new Date(pendingRows[0].debounce_deadline).getTime()
+        : candidate;
+      const nextRun = new Date(Math.min(candidate, deadlineMs));
+      await pool.query(
+        `update job_queue set run_after = $2, updated_at = now()
+         where id = $1 and status = 'pending' and run_after < $2`,
+        [pendingRows[0].id, nextRun],
+      );
+      log.info('drain: rajada coalescida em job pendente (janela deslizante)', {
         event_id: event.id,
         job_id: pendingRows[0].id,
+        run_after: nextRun.toISOString(),
       });
       return 'processado';
     }
   }
 
-  const runAfter = knobs.debounceMs > 0 ? new Date(Date.now() + knobs.debounceMs) : undefined;
+  const runAfter = debounceMs > 0 ? new Date(Date.now() + debounceMs) : undefined;
+  const debounceDeadline =
+    debounceMs > 0 ? new Date(Date.now() + maxWindowMs).toISOString() : undefined;
   const { job, deduped } = await enqueueJob(pool, event.organization_id, {
     kind: 'inbound_turn',
     leadId: p.contact_id,
@@ -285,10 +318,20 @@ async function processEvent(
       channel_session_id: p.channel_session_id,
       inbound_message_id: p.inbound_message_id,
       crm_event_id: event.id,
+      ...(debounceDeadline !== undefined ? { debounce_deadline: debounceDeadline } : {}),
     },
     ...(runAfter !== undefined ? { runAfter } : {}),
   });
   log.info('drain: job de turno enfileirado', { event_id: event.id, job_id: job.id, deduped });
+  const stampedAt = nowIso();
+  void stampMessagePipeline(pool, event.organization_id, p.inbound_message_id, {
+    drain_enqueued_at: stampedAt,
+    ...(runAfter !== undefined ? { debounce_until: runAfter.toISOString() } : {}),
+  });
+  void stampJobPipeline(pool, event.organization_id, job.id, {
+    drain_enqueued_at: stampedAt,
+    ...(runAfter !== undefined ? { debounce_until: runAfter.toISOString() } : {}),
+  });
   return 'processado';
 }
 

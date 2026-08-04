@@ -28,6 +28,8 @@ export const DEFAULT_APP_CRON_JOBS: AppCronJob[] = [
   // minuto cada, o que colocava a transcrição em ~75s e, de quebra, estourava a
   // validade da URL de mídia do WAHA (áudio perdido com waha_media_404).
   { path: "event-log-drain", everyMs: 3_000, timeoutMs: 45_000 },
+  // Onda 6: alarme de evento parado (pending crítico > limiar → inbox + Sentry).
+  { path: "event-log-stale-watcher", everyMs: 60_000, timeoutMs: 25_000 },
   { path: "routing-worker", everyMs: 60_000, timeoutMs: 25_000 },
   { path: "storage-redaction?limit=50", everyMs: 5 * 60_000, timeoutMs: 25_000 },
   { path: "snooze-watcher", everyMs: 5 * 60_000, timeoutMs: 25_000 },

@@ -194,4 +194,8 @@ export type AuditAction =
   /** Worker de expiração por etapa (C3) — 1 vez por contato, não por deal. */
   | "context.reset_auto"
   /** Mudança de política de retenção (intervalo de sessão / expiração por etapa). */
-  | "context.policy_changed";
+  | "context.policy_changed"
+  /** Onda 5 — toggle/janela de coalescência de rajada inbound. */
+  | "inbound_debounce.config_changed"
+  /** Onda 6 — tick do watcher de event_log parado. */
+  | "event_log.stale_watcher_run";

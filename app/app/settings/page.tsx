@@ -45,6 +45,12 @@ const LINKS: SettingsLink[] = [
     managerOnly: true,
   },
   {
+    href: "/app/settings/agent",
+    title: "Comportamento do agente",
+    description: "Agrupar mensagens em rajada e tempo de espera antes de responder.",
+    managerOnly: true,
+  },
+  {
     href: "/app/settings/canal-oficial",
     title: "Canal oficial (Cloud API)",
     description: "Conectar o número oficial da Meta e o webhook.",

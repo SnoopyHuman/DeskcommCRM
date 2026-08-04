@@ -32,6 +32,7 @@ import { z } from 'zod';
 import type { ChannelAdapter, ChannelSendResult } from '../channel-adapter';
 
 import { withFields, type Logger } from '../obs/logger';
+import { nowIso, stampJobPipeline, stampMessagePipeline } from '../obs/pipeline-timestamps';
 import { getLeadContext, type LeadContext, type LeadContextResult } from '../edge/crm/get-lead-context';
 import { citationsFromHits, searchKnowledge } from './search-knowledge';
 import type { CrmEdgeConfig } from '../edge/crm/mcp-client';
@@ -675,6 +676,16 @@ export async function runAgentTurn(
   const contextKnobs = { historyLimit: deps.knobs.historyLimit, maxTokens: deps.knobs.maxContextTokens };
   // Contexto do RUN em toda linha de log do turno (F2-16): job_id É o run id.
   const runLog = withFields(deps.log, { job_id: job.id, tenant_id: tenantId, lead_id: leadId });
+
+  // Onda 6: carimbo de início do turno (metadata.pipeline) — best-effort.
+  {
+    const inboundMsgId = (job.payload as { inbound_message_id?: string } | null)?.inbound_message_id;
+    if (inboundMsgId) {
+      const at = nowIso();
+      void stampMessagePipeline(pool, tenantId, inboundMsgId, { turn_started_at: at });
+      void stampJobPipeline(pool, tenantId, job.id, { turn_started_at: at });
+    }
+  }
 
   // F4-06 (acceptance 2): lead em handoff humano → NO-OP no INÍCIO do turno, antes de
   // qualquer chamada de modelo/CRM. O bot silenciou (bot_silenced_until='infinity', cache
