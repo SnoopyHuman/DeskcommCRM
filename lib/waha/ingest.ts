@@ -558,12 +558,13 @@ export async function dispatchWahaEvent(
     } else {
       // ✓✓ azul IMEDIATO, antes de qualquer processamento: é o primeiro sinal de
       // vida que o cliente recebe, dezenas de segundos antes de a resposta
-      // existir. Sem await — o webhook precisa devolver 200 rápido, e presença
-      // que falha não pode segurar a ingestão da mensagem.
+      // existir. Passamos payload.id — no NOWEB o sendSeen SEM messageIds
+      // devolve 201 e não pinta o ✓✓. Sem await: o webhook precisa devolver
+      // 200 rápido, e presença que falha não pode segurar a ingestão.
       const conn = conexaoWahaDoEnv();
       const chatId = payload.from ?? "";
       if (conn && envelope.session && chatId && !chatId.endsWith("@g.us")) {
-        void marcarComoLida(conn, envelope.session, chatId);
+        void marcarComoLida(conn, envelope.session, chatId, payload.id);
       }
       await handleInbound(admin, session, payload, requestId);
     }

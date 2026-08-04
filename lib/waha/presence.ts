@@ -57,14 +57,48 @@ export async function definirPresenca(
   }
 }
 
-/** Marca a conversa como lida (✓✓ azul). Silencioso em qualquer falha. */
+/**
+ * Normaliza o id do webhook pro formato que o `sendSeen` do NOWEB/GOWS
+ * espera: `{fromMe}_{chatId}_{bareId}` (ex.: `false_5511…@c.us_3EB0…`).
+ * Id já completo passa intacto; bare vira `false_${chatId}_${bare}`.
+ */
+export function idsParaSendSeen(
+  chatId: string,
+  messageId: string | undefined | null,
+): string[] | undefined {
+  if (!messageId) return undefined;
+  if (messageId.includes("_")) return [messageId];
+  return [`false_${chatId}_${messageId}`];
+}
+
+/**
+ * Marca a conversa como lida (✓✓ azul).
+ *
+ * No engine NOWEB (default deste projeto) o `POST /api/sendSeen` com só
+ * `chatId` costuma devolver 201 e NÃO pintar o ✓✓ — precisa de `messageIds`
+ * (issue WAHA #1725 / docs). Sem ids, caímos no endpoint de "ler todas as
+ * unread" (`…/chats/{chatId}/messages/read`), que não exige id.
+ */
 export async function marcarComoLida(
   conn: WahaConexao,
   sessionName: string,
   chatId: string,
+  messageId?: string | null,
 ): Promise<void> {
   try {
-    await postar(conn, "sendSeen", { session: sessionName, chatId });
+    const messageIds = idsParaSendSeen(chatId, messageId);
+    if (messageIds) {
+      await postar(conn, "sendSeen", {
+        session: sessionName,
+        chatId,
+        messageIds,
+      });
+      return;
+    }
+    // Sem id da mensagem (chamada genérica): lê as unread do chat.
+    const sess = encodeURIComponent(sessionName);
+    const chat = encodeURIComponent(chatId);
+    await postar(conn, `${sess}/chats/${chat}/messages/read`, {});
   } catch {
     // best-effort por contrato — ver cabeçalho.
   }

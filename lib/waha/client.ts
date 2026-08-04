@@ -107,8 +107,13 @@ export class WahaClient {
     await definirPresenca({ baseUrl: this.baseUrl, apiKey: this.apiKey }, session, chatId, presence);
   }
 
-  async sendSeen(session: string, chatId: string): Promise<void> {
-    await marcarComoLida({ baseUrl: this.baseUrl, apiKey: this.apiKey }, session, chatId);
+  async sendSeen(session: string, chatId: string, messageId?: string | null): Promise<void> {
+    await marcarComoLida(
+      { baseUrl: this.baseUrl, apiKey: this.apiKey },
+      session,
+      chatId,
+      messageId,
+    );
   }
 
   async sendMedia(
