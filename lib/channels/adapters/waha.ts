@@ -49,6 +49,11 @@ export const wahaAdapter: ChannelAdapter = {
         )
       : await client.sendMessage(envelope.sessionRef, envelope.to, envelope.body ?? "");
 
+    // Apaga o "digitando…" assim que a resposta sai. Fire-and-forget: presença
+    // é cosmética (setPresence nunca lança — ver lib/waha/presence.ts) e não
+    // pode atrasar a devolução do resultado do envio, que já aconteceu.
+    void client.setPresence(envelope.sessionRef, envelope.to, "paused");
+
     return { externalId: parseWahaMessageId(res) };
   },
 };

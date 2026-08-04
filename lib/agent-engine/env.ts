@@ -52,12 +52,19 @@ const envSchema = z.object({
   // Drain do event_log (mesmo banco pós-fusão) — lote, ritmo e backoff ocioso.
   CRM_DRAIN_BATCH_SIZE: z.coerce.number().int().positive().default(20),
   CRM_DRAIN_INTERVAL_MS: z.coerce.number().int().positive().default(2_000),
-  CRM_DRAIN_IDLE_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
+  // Ocioso NÃO pode ser lento: é o caso comum (sistema parado esperando o
+  // cliente), e o valor antigo (15s) era pago inteiro por TODA primeira
+  // mensagem de uma conversa — 7,5s de espera média antes de o evento ser
+  // sequer visto. Também é o teto real do backoff de 4s da espera de mídia
+  // (ESPERA_DERIVACAO_MS): com 15s aqui, aquele backoff nunca era respeitado.
+  CRM_DRAIN_IDLE_INTERVAL_MS: z.coerce.number().int().positive().default(1_000),
   // Evento 'processing' órfão (crash do worker) volta a 'pending' após isto.
   CRM_EVENT_REAP_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
   // Coalescência de rajada inbound: mensagens do MESMO contato dentro desta
   // janela viram UM job (responder em rajada é gatilho de ban). 0 = sem debounce.
-  INBOUND_DEBOUNCE_MS: z.coerce.number().int().min(0).default(8_000),
+  // Default global; a org sobrepõe por `organizations.settings.inbound_debounce`
+  // (Onda 5). 5s cobre a rajada típica de WhatsApp sem punir mensagem única.
+  INBOUND_DEBOUNCE_MS: z.coerce.number().int().min(0).default(5_000),
   // Circuito de saúde do número — ritmo do ticker (block/response rate por número).
   NUMBER_HEALTH_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
   // Cron persistente por contato — knobs, nunca constantes.

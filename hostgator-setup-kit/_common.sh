@@ -114,11 +114,17 @@ owner_id_by_email() {
     | grep -o '"id":"[0-9a-f-]\{36\}"' | head -1 | sed 's/.*:"//;s/"//'
 }
 
-# Ativa (idempotente) o cron que dispara o drain de eventos a cada minuto. SEM
-# isso, nenhuma automação/webhook roda num self-host: neste kit os workers são
-# lidos por cron, não por trigger→HTTP nem fila gerenciada (doutrina do
-# projeto: trigger Postgres nunca faz HTTP). Chamada por install.sh e
-# update.sh — re-rodar não duplica a linha do crontab.
+# Ativa (idempotente) o drain de eventos a cada ~3s. SEM isso, nenhuma
+# automação/webhook roda num self-host: neste kit os workers são lidos por
+# cron, não por trigger→HTTP nem fila gerenciada (doutrina do projeto: trigger
+# Postgres nunca faz HTTP). Chamada por install.sh e update.sh — re-rodar não
+# duplica a linha do crontab.
+#
+# Por que não "* * * * *" puro: persist→derive são DOIS hops do drain; a 60s
+# a transcrição de áudio estoura o teto de espera (~90s) e a URL do WAHA.
+# Paridade com app-cron-ticker (Railway) e docker-compose.prod.yml.
+# flock -n + while true: o cron a cada minuto é só watchdog — se o loop
+# morrer, revive; se já estiver vivo, o flock falha e o minuto sai quieto.
 setup_event_log_drain_cron() {
   command -v crontab >/dev/null 2>&1 || { c_ylw "⚠ 'crontab' não encontrado — instale o pacote 'cron' e rode de novo pra ativar as automações."; return 0; }
 
@@ -130,12 +136,13 @@ setup_event_log_drain_cron() {
   local first_time=1
   if crontab -l 2>/dev/null | grep -q 'event-log-drain'; then first_time=0; fi
 
-  local cron_line="* * * * * curl -fsS -H \"Authorization: Bearer ${secret}\" \"${NEXT_PUBLIC_APP_URL}/api/v1/cron/event-log-drain\" >/dev/null 2>&1"
+  local lock_file="/tmp/aisalesos-event-log-drain.lock"
+  local cron_line="* * * * * flock -n ${lock_file} -c 'while true; do curl -fsS -m45 -H \"Authorization: Bearer ${secret}\" \"${NEXT_PUBLIC_APP_URL}/api/v1/cron/event-log-drain\" >/dev/null 2>&1 || true; sleep 3; done'"
   # "|| true": com pipefail ativo, grep -v sem match nenhum (crontab vazio ou
   # sem a linha ainda) sai com status 1 e derrubaria o subshell por set -e
   # ANTES do echo do novo cron_line — neutralizamos aqui, de propósito.
   ( crontab -l 2>/dev/null | grep -v 'event-log-drain' || true; echo "$cron_line" ) | crontab -
-  c_grn "✓ automações ativas (cron do event-log-drain, a cada minuto)"
+  c_grn "✓ automações ativas (event-log-drain a cada 3s; cron/minuto é watchdog)"
 
   if [ "$first_time" = 1 ]; then
     # 1ª ativação do cron (inclusive numa instalação já existente que nunca

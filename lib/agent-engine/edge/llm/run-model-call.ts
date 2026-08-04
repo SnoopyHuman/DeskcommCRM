@@ -23,6 +23,7 @@ import type { Logger } from '../../obs/logger';
 import { resolveOrgLlmConfig, type LlmEdgeConfig } from './credentials';
 import { costCents, type TokenUsage } from './pricing';
 import { createDefaultRegistry, type ProviderRegistry } from './providers';
+import { esforcoParaChamada } from './reasoning-effort';
 import { buildStablePrefix } from './stable-prefix';
 
 // Call sites FORA da camada importam os tipos daqui — nunca de 'ai' direto
@@ -246,6 +247,10 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       cacheTtl: cfg.cacheTtl ?? '1h',
     });
 
+    // Esforço de raciocínio por propósito (só OpenAI + família de raciocínio;
+    // `undefined` em qualquer outro caso mantém o default do provider).
+    const esforco = esforcoParaChamada(config.provider, model, input.purpose);
+
     const startedAt = Date.now();
     // `system` aceita SystemModelMessage (com providerOptions de cache) — igual
     // em v6 e v7 (smoke prova que o cacheControl continua virando cache_control).
@@ -259,6 +264,9 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       topP,
       topK,
       maxOutputTokens,
+      ...(esforco !== undefined
+        ? { providerOptions: { openai: { reasoningEffort: esforco } } }
+        : {}),
     });
     const latencyMs = Date.now() - startedAt;
 

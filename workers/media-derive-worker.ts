@@ -162,7 +162,15 @@ function buildDeriveDeps(
   // (o derivado fica vazio e o marcador "[áudio]" continua valendo) e evita o
   // loop de 401 que retentava a cada drain.
   const transcriber: DeriveDeps["transcriber"] = openaiKey
-    ? apiTranscriptionProvider({ apiKey: openaiKey })
+    ? apiTranscriptionProvider({
+        apiKey: openaiKey,
+        ...(process.env.TRANSCRIPTION_MODEL
+          ? { model: process.env.TRANSCRIPTION_MODEL }
+          : {}),
+        ...(process.env.TRANSCRIPTION_BASE_URL
+          ? { baseUrl: process.env.TRANSCRIPTION_BASE_URL }
+          : {}),
+      })
     : { transcribe: async () => "" };
   return {
     transcriber,

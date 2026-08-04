@@ -48,6 +48,8 @@ import {
 } from '../edge/llm/run-model-call';
 import type { ProviderRegistry } from '../edge/llm/providers';
 import { MIRROR_WARN_ONLY, mirrorLeadStageToCrm } from '../edge/crm/move-lead-stage';
+import { resolveWahaChatId } from '@/lib/waha/send';
+import { conexaoWahaDoEnv, definirPresenca } from '@/lib/waha/presence';
 import { insertInboxItem } from '../db/repository';
 import { buildNativeMediaParts } from './media-parts';
 import type { JobRow, Queryable } from '../queue/queue';
@@ -608,6 +610,51 @@ export interface AgentTurnInput {
 }
 
 /**
+ * Onda 4: resolve session/chatId direto (o mesmo par que `sendMessageHandler`
+ * resolve na hora de enviar — `resolveWahaChatId`) e acende "digitando…". Uma
+ * query leve e best-effort: falha de rede WAHA, sessão não configurada ainda,
+ * ou contato sem phone/wa_identity resolvível são todos silenciosos aqui — é
+ * enfeite, não parte do contrato do turno.
+ */
+async function sinalizarDigitando(
+  pool: pg.Pool,
+  tenantId: string,
+  channelSessionId: string,
+  leadId: string,
+  log: Logger,
+): Promise<void> {
+  const conn = conexaoWahaDoEnv();
+  if (conn === null) return;
+  try {
+    const { rows } = await pool.query<{
+      waha_session_name: string;
+      phone_number: string | null;
+      wa_identity: string | null;
+    }>(
+      `select cs.waha_session_name, c.phone_number, c.wa_identity
+       from channel_sessions cs
+       join contacts c on c.organization_id = cs.organization_id
+       where cs.id = $1 and cs.organization_id = $2 and c.id = $3`,
+      [channelSessionId, tenantId, leadId],
+    );
+    const row = rows[0];
+    if (row === undefined) return;
+    const chatId = resolveWahaChatId({
+      isGroup: false,
+      groupChatId: null,
+      phoneNumber: row.phone_number,
+      waIdentity: row.wa_identity,
+    });
+    if (chatId === null) return;
+    await definirPresenca(conn, row.waha_session_name, chatId, 'typing');
+  } catch (err) {
+    log.warn('digitando: sinal não enviado (best-effort, não afeta o turno)', {
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
+    });
+  }
+}
+
+/**
  * Núcleo do run do agente, compartilhado por inbound_turn (F2-09) e followup_turn
  * (F3-03): ritual de abertura, loop de tools, fechamento com checkpoint e veto. Não
  * guarda NADA entre invocações — sessão fresca por job (todo estado no closure). O
@@ -632,10 +679,19 @@ export async function runAgentTurn(
   // F4-06 (acceptance 2): lead em handoff humano → NO-OP no INÍCIO do turno, antes de
   // qualquer chamada de modelo/CRM. O bot silenciou (bot_silenced_until='infinity', cache
   // do force_human do CRM) e só o humano/CRM libera — o agente nunca reassume (regra dura 2).
+  // Presence ("digitando…") fica DEPOIS deste veto: em handoff o bot está silenciado e
+  // não pode parecer que está compondo resposta (~25s de typing fantasma).
   if (await isLeadInHandoff(pool, tenantId, leadId)) {
     runLog.info('turno pulado — lead em handoff humano (bot silenciado)', { kind: job.kind });
     return;
   }
+
+  // Onda 4: acende o "digitando…" ANTES dos classificadores/chamada de modelo —
+  // sem isto a conversa parece morta pelos ~10-15s que o turno leva. Some
+  // sozinho em ~25s (relógio do próprio WhatsApp) ou quando enviamos a resposta
+  // (adapter WAHA manda 'paused' logo após o send). Fire-and-forget: nunca
+  // atrasa o turno, e nunca lança (contrato de lib/waha/presence.ts).
+  void sinalizarDigitando(pool, tenantId, input.channelSessionId, leadId, runLog);
 
   // Fase 3: stickiness do router — qual agente já atende esta conversa. Leituras
   // tolerantes a falha (ex.: clone self-host ainda sem a migration 0085 aplicada) —

@@ -108,7 +108,10 @@ services:
 
   scheduler:
     # Cron sem docker.sock: alpine + crond interno batendo curl na rede interna.
-    # Resolução de 1 min (= paridade com os crons da Vercel).
+    # Resolução de 1 min (= paridade com os crons da Vercel), EXCETO o
+    # event-log-drain — esse roda em loop a cada 3s (caminho crítico da mídia:
+    # persist→derive são 2 hops; a 60s do crond estourava o teto de espera e
+    # a URL do WAHA). Paridade com workers/agent-worker/app-cron-ticker.ts.
     image: alpine:3.20
     restart: unless-stopped
     depends_on:
@@ -122,10 +125,15 @@ services:
       - -c
       - |
         apk add --no-cache curl tzdata >/dev/null 2>&1
+        (
+          while true; do
+            curl -fsS -m45 -H "Authorization: Bearer $$INTERNAL_SECRET" http://app:3000/api/v1/cron/event-log-drain >/dev/null 2>&1 || true
+            sleep 3
+          done
+        ) &
         cat > /etc/crontabs/root <<EOF
         * * * * * curl -fsS -m25 -H "Authorization: Bearer $$INTERNAL_SECRET" http://app:3000/api/v1/cron/agent-dispatcher >/dev/null 2>&1
         * * * * * curl -fsS -m25 -H "Authorization: Bearer $$INTERNAL_SECRET" http://app:3000/api/v1/cron/followup-flow-worker >/dev/null 2>&1
-        * * * * * curl -fsS -m45 -H "Authorization: Bearer $$INTERNAL_SECRET" http://app:3000/api/v1/cron/event-log-drain >/dev/null 2>&1
         */5 * * * * curl -fsS -m25 -H "Authorization: Bearer $$INTERNAL_SECRET" "http://app:3000/api/v1/cron/storage-redaction?limit=50" >/dev/null 2>&1
         */5 * * * * curl -fsS -m25 -H "Authorization: Bearer $$INTERNAL_SECRET" http://app:3000/api/v1/cron/snooze-watcher >/dev/null 2>&1
         0 12 * * * curl -fsS -m60 -H "Authorization: Bearer $$INTERNAL_SECRET" http://app:3000/api/v1/cron/lgpd-sla-watcher >/dev/null 2>&1
