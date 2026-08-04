@@ -90,6 +90,10 @@ const schema = z.object({
   VERCEL_AI_GATEWAY_URL: z.string().optional().default(""),
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   OPENAI_API_KEY: z.string().optional().default(""),
+  // Transcrição de áudio: endpoint OpenAI-compatível e modelo opcionais.
+  // O valor vazio do template continua significando os defaults da OpenAI.
+  TRANSCRIPTION_MODEL: z.string().optional().default(""),
+  TRANSCRIPTION_BASE_URL: z.union([z.string().url(), z.literal("")]).default(""),
 
   // Fusão (Fase 4): DONO ÚNICO dos eventos ai_agent.dispatch_requested.
   // 'engine' (default) = o worker agent-engine é o único consumidor (o cron

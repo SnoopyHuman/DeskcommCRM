@@ -48,7 +48,7 @@ const LINKS: SettingsLink[] = [
     href: "/app/settings/agent",
     title: "Comportamento do agente",
     description: "Agrupar mensagens em rajada e tempo de espera antes de responder.",
-    managerOnly: true,
+    adminOnly: true,
   },
   {
     href: "/app/settings/canal-oficial",

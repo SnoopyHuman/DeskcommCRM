@@ -29,7 +29,10 @@ function envDefaultMs(): number {
 }
 
 function effectiveConfig(raw: unknown) {
-  return inboundDebounceSchema.catch(DEFAULT_INBOUND_DEBOUNCE).parse(raw ?? {});
+  const fallback = { ...DEFAULT_INBOUND_DEBOUNCE, window_ms: envDefaultMs() };
+  return raw == null
+    ? inboundDebounceSchema.parse(fallback)
+    : inboundDebounceSchema.catch(fallback).parse(raw);
 }
 
 export async function GET(_req: NextRequest): Promise<Response> {

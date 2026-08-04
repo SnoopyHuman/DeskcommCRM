@@ -159,6 +159,22 @@ setup_event_log_drain_cron() {
   fi
 }
 
+# Ativa (idempotente) o alarme de eventos parados no cron do host. O compose
+# também agenda esta rota; esta linha cobre instalações que usam o scheduler
+# do kit e mantém a promessa do self-host mesmo sem o serviço scheduler.
+setup_stale_event_watcher_cron() {
+  command -v crontab >/dev/null 2>&1 || { c_ylw "⚠ 'crontab' não encontrado — não ativei o alarme de eventos parados."; return 0; }
+
+  local secret="${INTERNAL_CRON_SECRET:-}"
+  [ -n "$secret" ] || secret="${INTERNAL_SECRET:-}"
+  [ -n "$secret" ] || { c_ylw "⚠ falta INTERNAL_SECRET/INTERNAL_CRON_SECRET — não ativei o alarme de eventos parados."; return 0; }
+  [ -n "${NEXT_PUBLIC_APP_URL:-}" ] || { c_ylw "⚠ falta NEXT_PUBLIC_APP_URL — não ativei o alarme de eventos parados."; return 0; }
+
+  local cron_line="* * * * * curl -fsS -m60 -H \"Authorization: Bearer ${secret}\" \"${NEXT_PUBLIC_APP_URL}/api/v1/cron/event-log-stale-watcher\" >/dev/null 2>&1"
+  ( crontab -l 2>/dev/null | grep -v 'event-log-stale-watcher' || true; echo "$cron_line" ) | crontab -
+  c_grn "✓ alarme de eventos parados ativo (a cada minuto)"
+}
+
 # Ativa (idempotente) o cron do agente de atualização: a cada 5 minutos ele
 # avisa o app da versão instalada e, se alguém clicou em "Atualizar agora" na
 # tela, roda o update.sh sozinho. É o que faz o botão da tela existir de

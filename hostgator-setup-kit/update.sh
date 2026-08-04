@@ -204,3 +204,4 @@ fi
 step "Conferindo as automações"
 ensure_encryption_key .env
 setup_event_log_drain_cron
+setup_stale_event_watcher_cron

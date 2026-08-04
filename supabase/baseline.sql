@@ -8887,3 +8887,10 @@ ALTER FUNCTION "public"."fn_hard_reset_contact_context"("p_organization_id" "uui
 
 REVOKE ALL ON FUNCTION "public"."fn_hard_reset_contact_context"("p_organization_id" "uuid", "p_contact_id" "uuid", "p_purge_knowledge_base" boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."fn_hard_reset_contact_context"("p_organization_id" "uuid", "p_contact_id" "uuid", "p_purge_knowledge_base" boolean) TO "service_role";
+
+-- ---- debounce inbound por organização (migration 0100) ----
+-- A chave é opcional de propósito: sem ela, o runtime usa INBOUND_DEBOUNCE_MS
+-- da instalação. Não semear 5000 aqui, pois isso sobrescreveria uma escolha
+-- global existente (inclusive 0 = desligado) ao atualizar um self-host.
+comment on column public.organizations.settings is
+  'JSONB de config da org. Chaves conhecidas: llm, routing, context_lifecycle, ai_dispatch_mode, visibility_mode, canonical_conversation_tags, inbound_debounce ({enabled, window_ms, max_window_ms?}) — coalescência de rajada inbound (Onda 5).';
