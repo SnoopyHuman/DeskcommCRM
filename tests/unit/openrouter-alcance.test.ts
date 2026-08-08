@@ -119,6 +119,40 @@ describe("alcance da OPENROUTER_API_KEY", () => {
     expect(r.ok).toBe(true);
   });
 
+  it("modelo fora do catálogo passa — a catraca falha ABERTO, e isso é decisão, não descuido", () => {
+    // O caso que a instalação fresca vive: `ai_models` nasce semeada só com a
+    // curadoria manual (anthropic/openai/google — ver o apêndice do
+    // `baseline.sql`), e as linhas da OpenRouter só existem depois que o cron
+    // `sync-model-catalog` roda pela primeira vez (diário, 15 4 * * *). Até lá,
+    // TODO modelo da OpenRouter é `conhecido: false`.
+    //
+    // Falhar aberto é a escolha certa — recusar fecharia o caminho que
+    // `base_url` existe para abrir (endpoint próprio, modelo local, que por
+    // definição não estão no catálogo de ninguém). Mas é uma escolha, e o
+    // `.env.example` afirma ao self-hoster que "o painel RECUSA salvar um
+    // modelo sem ferramentas". A afirmação vale com catálogo; sem catálogo, o
+    // que sobra é o AVISO. Este caso congela as duas metades juntas: se um dia
+    // alguém trocar o desfecho, que troque sabendo qual frase deixa de ser
+    // verdade.
+    const foraDoCatalogo = {
+      model_id: "fabricante-novo/modelo-que-ninguem-catalogou",
+      supports_tools: false,
+      supports_vision: false,
+      conhecido: false,
+    };
+    const r = validarBinding({ pontoId: "agent_turn", modelo: foraDoCatalogo });
+    expect(r.ok, "modelo fora do catálogo passou a ser RECUSADO — o caminho de endpoint próprio fechou").toBe(
+      true,
+    );
+    // Passar calado seria a falha-em-verde: a pessoa configura o ponto que cria
+    // o lead com um modelo cuja capacidade ninguém verificou, e nada na tela
+    // diz que a verificação não aconteceu.
+    if (r.ok) {
+      expect(r.avisos.length, "passou sem avisar que não deu para verificar o modelo").toBeGreaterThan(0);
+      expect(r.avisos.join(" ").toLowerCase()).toContain("catálogo");
+    }
+  });
+
   it("o aviso do .env.example acompanhou a virada", () => {
     // O cabeçalho deste arquivo existe por isto: o self-hoster decide a
     // configuração lendo o aviso, e um aviso escrito quando a OpenRouter não
