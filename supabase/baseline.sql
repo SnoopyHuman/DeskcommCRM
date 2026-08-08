@@ -9022,6 +9022,12 @@ alter table public.agent_inbox_items
     -- — os blocos antigos rodam antes e falham em cadeia. Um bloco por
     -- constraint, vigiado por tests/unit/baseline-constraint-reconstruida.test.ts.
     'message_send_stuck',
+    -- (migration 0129) O cliente manda foto/áudio e o agente age como se nada
+    -- tivesse chegado. Acontece quando o modelo configurado não enxerga imagem,
+    -- ou quando falta a chave de transcrição — e antes disto a derivação
+    -- devolvia string vazia EM SILÊNCIO: nenhum erro, nenhum log, e o operador
+    -- concluindo que o agente ignorou o cliente de propósito.
+    'midia_nao_lida',
     -- (migration 0111, spec 16 §3.2) O papel Operador declara promessa em aberto:
     -- o assistente prometeu algo ao cliente e o cumprimento não foi registrado.
     -- A invariante sagrada da spec é "nenhuma promessa deixa de ser cumprida", e
@@ -9774,5 +9780,230 @@ drop trigger if exists trg_ai_agent_versions_content_immutable on public.ai_agen
 create trigger trg_ai_agent_versions_content_immutable
   before update on public.ai_agent_versions
   for each row execute function fn_ai_agent_version_content_immutable();
+-- ---- ai_purpose_bindings: qual modelo cada ponto usa (migration 0126) ----
+-- Onde a escolha de modelo de cada ponto do sistema que usa IA passa a morar.
+-- Uma linha por (organização, ponto); ausência de linha = comportamento
+-- anterior preservado, então re-aplicar num clone não muda o funcionamento de
+-- nada. `provider` sem CHECK de propósito: é vocabulário aberto (os três CHECKs
+-- de provider que já existem são o que trava a entrada da OpenRouter, e um
+-- quarto repetiria o erro). `base_url` nasce para endpoint compatível com a API
+-- da OpenAI — OpenRouter hoje, modelo local depois.
+create table if not exists public.ai_purpose_bindings (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  purpose text not null,
+  provider text not null,
+  credential_id uuid references public.ai_provider_credentials(id) on delete cascade,
+  model_id text not null,
+  base_url text,
+  is_enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Deduplicar ANTES da constraint: um clone que tenha rodado uma versão
+-- intermediária desta frente pode ter duas linhas para o mesmo ponto, e aí o
+-- update.sh (que roda SEM ON_ERROR_STOP) morreria aqui em silêncio. Fica a
+-- mais recente, que é a última escolha do operador.
+delete from public.ai_purpose_bindings a
+ using public.ai_purpose_bindings b
+ where a.organization_id = b.organization_id
+   and a.purpose = b.purpose
+   and (a.updated_at, a.id) < (b.updated_at, b.id);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'ai_purpose_bindings_org_purpose_unique'
+       and conrelid = 'public.ai_purpose_bindings'::regclass
+  ) then
+    alter table public.ai_purpose_bindings
+      add constraint ai_purpose_bindings_org_purpose_unique unique (organization_id, purpose);
+  end if;
+end $$;
+
+create index if not exists ai_purpose_bindings_org_idx
+  on public.ai_purpose_bindings (organization_id);
+create index if not exists ai_purpose_bindings_lookup_idx
+  on public.ai_purpose_bindings (organization_id, purpose) where is_enabled;
+create index if not exists ai_purpose_bindings_credential_idx
+  on public.ai_purpose_bindings (credential_id) where credential_id is not null;
+
+alter table public.ai_purpose_bindings enable row level security;
+
+drop policy if exists tenant_isolation_ai_purpose_bindings_all on public.ai_purpose_bindings;
+create policy tenant_isolation_ai_purpose_bindings_all on public.ai_purpose_bindings
+  using (organization_id in (select public.fn_user_org_ids()))
+  with check (organization_id in (select public.fn_user_org_ids()));
+
+drop trigger if exists ai_purpose_bindings_updated_at on public.ai_purpose_bindings;
+create trigger ai_purpose_bindings_updated_at
+  before update on public.ai_purpose_bindings
+  for each row execute function public.fn_set_updated_at();
+
+comment on table public.ai_purpose_bindings is
+  'Migration 0126: qual provedor/credencial/modelo cada ponto do sistema que usa IA deve usar, por organização. O catálogo dos pontos vive em lib/ai/pontos/registro.ts e o par é vigiado por tests/unit/pontos-de-ia-completude.test.ts.';
+
+
+
+-- ---- provider vira vocabulário aberto + catálogo sincronizável (migration 0127) ----
+-- Os três CHECKs de provider travavam anthropic|openai|google, o que torna
+-- impossível cadastrar uma chave da OpenRouter (ou de qualquer provedor novo, ou
+-- de um modelo local) — o INSERT viola constraint antes de qualquer código rodar.
+-- Vocabulário ABERTO por doutrina: quem recusa provider desconhecido é o registry,
+-- com erro tipado, não uma constraint que faria o update.sh do clone quebrar.
+alter table public.ai_agent_versions       drop constraint if exists ai_agent_versions_provider_check;
+alter table public.ai_models               drop constraint if exists ai_models_provider_check;
+alter table public.ai_provider_credentials drop constraint if exists ai_provider_credentials_provider_check;
+
+-- Aberto não é livre: string vazia seria linha que nenhum registry resolve e
+-- nenhuma tela exibe.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'ai_models_provider_nao_vazio') then
+    alter table public.ai_models add constraint ai_models_provider_nao_vazio check (length(btrim(provider)) > 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'ai_provider_credentials_provider_nao_vazio') then
+    alter table public.ai_provider_credentials add constraint ai_provider_credentials_provider_nao_vazio check (length(btrim(provider)) > 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'ai_agent_versions_provider_nao_vazio') then
+    alter table public.ai_agent_versions add constraint ai_agent_versions_provider_nao_vazio check (length(btrim(provider)) > 0);
+  end if;
+end $$;
+
+alter table public.ai_models add column if not exists source text not null default 'manual';
+alter table public.ai_models add column if not exists synced_at timestamptz;
+alter table public.ai_models add column if not exists supports_vision boolean not null default false;
+
+-- Deduplicar ANTES do índice único (o update.sh roda sem ON_ERROR_STOP: índice
+-- que falha é pulado em silêncio e o upsert do sincronizador volta a duplicar).
+delete from public.ai_models a
+ using public.ai_models b
+ where a.provider = b.provider
+   and a.model_id = b.model_id
+   and (
+     (a.input_price_per_million_cents is null and b.input_price_per_million_cents is not null)
+     or (
+       (a.input_price_per_million_cents is null) = (b.input_price_per_million_cents is null)
+       and a.id < b.id
+     )
+   );
+
+create unique index if not exists ai_models_provider_model_unique on public.ai_models (provider, model_id);
+create index if not exists ai_models_source_idx on public.ai_models (source) where deprecated_at is null;
+
+comment on column public.ai_models.source is
+  'Migration 0127: ''manual'' ou o nome do sincronizador (ex.: ''openrouter''). O sincronizador só mexe nas linhas da PRÓPRIA origem — apagar o que um humano cadastrou seria perder configuração sem aviso.';
+comment on column public.ai_models.synced_at is
+  'Migration 0127: quando a origem confirmou este modelo pela última vez. Modelo que some recebe deprecated_at, nunca DELETE: a linha ainda é referenciada pelo histórico de custo.';
+
+
+
+-- ---- llm_calls registra a FALHA, não só o sucesso (migration 0128) ----
+-- A tabela gravava uma linha por chamada de modelo e só quando dava certo: o
+-- INSERT vivia depois do generateText, sem try em volta. Provedor recusando a
+-- chave, modelo inexistente, conta sem saldo — a exceção subia e nada ficava
+-- gravado. A tabela que deveria explicar era justamente a que ficava vazia no
+-- caso que precisa de explicação, e é a causa direta de "o agente não responde
+-- e não aparece erro em lugar nenhum".
+alter table public.llm_calls add column if not exists status text not null default 'ok';
+alter table public.llm_calls add column if not exists error_code text;
+alter table public.llm_calls add column if not exists error_message text;
+alter table public.llm_calls add column if not exists http_status int;
+alter table public.llm_calls add column if not exists origem_da_escolha text;
+
+-- Corrigir os dados ANTES da constraint: o update.sh roda sem ON_ERROR_STOP, e
+-- um CHECK que falhasse seria pulado em silêncio, deixando o clone sem guarda.
+update public.llm_calls set status = 'ok' where status is null or status not in ('ok', 'erro');
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'llm_calls_status_check') then
+    alter table public.llm_calls add constraint llm_calls_status_check check (status in ('ok', 'erro'));
+  end if;
+end $$;
+
+create index if not exists llm_calls_erros_idx
+  on public.llm_calls (organization_id, created_at desc) where status = 'erro';
+create index if not exists llm_calls_purpose_idx
+  on public.llm_calls (organization_id, purpose, created_at desc);
+
+comment on column public.llm_calls.status is
+  'Migration 0128: ''ok'' | ''erro''. Antes desta migration a tabela só registrava sucesso.';
+comment on column public.llm_calls.error_message is
+  'Migration 0128: texto do provedor, truncado. NUNCA prompt, resposta ou chave.';
+comment on column public.llm_calls.origem_da_escolha is
+  'Migration 0128: quem decidiu usar este modelo. Transforma o log de "o que aconteceu" em "por que aconteceu".';
+
+
+
+
+
+
+-- ---- uma tabela de telemetria de IA, não duas (migration 0130) ----
+-- `agent_id` NÃO existia em llm_calls, e sem ele a unificação jogaria fora a
+-- atribuição de custo por agente — junto com o filtro por agente da tela de uso,
+-- que é como o operador descobre qual agente está consumindo a conta. Perder uma
+-- capacidade em nome de unificar seria trocar um problema por outro.
+alter table public.llm_calls add column if not exists agent_id uuid
+  references public.ai_agents(id) on delete set null;
+create index if not exists llm_calls_agent_idx
+  on public.llm_calls (organization_id, agent_id, created_at desc) where agent_id is not null;
+
+alter table public.llm_calls add column if not exists legacy_invocation_id uuid;
+
+create unique index if not exists llm_calls_legacy_invocation_unique
+  on public.llm_calls (legacy_invocation_id) where legacy_invocation_id is not null;
+
+comment on column public.llm_calls.legacy_invocation_id is
+  'Migration 0130: id da linha de ai_invocations que originou esta. Existe para o backfill ser '
+  'idempotente — o update.sh re-aplica o baseline a cada atualização, e sem esta marca o custo '
+  'histórico cresceria sozinho a cada execução.';
+
+-- O backfill. `on conflict do nothing` sobre o índice único faz a re-execução
+-- ser inócua. `purpose` recebe o `invocation_kind` porque é o mesmo eixo com
+-- nomes diferentes; o vocabulário de ambos já está no registro de pontos.
+insert into public.llm_calls (
+  organization_id, agent_id, contact_id, job_id, purpose, provider, model,
+  input_tokens, output_tokens, cost_cents, latency_ms, created_at,
+  status, error_code, legacy_invocation_id
+)
+select
+  i.organization_id,
+  i.agent_id,
+  null,                       -- ai_invocations guarda conversation/message, não contato
+  null,
+  i.invocation_kind,
+  -- O provider não era guardado; deriva-se do prefixo do modelo, e quando não
+  -- dá para saber vai 'desconhecido' em vez de um chute que viraria estatística.
+  case
+    when i.model like 'anthropic/%' then 'anthropic'
+    when i.model like 'openai/%'    then 'openai'
+    when i.model like 'google/%'    then 'google'
+    when i.model like 'claude%'     then 'anthropic'
+    when i.model like 'gpt%'        then 'openai'
+    when i.model like 'gemini%'     then 'google'
+    else 'desconhecido'
+  end,
+  i.model,
+  i.prompt_tokens,
+  i.completion_tokens,
+  i.cost_cents,
+  i.latency_ms,
+  i.created_at,
+  case when i.error_payload is not null then 'erro' else 'ok' end,
+  case when i.error_payload is not null then 'erro_legado' else null end,
+  i.id
+from public.ai_invocations i
+where not exists (
+  select 1 from public.llm_calls c where c.legacy_invocation_id = i.id
+)
+on conflict do nothing;
+
+comment on table public.ai_invocations is
+  'DEPRECIADA na migration 0130 — a telemetria de IA vive em llm_calls. Mantida como histórico '
+  '(a doutrina do repo é depreciar, não deletar) e porque as linhas antigas são a prova do que foi '
+  'gasto. Nada escreve mais aqui; leituras novas usam llm_calls.';
 
 notify pgrst, 'reload schema';

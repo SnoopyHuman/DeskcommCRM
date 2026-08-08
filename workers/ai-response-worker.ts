@@ -22,7 +22,6 @@ import {
   gatewayHeaders,
   isAiGatewayConfigured,
   isEmbeddingProviderConfigured,
-  resolveLanguageModel,
 } from "@/lib/ai/gateway";
 import { embedText } from "@/lib/ai/embed";
 import { computeCost } from "@/lib/ai/cost";
@@ -40,6 +39,7 @@ import type {
   SkipDecision,
 } from "@/lib/ai/types";
 import type { EventRow } from "@/lib/event-log/dispatcher";
+import { resolverModeloDoPonto } from "@/lib/ai/gateway-binding";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -141,7 +141,13 @@ export async function processMessageReceived(row: EventRow): Promise<ProcessResu
   //
   // Skip, não erro: modelo que nenhuma chave desta instalação atende é config,
   // não falha transitória — retentar só repetiria o loop que este PR mata.
-  const model = resolveLanguageModel(ctx.agent.model);
+  // O painel de provedores manda aqui também — ver lib/ai/gateway-binding.ts.
+  const resolvido = await resolverModeloDoPonto(
+    "bot_respond",
+    ctx.organization_id,
+    ctx.agent.model,
+  );
+  const model = resolvido?.model ?? null;
   if (!model) {
     logger.warn("[ai-response-worker] modelo do agente sem provider configurado", {
       organization_id: ctx.organization_id,

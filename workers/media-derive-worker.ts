@@ -116,7 +116,7 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
       }
     }
 
-    const deps = buildDeriveDeps(llm, openaiKey);
+    const deps = buildDeriveDeps(llm, openaiKey, row.organization_id);
 
     const text = await deriveMediaText(msg.type, buffer, msg.media_mime ?? "application/octet-stream", deps);
     await admin.from("messages")
@@ -136,13 +136,31 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
 function buildDeriveDeps(
   llm: { provider: string; apiKey: string; defaultModel: string | null },
   openaiKey: string | null,
+  orgId: string,
 ): DeriveDeps {
   const registry = createDefaultRegistry();
   const visionCapable = modelCapabilities(llm.provider, llm.defaultModel ?? "").image;
   const describeImage: DeriveDeps["describeImage"] = async (buffer, mime) => {
-    if (!visionCapable) return ""; // provider sem visão → sem descrição (áudio/pdf ainda funcionam)
+    // ─── Falha VISÍVEL, não string vazia ────────────────────────────────────
+    //
+    // Antes daqui, modelo sem visão devolvia "" e pronto: o cliente mandava a
+    // foto do produto ou o comprovante, o agente respondia como se nada tivesse
+    // chegado, e não havia erro, log nem aviso em lugar nenhum. Para quem
+    // instalou, o produto parecia estar ignorando o cliente de propósito.
+    //
+    // Agora o texto derivado DIZ que a mídia não pôde ser lida — o agente passa
+    // a saber que recebeu algo que não consegue interpretar, em vez de achar
+    // que a mensagem veio vazia — e um aviso abre na Central para o operador
+    // poder agir (invariante 7 da doutrina do Sistema Vivo: todo laço se fecha).
+    if (!visionCapable) {
+      await avisarMidiaNaoLida(orgId, "imagem", `o modelo ${llm.defaultModel ?? "configurado"} não enxerga imagens`);
+      return MARCADOR_NAO_LIDA;
+    }
     const factory = registry[llm.provider];
-    if (!factory) return "";
+    if (!factory) {
+      await avisarMidiaNaoLida(orgId, "imagem", `o provedor ${llm.provider} não está disponível nesta instalação`);
+      return MARCADOR_NAO_LIDA;
+    }
     const res = await generateText({
       model: factory(llm.apiKey, llm.defaultModel ?? ""),
       messages: [
@@ -163,7 +181,16 @@ function buildDeriveDeps(
   // loop de 401 que retentava a cada drain.
   const transcriber: DeriveDeps["transcriber"] = openaiKey
     ? apiTranscriptionProvider({ apiKey: openaiKey })
-    : { transcribe: async () => "" };
+    : {
+        transcribe: async () => {
+          // Mesma razão da visão: devolver "" fazia o agente responder ao áudio
+          // como se ele não existisse. O aviso é o que dá ao operador a chance
+          // de cadastrar a chave — sem ele, o sintoma é indistinguível de "o
+          // agente é ruim".
+          await avisarMidiaNaoLida(orgId, "áudio", "falta uma chave da OpenAI para transcrever");
+          return MARCADOR_NAO_LIDA;
+        },
+      };
   return {
     transcriber,
     describeImage,
@@ -171,4 +198,59 @@ function buildDeriveDeps(
     // Onda 3.1: vídeo → ffmpeg (áudio+frames) reusando transcrição e visão da org.
     deriveVideo: (buffer) => deriveVideoText(buffer, { transcriber, describeImage }),
   };
+}
+
+/**
+ * O texto que substitui a string vazia quando a mídia não pôde ser lida.
+ *
+ * Não é cosmético: o agente recebe este texto como derivado da mensagem, então
+ * ele passa a SABER que chegou algo que não conseguiu interpretar, em vez de
+ * concluir que a mensagem veio vazia. A diferença aparece na resposta ao
+ * cliente — "não consegui abrir sua foto, pode me dizer o que é?" no lugar de
+ * um silêncio que parece descaso.
+ */
+export const MARCADOR_NAO_LIDA = "[o cliente enviou uma mídia que não consegui interpretar]";
+
+/**
+ * Abre UM aviso na Central por organização enquanto o problema durar.
+ *
+ * Um aviso por mensagem inundaria a Central numa operação com volume — e
+ * Central inundada é Central que ninguém abre, que é como o alerta morre. A
+ * condição de não-duplicar é a mesma que `budget_exceeded` já usa: enquanto
+ * houver item aberto do mesmo kind, recusas novas não criam outro.
+ *
+ * Fire-and-forget: falhar ao avisar não pode derrubar a derivação da mídia.
+ */
+async function avisarMidiaNaoLida(
+  organizationId: string,
+  tipo: string,
+  motivo: string,
+): Promise<void> {
+  try {
+    const admin = createAdminClient();
+    const { data: jaAberto } = await admin
+      .from("agent_inbox_items")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("kind", "midia_nao_lida")
+      .eq("status", "open")
+      .limit(1)
+      .maybeSingle();
+    if (jaAberto) return;
+
+    await admin.from("agent_inbox_items").insert({
+      organization_id: organizationId,
+      kind: "midia_nao_lida",
+      severity: "warning",
+      title: `O agente não conseguiu ler ${tipo} que o cliente enviou`,
+      body:
+        `Motivo: ${motivo}. Enquanto isso, o agente responde avisando que não conseguiu abrir o arquivo. ` +
+        `Para resolver, ajuste o modelo desse ponto em Agente de IA → Provedores, ou cadastre a chave necessária em Credenciais.`,
+    });
+  } catch (err) {
+    logger.warn("[media-derive] não consegui abrir o aviso de mídia não lida", {
+      organization_id: organizationId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

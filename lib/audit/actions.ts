@@ -133,6 +133,8 @@ export type AuditAction =
   | "ai.org_memory_published"
   | "ai.org_memory_entry_created"
   | "ai.org_memory_entry_updated"
+  /** Provedor/modelo de um ponto do sistema que usa IA foi trocado no painel. */
+  | "ai.purpose_binding_updated"
   | "ai_agent.run_started"
   | "ai_agent.run_completed"
   | "ai_agent.run_failed"
