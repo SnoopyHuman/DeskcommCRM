@@ -15,6 +15,8 @@ export const CHANNEL_CAPABILITIES: Record<ChannelProvider, ChannelCapabilities> 
   waha: {
     freeformOutsideWindow: true,
     requiresTemplates: false,
+    // Não há WABA por trás: não existe definição aprovada para gerir.
+    canManageTemplates: false,
     banRisk: true,
     minIntervalMs: null,
     voiceNote: "server-convert",
@@ -25,6 +27,42 @@ export const CHANNEL_CAPABILITIES: Record<ChannelProvider, ChannelCapabilities> 
   meta_cloud: {
     freeformOutsideWindow: false,
     requiresTemplates: true,
+    // A Graph API cria e edita definições; o repo hoje só ESPELHA, e é essa
+    // lacuna que a capability torna visível em vez de deixar implícita.
+    canManageTemplates: true,
+    banRisk: false,
+    minIntervalMs: 6000,
+    voiceNote: "opus-only",
+    groups: "limited",
+    costPerMessage: true,
+  },
+  // Mesma hetero-restrição do canal oficial, por baixo: é um BSP: a WABA é da
+  // Meta, os templates são aprovados pela Meta e a janela de 24h é da Meta. O
+  // intermediário muda o TRANSPORTE (quem endereça, como se autentica), não o
+  // que o WhatsApp permite — e capability descreve o permitido, não o encanamento.
+  //
+  // As duas diferenças reais, medidas na doc do provider, não na intuição:
+  //
+  //  - `voiceNote: "opus-only"`. O provider tem um `voiceNote: true` no envio,
+  //    mas exige ogg/opus mono explicitamente e NÃO converte — mesma restrição
+  //    do canal oficial. Ler o campo booleano como "ele resolve para mim" é o
+  //    erro que manda mp3 e entrega anexo de música.
+  //  - `groups: "limited"`. Existe API de grupos, mas só em plano de uso e só
+  //    para números fora de coexistência. Capability é o que a instalação MÉDIA
+  //    pode fazer; prometer "full" aqui quebraria em quem não paga o plano.
+  // `freeformOutsideWindow: false` está MEDIDO, não deduzido. A API aceita o
+  // envio livre (200 + wamid) e a Meta recusa a ENTREGA depois, pelo webhook:
+  //
+  //   131047 Re-engagement message — "The 24-hour customer service window for
+  //   this contact is closed. Send an approved template to re-open the
+  //   conversation, or wait for the contact to message you first."
+  //
+  // O detalhe que engana: mandar um template NÃO abre a janela. Só o cliente
+  // abre, respondendo. Quem ler o 200 como "enviado" acha que funciona.
+  zernio: {
+    freeformOutsideWindow: false,
+    requiresTemplates: true,
+    canManageTemplates: true,
     banRisk: false,
     minIntervalMs: 6000,
     voiceNote: "opus-only",
@@ -51,6 +89,7 @@ export const DEFAULT_CHANNEL_PROVIDER: ChannelProvider = "waha";
  */
 export const CHANNEL_PROVIDER_WAHA: ChannelProvider = "waha";
 export const CHANNEL_PROVIDER_META: ChannelProvider = "meta_cloud";
+export const CHANNEL_PROVIDER_ZERNIO: ChannelProvider = "zernio";
 
 export function capabilitiesOf(provider: ChannelProvider): ChannelCapabilities {
   const caps = CHANNEL_CAPABILITIES[provider];

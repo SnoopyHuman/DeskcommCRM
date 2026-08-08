@@ -4,11 +4,13 @@
  */
 import { metaCloudAdapter } from "./adapters/meta-cloud";
 import { wahaAdapter } from "./adapters/waha";
+import { zernioAdapter } from "./adapters/zernio";
 import type { ChannelAdapter, ChannelProvider } from "./types";
 
 const ADAPTERS: Record<ChannelProvider, ChannelAdapter | null> = {
   waha: wahaAdapter,
   meta_cloud: metaCloudAdapter,
+  zernio: zernioAdapter,
 };
 
 /**

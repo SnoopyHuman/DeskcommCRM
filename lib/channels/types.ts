@@ -8,13 +8,25 @@ import type { OutboundMedia } from "@/lib/waha/media-send";
 
 export type { OutboundMedia };
 
-export type ChannelProvider = "waha" | "meta_cloud";
+export type ChannelProvider = "waha" | "meta_cloud" | "zernio";
 
 export interface ChannelCapabilities {
   /** Pode enviar texto livre a qualquer momento? false = exige template fora da janela. */
   freeformOutsideWindow: boolean;
   /** A plataforma hospeda definições de mensagem que precisam de aprovação prévia. */
   requiresTemplates: boolean;
+  /**
+   * O canal permite CRIAR e EDITAR essas definições pela API — ou só lê as que
+   * já existem?
+   *
+   * Distinta de `requiresTemplates`, e a diferença não é sutil: um canal pode
+   * exigir template (e portanto travar o envio fora da janela) e ainda assim
+   * não deixar ninguém criar um sem entrar no painel da plataforma. Quem só lê
+   * precisa mandar o operador para fora do CRM; quem escreve não. É a pergunta
+   * que a tela faz para decidir se mostra o botão "criar", e sem ela a tela
+   * teria que perguntar QUAL canal é — que é o que o invariante 1 proíbe.
+   */
+  canManageTemplates: boolean;
   /** Há risco de banimento por volume/padrão → arma throttle, warm-up e cap. */
   banRisk: boolean;
   /** Intervalo mínimo imposto PELA PLATAFORMA entre msgs ao mesmo destinatário (ms). */
@@ -58,6 +70,25 @@ export interface OutboundEnvelope {
   kind: OutboundKind;
   body?: string;
   media?: OutboundMedia;
+  /**
+   * Id que o PROVIDER dá a esta thread, quando ele endereça por thread própria
+   * em vez de por telefone (`conversations.provider_conversation_id`).
+   *
+   * OPCIONAL porque a maioria dos canais não precisa: quem deriva o
+   * destinatário do contato (chatId, E.164) ignora este campo, e os adapters
+   * existentes não mudam uma linha por causa dele.
+   *
+   * Existe porque `resolveRecipient` recebe o CONTATO, e há provider cujo
+   * endereço não sai do contato: é um id que ele mesmo inventa e entrega pelo
+   * webhook. Sem carregá-lo aqui, o adapter teria que ir ao banco buscá-lo — e
+   * adapter que consulta banco deixa de ser tradutor de formato, que é a única
+   * coisa que `docs/doctrine/restricao-de-canal.md` permite que ele seja.
+   *
+   * `undefined` = não há id conhecido para esta thread. Não é erro: é o estado
+   * normal antes do primeiro contato, e o adapter que precisa dele decide o que
+   * fazer (tipicamente, abrir a conversa com template).
+   */
+  providerConversationId?: string | null;
 }
 
 /**
@@ -118,4 +149,57 @@ export interface ChannelAdapter {
    * quem chama cai no próprio `externalId`.
    */
   echoExternalIds?(input: { externalId: string; recipient: string }): string[];
+
+  /**
+   * Gestão das definições aprovadas — criar, editar, apagar.
+   *
+   * OPCIONAL pelo mesmo motivo dos dois métodos acima: nem todo canal expõe
+   * isso, e quem chama testa a presença em vez de perguntar QUAL provider é.
+   * A capability `canManageTemplates` é a resposta declarativa da mesma
+   * pergunta, para quem precisa decidir ANTES de ter um adapter em mãos (uma
+   * tela, por exemplo).
+   *
+   * O adapter continua burro: traduz formato e devolve o que a plataforma
+   * disse. Ele NÃO decide se um template é válido, não espelha no banco e não
+   * conhece `contract_hash` — isso é de quem sincroniza.
+   */
+  templates?: ChannelTemplateOps;
+}
+
+/** Definição aprovada, na forma NEUTRA — sem o vocabulário de nenhum provider. */
+export interface ChannelTemplate {
+  name: string;
+  language: string;
+  /** Vocabulário ABERTO: a plataforma cria estado novo sem avisar. */
+  status: string;
+  category: string | null;
+  /** Payload cru como a plataforma o devolveu — a entrada de quem deriva contrato. */
+  components: unknown[];
+  rejectedReason?: string | null;
+  parameterFormat?: string | null;
+}
+
+export interface ChannelTemplateDraft {
+  name: string;
+  language: string;
+  category: "AUTHENTICATION" | "MARKETING" | "UTILITY";
+  components: unknown[];
+  parameterFormat?: "POSITIONAL" | "NAMED";
+}
+
+export interface ChannelTemplateOps {
+  list(input: { sessionRef: string }): Promise<ChannelTemplate[]>;
+  create(input: { sessionRef: string; draft: ChannelTemplateDraft }): Promise<ChannelTemplate>;
+  /**
+   * Edição é PARCIAL e limitada pela plataforma: nome, idioma e categoria de um
+   * template já aprovado normalmente não mudam — o que se edita é o corpo, e a
+   * edição joga o template de volta para revisão. Quem chama não precisa saber
+   * disso; a plataforma recusa e o erro sobe com o código dela.
+   */
+  update(input: {
+    sessionRef: string;
+    name: string;
+    patch: Partial<Pick<ChannelTemplateDraft, "components" | "category">>;
+  }): Promise<ChannelTemplate>;
+  remove(input: { sessionRef: string; name: string; language?: string }): Promise<void>;
 }

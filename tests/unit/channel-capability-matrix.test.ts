@@ -15,10 +15,23 @@ import {
   type ChannelProvider,
 } from "@/lib/channels/capabilities";
 
-const PROVIDERS: ChannelProvider[] = ["waha", "meta_cloud"];
+const PROVIDERS = ["waha", "meta_cloud", "zernio"] as const satisfies readonly ChannelProvider[];
+
+/**
+ * Esquecer um provider aqui passa a ser erro de COMPILAÇÃO.
+ *
+ * A lista era literal e solta: um canal novo entrava em `ChannelProvider` e na
+ * matriz sem nunca ser varrido por este arquivo, e o teste seguia verde
+ * afirmando exaustividade que não tinha. O tipo abaixo é `never` enquanto
+ * sobrar provider fora da lista, e `tsc` reprova — antes do teste rodar.
+ */
+type ProviderNaoVarrido = Exclude<ChannelProvider, (typeof PROVIDERS)[number]>;
+const _todoProviderEstaNaLista: ProviderNaoVarrido extends never ? true : never = true;
+void _todoProviderEstaNaLista;
 const CAPABILITIES = [
   "freeformOutsideWindow",
   "requiresTemplates",
+  "canManageTemplates",
   "banRisk",
   "minIntervalMs",
   "voiceNote",

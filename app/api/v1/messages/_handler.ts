@@ -240,7 +240,7 @@ export async function sendMessageHandler(
   // envio com 42703. Sem a coluna, nada está arquivado — e a consulta sem ela é a
   // consulta certa (ver lib/channels/archived).
   const convSelect = (comArchived: boolean) =>
-    `id, organization_id, contact_id, channel_session_id, is_group, group_chat_id, contacts:contact_id(phone_number, wa_identity, wa_lid, is_blocked), channel_sessions:channel_session_id(${CHANNEL_SESSION_REF_COLUMNS}, status${comArchived ? `, ${ARCHIVED_AT}` : ""})`;
+    `id, organization_id, contact_id, channel_session_id, is_group, group_chat_id, provider_conversation_id, contacts:contact_id(phone_number, wa_identity, wa_lid, is_blocked), channel_sessions:channel_session_id(${CHANNEL_SESSION_REF_COLUMNS}, status${comArchived ? `, ${ARCHIVED_AT}` : ""})`;
   const { data: conv, error: convErr } = await queryTolerantToMissingArchived(
     () => supabase.from("conversations").select(convSelect(true)).eq("id", input.conversation_id).maybeSingle(),
     () => supabase.from("conversations").select(convSelect(false)).eq("id", input.conversation_id).maybeSingle(),
@@ -260,6 +260,8 @@ export async function sendMessageHandler(
     channel_session_id: string;
     is_group: boolean;
     group_chat_id: string | null;
+    /** Thread do provider, quando ele endereça por thread própria (migration 0117). */
+    provider_conversation_id: string | null;
     contacts: {
       phone_number: string | null;
       wa_identity: string | null;
@@ -431,6 +433,7 @@ export async function sendMessageHandler(
         ({ externalId } = await adapter.send({
           sessionRef: resolveSessionRef(c.channel_sessions),
           to: chatId,
+          providerConversationId: c.provider_conversation_id,
           kind: input.type,
           media: {
             url: signed.signedUrl,
@@ -443,6 +446,7 @@ export async function sendMessageHandler(
         ({ externalId } = await adapter.send({
           sessionRef: resolveSessionRef(c.channel_sessions),
           to: chatId,
+          providerConversationId: c.provider_conversation_id,
           kind: input.type,
           body: input.body ?? "",
         }));
