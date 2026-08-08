@@ -986,6 +986,164 @@ NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'")"
 ) || fail=1
 rm -rf "$TMP6"
 
+echo "re-execução: o .env que sai é o que a pessoa acabou de mandar escrever"
+# ── Por que estes três casos merecem catraca ────────────────────────────────
+#
+# O README vende o `install.sh` como IDEMPOTENTE, e é isso que faz da 2ª
+# execução o caminho normal de conserto: errou a connection string, rodou de
+# novo. Quem mexer no bloco que escreve o `.env` está mexendo justamente aí — e
+# os três modos de errar abaixo são todos MUDOS. O instalador segue imprimindo
+# fase, ✓ e "Instalação concluída"; o que muda é o conteúdo de um arquivo que
+# ninguém abre. Sem estes casos, a única forma de descobrir é o CRM subir com o
+# domínio velho na casa de alguém.
+#
+# Nenhum job de CI roda esta suíte (medido: `grep -rn test-validators .github/`
+# não devolve nada). Ela é a única guarda do kit — o que torna cada caso que
+# falta aqui um buraco de verdade, não uma formalidade.
+#
+# O modo é `--yes` de propósito: o interativo depende de quantas perguntas o
+# script faz hoje, e um teste que quebra quando alguém acrescenta uma pergunta
+# mede o roteiro, não o comportamento. Com `--yes` o `.env` já traz tudo, e o
+# que sobra é exatamente o que se quer medir: o que o bloco de escrita faz com
+# ele.
+#
+# INTERNAL_SECRET é o marcador de "o bloco de escrita rodou": ele nasce no
+# script (`gen_hex`), nunca vem do `.env` de entrada. Se ele está no arquivo
+# final, o `{ … } > .env` chegou ao fim; se não está, o instalador morreu antes
+# e o `.env` no disco é o ANTIGO — que é o desfecho que parece sucesso.
+reexec_ok() {  # reexec_ok <descrição> <como invocar: absoluto|relativo> <linha extra do .env>
+  local desc="$1" modo="$2" extra="${3-}" dir out rc=0
+  dir="$(mktemp -d)"
+  mkdir -p "$dir/bin" "$dir/deskcommcrm"
+  cp install.sh update.sh backup.sh _common.sh "$dir/"
+  : > "$dir/deskcommcrm/docker-compose.prod.yml"
+  # Dublê mínimo: nesta rodada nada depende do que o docker responde, só de o
+  # script conseguir chamá-lo sem morrer.
+  printf '#!/usr/bin/env bash\ncase "$1" in compose) case "$*" in *" exec "*) printf %s;; esac;; esac\nexit 0\n' \
+    "'healthy\n{\"data\":{\"status\":\"healthy\"}}\n'" > "$dir/bin/docker"
+  printf '#!/usr/bin/env bash\nprintf 200\n' > "$dir/bin/curl"
+  # Dublê de crontab que ENGOLE, nunca escreve: nesta rodada o agendamento não é
+  # o objeto da medição, e o crontab da máquina de quem roda a suíte não é lugar
+  # de efeito colateral (já houve 10 linhas órfãs; ver o isolamento no fim).
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in -l) exit 1;; -) cat >/dev/null;; esac\nexit 0\n' \
+    > "$dir/bin/crontab"
+  chmod +x "$dir/bin/docker" "$dir/bin/curl" "$dir/bin/crontab"
+  printf '%s\n%s\n' "$BASE_ENV" "$extra" > "$dir/deskcommcrm/.env"
+
+  # `relativo` é o caminho do README ("jogue a pasta no VPS e rode `bash
+  # install.sh`"): o kit fica FORA do repo, o script faz `cd` para dentro dele,
+  # e a partir daí `$0` — que continua sendo "install.sh" — não resolve mais.
+  if [ "$modo" = relativo ]; then
+    out="$(cd "$dir" && env PATH="$dir/bin:$PATH" CRONTAB_SANDBOX="$CRONTAB_SANDBOX" \
+      bash install.sh --yes </dev/null 2>&1 || true)"
+  else
+    out="$(cd "$dir/deskcommcrm" && env PATH="$dir/bin:$PATH" CRONTAB_SANDBOX="$CRONTAB_SANDBOX" \
+      bash "$dir/install.sh" --yes </dev/null 2>&1 || true)"
+  fi
+  out="$(printf '%s' "$out" | sed -E 's/\x1b\[[0-9;]*m//g')"
+
+  # Vacuidade: sem isto, um install.sh que morresse ANTES de chegar ao bloco de
+  # escrita (dublê incompleto, refactor movendo o trecho) passaria nos casos que
+  # esperam "o valor velho não sobreviveu" — o arquivo intacto seria lido como
+  # aprovação. O marcador é a fase, não uma frase do bloco.
+  if ! printf '%s' "$out" | grep -q 'Escrevendo .env'; then
+    printf '  ✗ %s — o install.sh não chegou a escrever o .env; teste inconclusivo, não verde\n' "$desc"
+    printf '     última linha: %s\n' "$(printf '%s' "$out" | tail -1)"
+    rm -rf "$dir"; fail=1; return
+  fi
+  if ! grep -q '^INTERNAL_SECRET=' "$dir/deskcommcrm/.env"; then
+    printf '  ✗ %s\n' "$desc"
+    printf '     o .env NÃO foi reescrito — o instalador morreu no meio do bloco e o arquivo no disco é o antigo\n'
+    printf '     %s\n' "$(printf '%s' "$out" | grep -m1 -iE 'no such file|unbound variable|command not found' || printf '%s' "$out" | tail -1)"
+    rm -rf "$dir"; fail=1; return
+  fi
+  REEXEC_ENV="$dir/deskcommcrm/.env"; REEXEC_OUT="$out"; REEXEC_DIR="$dir"
+  printf '  ✓ %s\n' "$desc"
+  return $rc
+}
+
+reexec_ok "invocado por caminho absoluto: o .env é reescrito" absoluto ""
+[ -n "${REEXEC_DIR:-}" ] && rm -rf "$REEXEC_DIR"
+
+# O caso que o README documenta como o caminho principal — e o que quebra sem
+# fazer barulho: `$0` relativo mais o `cd` do próprio script. Qualquer leitura
+# de `"$0"` feita DEPOIS daquele `cd` lê um caminho que não existe mais.
+reexec_ok "invocado por caminho relativo (o do README): o .env é reescrito" relativo ""
+if [ -n "${REEXEC_DIR:-}" ]; then rm -rf "$REEXEC_DIR"; REEXEC_DIR=""; fi
+
+# A chave que a pessoa acrescentou à mão. O bloco fecha com `} > .env`, que
+# TRUNCA a partir de uma lista fechada: sem tratamento, some no próximo install
+# — num script vendido como idempotente, e sem uma linha de aviso.
+reexec_ok "o .env é reescrito mesmo com uma variável que o kit não conhece" absoluto "MINHA_CHAVE_PROPRIA='valor-123'"
+if [ -n "${REEXEC_DIR:-}" ]; then
+  if ! grep -q "^MINHA_CHAVE_PROPRIA=" "$REEXEC_ENV"; then
+    printf '  ✗ MINHA_CHAVE_PROPRIA sumiu do .env — quem configurou algo à mão perde ao re-rodar\n'; fail=1
+  else
+    printf '  ✓ e continua com o valor original: %s\n' "$(grep '^MINHA_CHAVE_PROPRIA=' "$REEXEC_ENV")"
+  fi
+  # Preservar não pode virar DUPLICAR: o compose lê a última ocorrência, então
+  # uma chave repetida faz o valor ANTIGO vencer o que o instalador acabou de
+  # escrever — o mesmo defeito, com o arquivo parecendo mais completo.
+  dups="$(grep -oE '^[A-Z_0-9]+=' "$REEXEC_ENV" | sort | uniq -d | tr -d '=' | tr '\n' ' ')"
+  if [ -n "$dups" ]; then
+    printf '  ✗ chave(s) duplicada(s) no .env — a última ocorrência vence e desfaz o que foi digitado: %s\n' "$dups"; fail=1
+  else
+    printf '  ✓ sem chave duplicada (a última ocorrência é que vale para o compose)\n'
+  fi
+  rm -rf "$REEXEC_DIR"; REEXEC_DIR=""
+fi
+
+echo "re-execução interativa: a tela de conferência corrige de verdade"
+# A tela de conferência existe para consertar um valor digitado errado antes —
+# está escrito no próprio install.sh, logo acima dela. Se o valor corrigido não
+# chegar ao .env, o desfecho é o pior possível: a pessoa VÊ o valor novo na
+# tela, o instalador diz "concluída", e o CRM sobe no domínio velho.
+#
+# O guard de vacuidade aqui é o par: primeiro se prova que a correção foi ACEITA
+# (o valor novo aparece numa segunda tela de conferência); só então "o .env tem o
+# valor novo" quer dizer alguma coisa. Sem isso, uma sequência de respostas
+# desalinhada — o que acontece a cada pergunta nova no roteiro — passaria por
+# "não corrigiu porque nunca chegou a corrigir".
+(
+  TMPC="$(mktemp -d)"
+  montar_vps "$TMPC" "crmconf" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  # A sequência abaixo é imune a UMA pergunta a mais ou a menos antes da tela de
+  # conferência — e isso não é firula: prender o teste ao roteiro faria ele
+  # acusar "não corrigiu" toda vez que alguém acrescentasse uma pergunta, que é
+  # o oposto do que ele mede. O truque é o `1` duplicado. Se existe uma pergunta
+  # de menu antes, ela come o primeiro `1`; se não existe, ele cai na tela de
+  # conferência (item 1 = DOMAIN) e o SEGUNDO `1` vira a resposta do domínio —
+  # que o `v_domain` rejeita ("falta o ponto") e repergunta, deixando o valor de
+  # verdade entrar na linha seguinte. Nos dois caminhos o desfecho é o mesmo.
+  #
+  # Todo campo que o instalador ainda perguntaria vai no .env: o que se mede
+  # aqui é a CORREÇÃO, não a coleta.
+  RESP=$'1\n1\nnovo.exemplo.com.br\n\nn\nc\n'
+  saida="$(rodar install.sh "" "APP_IMAGE='ghcr.io/melgarafael/deskcommcrm:latest'
+APP_NAME='CRM de Teste'
+OPENAI_API_KEY='sk-teste'
+OPENROUTER_API_KEY='sk-or-teste'" "$RESP")"
+  if ! printf '%s' "$saida" | grep -q 'novo\.exemplo\.com\.br'; then
+    printf '  ✗ a correção nem chegou a ser aceita na tela — teste inconclusivo, não verde\n'
+    printf '     (a sequência de respostas desalinhou: alguma pergunta entrou ou saiu do roteiro)\n'
+    exit 1
+  fi
+  if ! grep -qx "DOMAIN='novo.exemplo.com.br'" "$VPS_PROJ/.env"; then
+    printf '  ✗ a tela aceitou a correção e o .env saiu com o valor ANTIGO: %s\n' \
+      "$(grep -E '^DOMAIN=' "$VPS_PROJ/.env" || echo '(ausente)')"
+    printf '     é o pior desfecho: a pessoa vê o valor novo, o instalador diz "concluída", e o CRM sobe no domínio velho\n'
+    exit 1
+  fi
+  printf '  ✓ o domínio corrigido na conferência é o que vai para o .env\n'
+) || fail=1
+
 echo "nome do projeto que o docker compose usa"
 # O compose faz TrimLeft("_-") no basename. Sem isso, uma pasta /root/_deskcomm
 # faz o kit calcular "_deskcomm" enquanto os contêineres carregam "deskcomm" — a
