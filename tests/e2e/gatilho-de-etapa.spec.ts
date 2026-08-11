@@ -143,7 +143,16 @@ test.describe("gatilho de etapa do funil", () => {
         data: { display_name: `Contato Gatilho ${marca}`, phone_number: `+5511${String(marca).slice(-9)}` },
       });
       expect(contatoRes.status()).toBe(201);
-      const { data: contato } = (await contatoRes.json()) as { data: { id: string; display_name: string } };
+      // ⚠️ `data.contact`, e não `data` — o handler devolve `{ contact, action }`.
+      // Lendo `data.id` vinha `undefined`, o negócio nascia SEM contato, e o
+      // gatilho corretamente não enrollava ninguém (`sem_contato`). O produtor
+      // estava certo; o cenário é que estava errado — e o teste falhava lá na
+      // frente, na fila vazia, longe da causa.
+      const { data: respostaDoContato } = (await contatoRes.json()) as {
+        data: { contact: { id: string; display_name: string } };
+      };
+      const contato = respostaDoContato.contact;
+      expect(contato.id, "o contato precisa nascer com id — sem ele o negócio fica sem contato").toBeTruthy();
 
       const negocioRes = await page.request.post("/api/v1/leads", {
         data: {
@@ -182,7 +191,16 @@ test.describe("gatilho de etapa do funil", () => {
       const seletorDeEtapa = page.getByTestId("trigger-stage-select");
       await expect(seletorDeEtapa).toBeEnabled({ timeout: ESPERA });
       await seletorDeEtapa.click();
-      await page.getByRole("option", { name: etapaDestino.name, exact: true }).click();
+      // ⚠️ ESCOPADO PELO GRUPO DO FUNIL, e isso é a feature se provando: duas
+      // etapas podem ter o MESMO nome em funis diferentes — foi por isso que o
+      // seletor agrupa por funil. O banco de teste acumula um funil por
+      // execução, então "Em andamento" existe várias vezes e um `option` solto
+      // casa com todas (o Playwright recusa por ambiguidade, com razão). Quem
+      // desambigua é o cabeçalho do funil, exatamente como para o operador.
+      await page
+        .getByRole("group", { name: `E2E Funil Gatilho ${marca}` })
+        .getByRole("option", { name: etapaDestino.name, exact: true })
+        .click();
       await page.screenshot({
         path: path.join(ARTIFACTS_DIR, "gatilho-etapa-01-configurado.png"),
         fullPage: true,
