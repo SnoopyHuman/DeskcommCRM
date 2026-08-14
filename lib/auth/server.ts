@@ -35,7 +35,29 @@ export async function loadAuthUser(): Promise<AuthUser | null> {
   const supabase = await createClient();
   const {
     data: { user },
+    error,
   } = await supabase.auth.getUser();
+  // ⚠️ O `error` era DESCARTADO — nem chegava a ser desestruturado —, e aqui
+  // `user: null` é tão ambíguo quanto o `data: null` que a query logo abaixo
+  // trata com todo o cuidado: significa "não está logado" (estado normal) E
+  // "não deu para perguntar" (rede, GoTrue fora do ar, token ilegível).
+  //
+  // A ação não muda, e isso é deliberado: sem usuário confirmado, devolver
+  // `null` — e portanto redirecionar para o login — é o desfecho seguro.
+  // Falhar FECHADO na ação continua certo. O que estava errado era falhar
+  // fechado também na INFORMAÇÃO: quem investigasse depois via só uma pessoa
+  // "deslogada", sem nada distinguindo isso de uma falha transitória.
+  //
+  // Custou caro uma vez: um vermelho de e2e em que a barra lateral "perdeu o
+  // logo" foi, por eliminação, uma casca de app que não era a casca do app —
+  // e a hipótese nº 1 é justamente um redirect nascido aqui. Com este log, a
+  // próxima ocorrência se explica sozinha em vez de custar uma investigação.
+  if (error) {
+    logger.error("[auth] getUser falhou — tratando como não autenticado", {
+      codigo: (error as { status?: number }).status ?? null,
+      detalhe: error.message,
+    });
+  }
   if (!user) return null;
 
   // Platform admin? (active = no revoked_at). RLS returns null for non-admins.
