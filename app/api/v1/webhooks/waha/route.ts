@@ -49,6 +49,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // chamador, e 5xx mandaria o provider reentregar o que nunca vai passar.
   //
   // O schema é LOOSE: campo desconhecido passa intacto. Ver lib/waha/envelope.ts.
+  //
+  // ─── Por que o estágio 1 roda ANTES do HMAC (e o 2 depois) ───────────────
+  //
+  // Nesta rota não há escolha: o segredo do HMAC é da sessão, e a sessão é
+  // resolvida por `body.session` — o corpo PRECISA virar objeto antes de haver
+  // com o que verificar assinatura. A ordem é a mesma na variante por token
+  // (onde a escolha existiria) para as duas rotas do canal não divergirem entre
+  // si; a razão completa está no cabeçalho de `waha/[token]/route.ts`.
+  //
+  // O estágio 1 nomeia só `event`, `session` e `payload.id`. O contrato do
+  // CONTEÚDO vem depois do 401.
   const roteamento = lerRoteamentoWaha(rawBody);
   if (!roteamento.ok) {
     if (roteamento.motivo === "json_invalido") {

@@ -57,6 +57,23 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
   // chamador, e 5xx mandaria o provider reentregar o que nunca vai passar.
   //
   // O schema é LOOSE: campo desconhecido passa intacto. Ver lib/waha/envelope.ts.
+  //
+  // ─── Por que o estágio 1 roda ANTES do HMAC (e o 2 depois) ───────────────
+  //
+  // As rotas da Meta e do canal intermediado conferem a assinatura primeiro, e
+  // têm teste segurando essa ordem. Aqui é diferente de propósito, e a
+  // assimetria tem causa: o segredo do HMAC é da SESSÃO, e a sessão só existe
+  // depois de resolvida — na rota global, pelo próprio `body.session`. Conferir
+  // a assinatura antes de desserializar o corpo é impossível lá, e fazer as
+  // duas rotas do mesmo canal divergirem entre si seria pior que divergir das
+  // outras duas.
+  //
+  // O que essa ordem entrega a um chamador sem assinatura é o nome de um dos
+  // TRÊS campos de roteamento (`event`, `session`, `payload.id`) — que estão
+  // publicados no repositório, num projeto open-source, e não dependem do
+  // tenant. O contrato do CONTEÚDO (estágio 2) só é conferido depois do 401,
+  // então nenhum campo de mensagem é nomeado antes da autenticação. Segurado
+  // por `tests/unit/rota-do-webhook-waha-por-token.test.ts`.
   const roteamento = lerRoteamentoWaha(rawBody);
   if (!roteamento.ok) {
     if (roteamento.motivo === "json_invalido") {
