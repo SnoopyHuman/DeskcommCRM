@@ -213,6 +213,40 @@ export function ConnectWhatsappClient({ wahaConfigured, sessionName }: Props) {
           <p className="text-sm font-medium">{rotuloDoEstado(busy ? "STARTING" : status)}</p>
           <p className="mt-1 text-xs text-muted-foreground">{explicacaoDoEstado(busy ? "STARTING" : status)}</p>
 
+          {/*
+            ⚠️ ESTE BLOCO JÁ SUMIU UMA VEZ, E FICOU SETE DIAS FORA DA `main`.
+            O commit 3adbd5aa (2026-08-13) reescreveu a copy desta tela e levou
+            o `<img>` junto. O que restou: a tela dizia "Escaneie o código
+            abaixo com o celular que vai atender" e não havia código nenhum
+            abaixo — no passo em que o dono acabou de instalar o produto e está
+            com o celular na mão.
+
+            Nada reprovou. `showQr` e `qrTick` viraram variáveis mortas, e
+            variável morta é WARNING no eslint deste repo, não erro. A única
+            prova que olharia a tela é a J1.5 de `vps-fresh-onboarding.spec.ts`
+            — a spec que não rodava em job nenhum, e é por isso que ela passou
+            a rodar (ver o job `e2e-onboarding-fresco` em .github/workflows/e2e.yml).
+
+            `key={qrTick}` não é enfeite: o QR do WAHA expira em poucos
+            minutos, e sem trocar a `key` (e o `?t=`) o browser serve a imagem
+            do cache e a pessoa escaneia um código morto para sempre.
+          */}
+          {showQr && (
+            <div className="mt-4 flex flex-col items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                key={qrTick}
+                src={`/api/v1/onboarding/whatsapp/qr?t=${qrTick}`}
+                alt="QR Code para conectar WhatsApp"
+                className="h-64 w-64 rounded-md border bg-white p-2"
+              />
+              <p className="max-w-xs text-center text-xs text-muted-foreground">
+                No celular: WhatsApp → Configurações → Aparelhos conectados →
+                Conectar um aparelho → aponte para o código acima.
+              </p>
+            </div>
+          )}
+
           {status === "WORKING" && (
             <p className="mt-3 text-sm font-medium text-emerald-700 dark:text-emerald-400">
               ✓ Conectado! Avançando…
