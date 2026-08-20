@@ -13057,6 +13057,38 @@ where unread_count_for_assignee <> coalesce((
 
 notify pgrst, 'reload schema';
 
+-- ---- atribuição de anúncio: de qual campanha um contato do WhatsApp veio (migration 0164) ----
+--
+-- ⚠️ ENTRA ANTES DO BLOCO DA VARREDURA anon, pelo mesmo motivo das funções
+-- acima: `tests/unit/varredura-anon-e-o-ultimo-bloco.test.ts` proíbe `create
+-- function` depois dele.
+create or replace function public.fn_estampar_atribuicao_de_anuncio(
+  p_contact uuid,
+  p_platform text,
+  p_metadata jsonb
+) returns void
+  language plpgsql
+  security definer
+  set search_path to 'public'
+as $$
+begin
+  update public.contacts
+  set
+    source = p_platform,
+    source_metadata = source_metadata || p_metadata,
+    updated_at = now()
+  where id = p_contact
+    and source_metadata->>'ad_platform' is null;
+end;
+$$;
+
+comment on function public.fn_estampar_atribuicao_de_anuncio(uuid, text, jsonb) is
+  'Grava de qual anúncio (Meta Ads / Google Ads) um contato veio — só na primeira vez. `source_metadata = source_metadata || p_metadata` faz merge, nunca sobrescreve o que fn_upsert_wa_contact já gravou (waha_lid, waha_chat_id, notify_name). A guarda `source_metadata->>''ad_platform'' is null` é o primeiro-toque: clicar em outro anúncio meses depois, numa conversa já aberta, não reescreve de onde a pessoa veio originalmente — o UPDATE casa zero linhas, silenciosamente. security definer + revoke de anon/authenticated: só o backend (admin client no ingest de canal) chama isto.';
+
+revoke execute on function public.fn_estampar_atribuicao_de_anuncio(uuid, text, jsonb) from public, anon, authenticated;
+grant  execute on function public.fn_estampar_atribuicao_de_anuncio(uuid, text, jsonb) to service_role;
+
+notify pgrst, 'reload schema';
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

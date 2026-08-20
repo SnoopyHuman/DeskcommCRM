@@ -108,6 +108,17 @@ const schema = z.object({
   // Postgres direto do Supabase (Settings → Database) — só as rotas de skills
   // instaláveis (import/install) usam `pg` cru (mesmo pool do agent-engine).
   SUPABASE_DB_URL: required("SUPABASE_DB_URL"),
+  /**
+   * A conexão de DDL do KIT (install.sh/update.sh/backup.sh), não do app —
+   * declarada aqui só porque o `docker-compose.prod.yml` entrega o `.env`
+   * inteiro ao app e ao worker (`env_file`), e uma chave que chega ao processo
+   * merece estar no contrato em vez de ser um desconhecido tolerado.
+   *
+   * NENHUM código de app pode lê-la: ela é o DONO do banco quando a instalação
+   * é num Supabase próprio, e `SUPABASE_DB_URL` é a role menor de propósito
+   * (issue #192). Vigiado por `tests/unit/env-ddl-fora-do-app.test.ts`.
+   */
+  SUPABASE_DB_ADMIN_URL: z.string().optional().default(""),
 
   // WAHA
   WAHA_API_BASE_URL: required("WAHA_API_BASE_URL"),
