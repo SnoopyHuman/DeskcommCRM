@@ -6,6 +6,7 @@ import { estadoDaJanela, formatarDecorrido } from "@/lib/channels/janela";
 import { JanelaFechadaAviso } from "@/components/inbox/JanelaFechadaAviso";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
 import { useCloseConversation } from "@/hooks/inbox/useCloseConversation";
+import { useMarkAsRead } from "@/hooks/inbox/useMarkAsRead";
 import {
   useConversationsRealtime,
   type ConversationsFilters,
@@ -130,6 +131,11 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
 
   const claim = useClaimConversation();
   const close = useCloseConversation();
+
+  useMarkAsRead(
+    selectedConversation?.id ?? null,
+    selectedConversation?.unread_count_for_assignee ?? 0,
+  );
 
   const handleSelect = useCallback((id: string) => setSelectedId(id), []);
   const handleVisibleChange = useCallback((ids: string[]) => setVisibleIds(ids), []);
