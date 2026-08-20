@@ -261,21 +261,21 @@ Checks **obrigatórios** na branch protection da `main` (verificado na configura
 - **`verify`** (`ci.yml`) — typecheck + lint + test:unit.
 - **`invariants`** (`ci.yml`) — `pnpm test:db`: sobe `pgvector/pgvector:pg17`, aplica `supabase/baseline.sql` em modo install (`ON_ERROR_STOP=1`) e update (idempotência), e roda os testes de invariante, incluindo o de isolamento RLS entre 2 organizações.
 - **`build-and-size`** (`perf.yml`) — `pnpm build` em Node 22.
-- **`e2e`** (`e2e.yml`) — sobe Supabase local, aplica o `baseline.sql` e roda **48 das 49 specs** Playwright (medido em 2026-08-14 @ `587a494d`; **reconte antes de citar** — este número já apodreceu **quatro** vezes). A **única** de fora é `vps-fresh-onboarding` (precisa de WAHA + Redis + Resend + Nuvemshop) — e ela é a **P0** da doutrina de QA Visual, ou seja, `e2e` verde **não** prova a jornada de instalação fresca, que é o produto que se vende.
+- **`e2e`** (`e2e.yml`) — sobe Supabase local, aplica o `baseline.sql` e roda o grosso da suíte Playwright. Somado ao job irmão `e2e-onboarding-fresco` — do mesmo arquivo, que sobe WAHA e Redis das MESMAS imagens da VPS (`docker-compose.e2e.yml`) e prova a jornada de instalação fresca contra um banco de UMA organização —, o workflow executa **49 das 49 specs** do disco. A jornada fresca é a **P0** da doutrina de QA Visual: ela ficou fora de todo job até a issue #179, e na primeira leitura do HEAD pegou o `<img>` do QR Code desaparecido da tela de conectar o WhatsApp havia sete dias. **Estes números não precisam mais ser reconferidos à mão:** `tests/unit/e2e-cobertura-completa.test.ts` lê esta linha e reprova o `verify` quando ela discorda do workflow. O número apodreceu **quatro** vezes enquanto ninguém o lia. ⚠️ `e2e-onboarding-fresco` ainda **não** é check obrigatório (a lista dos obrigatórios está logo abaixo) — ele roda em todo PR e mostra vermelho, mas não barra merge até alguém o promover.
 
-  **A receita antiga de recontagem estava errada** e é provavelmente uma das causas do apodrecimento. `grep -oE '[a-z0-9-]+\.spec\.ts' .github/workflows/e2e.yml | sort -u | wc -l` devolve **49**, não 48 — mas *não* pelo motivo que este parágrafo afirmava até 2026-08-14. Ele dizia "conta menções em COMENTÁRIOS do workflow", e isso é falso: medido, o conjunto de specs citadas fora de variável é **vazio**. O excedente é a `FORA_DO_CI`, que é uma **variável YAML** como as outras — o grep não distingue a variável que o CI *invoca* da que ele só *declara*. Medir o arquivo inteiro mede quem é citado, não quem é invocado. O que roda são as `SPECS_PARTE_*`:
+  **A receita de recontagem, para quando ela for mesmo necessária.** `grep -oE '[a-z0-9-]+\.spec\.ts' .github/workflows/e2e.yml | sort -u | wc -l` **não serve**: ele mede quem é *citado* no arquivo, não quem é *invocado* — variável que só declara (`FORA_DO_CI`) entra na conta junto com as que o CI executa. O que roda são as listas `SPECS_*`:
 
   ```bash
-  ls tests/e2e/*.spec.ts | wc -l                    # 49 em disco
-  python3 - <<'PY'                                  # 48 que o CI invoca
+  ls tests/e2e/*.spec.ts | wc -l                    # o que existe no disco
+  python3 - <<'PY'                                  # o que o CI invoca, por job
   import re
   y = open(".github/workflows/e2e.yml", encoding="utf-8").read()
-  print(len({s for _, c in re.findall(r'(SPECS_PARTE_\d+):\s*>-\n((?:[ ]{8,}.*\n)+)', y)
-               for s in re.findall(r'[a-z0-9-]+\.spec\.ts', c)}))
+  for nome, corpo in re.findall(r'(SPECS_[A-Z0-9_]+):\s*>-\n((?:[ ]{8,}.*\n)+)', y):
+      print(nome, len(set(re.findall(r'[a-z0-9-]+\.spec\.ts', corpo))))
   PY
   ```
 
-  **E a recontagem já não é o conserto.** A quarta vez era a condição que o PR #242 pôs para parar de recontar — ela aconteceu. O conserto devido é `tests/unit/e2e-cobertura-completa.test.ts` passar a cobrar também o texto daqui, como já cobra as três listas do workflow (medido em 2026-08-14: ele não cobra — `grep -c 'CLAUDE.md' tests/unit/e2e-cobertura-completa.test.ts` devolve 0). Prosa que nenhum gate lê é prosa que diverge — e uma triagem que a use como régua mede contra o número errado, que é o modo de falha nº 1 do procedimento.
+  **E a recontagem deixou de ser o conserto — o conserto foi feito.** A quarta vez era a condição que o PR #242 pôs para parar de recontar; ela aconteceu, e a issue #179 pagou a dívida: `tests/unit/e2e-cobertura-completa.test.ts` agora cobra **também o texto deste arquivo** (antes, `grep -c 'CLAUDE.md'` naquele teste devolvia 0). Se você mudar as listas do workflow sem mudar esta linha, o `verify` fica vermelho — e é assim que se para de medir contra a régua errada, que é o modo de falha nº 1 do procedimento de triagem.
 - **`imagens-ok`** (`publish-image.yml`) — reprova quando qualquer uma das três imagens Docker não constrói. **É obrigatório desde 2026-08-13**; este arquivo dizia o contrário em outro parágrafo (ver a doutrina de packaging acima, já corrigida).
 
 Todos os **cinco** são **obrigatórios** — medido em 2026-08-14 na branch protection:

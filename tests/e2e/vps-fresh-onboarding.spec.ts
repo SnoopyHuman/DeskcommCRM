@@ -179,53 +179,74 @@ test.describe("J1 — onboarding do dono numa instalação fresca", () => {
     await snap(page, "j1.6-setup-ai");
   });
 
-  test("J1.7 setup IA: cria agente default e avança", async ({ page }) => {
+  test("J1.7 setup IA sem chave (a VPS fresca): cria o agente e DIZ que ficou rascunho", async ({
+    page,
+  }) => {
     await login(page);
     await page.waitForURL(/\/onboarding\/setup-ai/);
 
     await page.locator("#name").fill("Tomik QA");
     await page.getByRole("button", { name: /criar e continuar/i }).click();
-    // O wizard ganhou um passo entre treinar e chamar o time: ver o
-    // funcionário atender. Terminar sem nunca tê-lo visto fazer nada era como
-    // o onboarding entregava a pessoa num inbox vazio.
-    await page.waitForURL(/\/onboarding\/testar/, { timeout: 20_000 });
-    await snap(page, "j1.7-testar");
+
+    // ⚠️ ESTE CASO AFIRMAVA "publicado", E ISSO NUNCA FOI A VERDADE DA VPS
+    // FRESCA. Uma instalação recém-feita não tem chave de IA nenhuma —
+    // `gerar-env-e2e.sh` não escreve uma, e o instalador não obriga a colar a
+    // chave para terminar. `createDefaultAgent` então volta com
+    // `reason: "sem_chave"`, o agente fica RASCUNHO, e a versão publicada não
+    // existe. Exigir `status: "published"` só passaria num ambiente que já
+    // tinha chave — isto é, em qualquer coisa MENOS a instalação fresca que
+    // esta spec existe para provar.
+    //
+    // O que continua guardado, e é o que importa: o agente EXISTE, é o padrão,
+    // e a tela não mente sobre o estado dele.
+    const alerta = page.getByRole("alert").filter({ hasText: /rascunho/i }).first();
+    await expect(alerta).toBeVisible({ timeout: 20_000 });
+    await expect(alerta).toContainText(/chave/i);
+    await snap(page, "j1.7-rascunho-sem-chave");
 
     const { data: agents } = await svc
       .from("ai_agents")
       .select("id, name, is_active, is_default, published_version_id");
     expect(agents?.length).toBe(1);
     expect(agents?.[0]).toMatchObject({ name: "Tomik QA", is_active: true, is_default: true });
+    expect(agents?.[0]?.published_version_id).toBeNull();
 
-    // A VERSÃO, e não só o agente. Este caso olhava apenas `ai_agents` — e foi
-    // por isso que a regressão do provedor nasceu invisível: o agente ficava
-    // bonito na tabela enquanto a versão publicada apontava para uma empresa de
-    // IA que a instalação não contratou, morrendo em toda mensagem.
+    // Rascunho é rascunho no BANCO também. A regressão que este par de
+    // asserções pega é a inversa da antiga: publicar sem chave — o agente
+    // ficaria "Publicado" na tela e morreria em `credential_decrypt_failed` na
+    // primeira mensagem de um cliente de verdade.
     const { data: versoes } = await svc
       .from("ai_agent_versions")
-      .select("provider, model, status, channel_session_id")
+      .select("id")
       .eq("agent_id", agents?.[0]?.id ?? "");
-    expect(versoes?.length).toBe(1);
-    expect(versoes?.[0]?.status).toBe("published");
+    expect(versoes?.length).toBe(0);
 
-    // E o provedor da versão é o MESMO que a instalação escolheu. Comparar com
-    // uma string fixa aqui não provaria nada: o teste passaria justamente na
-    // instalação Anthropic, que é a única em que o defeito não aparecia.
-    const { data: org } = await svc.from("organizations").select("settings").limit(1).maybeSingle();
-    const escolhido =
-      (org?.settings as { llm?: { provider?: string } } | null)?.llm?.provider ?? "anthropic";
-    expect(versoes?.[0]?.provider).toBe(escolhido);
+    // E o passo tem SAÍDA. Sem este botão o wizard vira beco: diagnóstico certo
+    // e nenhum caminho adiante, no passo que toda instalação sem chave alcança.
+    await page.getByRole("button", { name: /continuar sem publicar/i }).click();
+    await page.waitForURL(/\/onboarding\/funil/, { timeout: 20_000 });
+  });
 
-    // O modelo veio do catálogo DAQUELE provedor — nunca um id emprestado.
-    const { data: curado } = await svc
-      .from("ai_models")
-      .select("model_id")
-      .eq("provider", escolhido)
-      .eq("is_default_for_provider", true)
-      .is("deprecated_at", null)
-      .limit(1)
-      .maybeSingle();
-    expect(versoes?.[0]?.model).toBe(curado?.model_id);
+  test("J1.26 o quadro de clientes: sem IA, o passo ainda entrega um quadro", async ({ page }) => {
+    // O passo nasceu depois desta spec e ela não o conhecia — o caso seguinte
+    // esperava cair em `/onboarding/testar` direto do setup-ai e reprovava por
+    // timeout. Passo novo que nenhuma prova percorre é passo que só o primeiro
+    // usuário descobre.
+    await login(page);
+    await page.waitForURL(/\/onboarding\/funil/, { timeout: 20_000 });
+    await expect(
+      page.getByRole("heading", { name: /onde ele organiza seus clientes/i }),
+    ).toBeVisible();
+
+    // Falha ABERTA na informação: sem chave de IA não há sugestão, e a tela diz
+    // isso em vez de entregar o funil de e-commerce em silêncio.
+    await expect(page.getByText(/não consegui pedir uma sugestão/i)).toBeVisible({
+      timeout: 20_000,
+    });
+    await snap(page, "j1.26-quadro-sem-ia");
+
+    await page.getByRole("button", { name: /usar este quadro/i }).click();
+    await page.waitForURL(/\/onboarding\/testar/, { timeout: 30_000 });
   });
 
   test("J1.24 ver ele atender: o wizard não termina sem mostrar o funcionário", async ({ page }) => {
@@ -259,7 +280,13 @@ test.describe("J1 — onboarding do dono numa instalação fresca", () => {
 
     // Honestidade: sem RESEND_API_KEY nenhum email sai. A UI deve dizer isso
     // e oferecer o link de aceite copiável (nunca redirecionar em silêncio).
-    await expect(page.getByText(/não está configurado neste servidor/i)).toBeVisible({
+    //
+    // ⚠️ O TEXTO COBRADO AQUI JÁ ESTAVA VENCIDO. Era "não está configurado
+    // neste servidor" e o commit 3adbd5aa (2026-08-13) trocou a frase por
+    // "Esta instalação não envia e-mail." — reescrita legítima, que só não
+    // apareceu como quebra porque nenhum job rodava esta spec. É o mesmo commit
+    // que apagou o QR Code da tela anterior.
+    await expect(page.getByText(/esta instalação não envia e-mail/i)).toBeVisible({
       timeout: 15_000,
     });
     const acceptUrl = (

@@ -1,12 +1,19 @@
 name: e2e
 
-# Issue #63: as specs de tests/e2e/ não rodavam em lugar nenhum. Este job fecha o
-# buraco com o subconjunto que não depende de serviço externo.
+# Issue #63: as specs de tests/e2e/ não rodavam em lugar nenhum. O job `e2e`
+# fechou o buraco com o subconjunto que não depende de serviço externo.
+#
+# Issue #179: sobrou UMA de fora — `vps-fresh-onboarding`, a P0 da doutrina de
+# QA Visual, que é a jornada de quem acabou de instalar o produto numa VPS. Ela
+# agora roda no job `e2e-onboarding-fresco`, mais abaixo, contra WAHA e Redis de
+# verdade e um banco de UMA organização. O que ela pegou na primeira leitura do
+# HEAD: o `<img>` do QR Code tinha sumido da tela de conectar o WhatsApp sete
+# dias antes (commit 3adbd5aa), e nada no CI reprovou.
 #
 # NÃO conte aqui quantas são: o summary do job CONTA em vez de afirmar, e
 # `tests/unit/e2e-cobertura-completa.test.ts` reprova o build quando uma spec do
-# disco não está em nenhuma das três listas abaixo. Um número escrito nesta linha
-# é a quarta fonte da mesma verdade, e as três anteriores já divergiram — este
+# disco não está em nenhuma das listas deste arquivo. Um número escrito nesta
+# linha é mais uma fonte da mesma verdade, e as anteriores já divergiram — este
 # cabeçalho dizia "29 de 33" quando o disco tinha 45 e o job rodava 44.
 #
 # A execução é dividida em DUAS invocações do playwright de propósito: o
@@ -72,10 +79,12 @@ jobs:
     # Cobertura parcial silenciosa se lê como cobertura total. Agora há UMA fonte
     # por lista, o summary CONTA em vez de afirmar, e
     # `tests/unit/e2e-cobertura-completa.test.ts` reprova o build quando um arquivo
-    # de spec não está em nenhuma das três listas.
+    # de spec não está em nenhuma lista deste arquivo — as duas daqui, a
+    # `SPECS_ONBOARDING_FRESCO` do outro job, e a `FORA_DO_CI` quando existir.
     #
-    # FORA_DO_CI exige motivo escrito no próprio nome do bloco abaixo — spec fora
-    # do gate sem razão declarada é a dívida voltando pela porta de serviço.
+    # FORA_DO_CI exige motivo escrito no comentário que a acompanha — spec fora
+    # do gate sem razão declarada é a dívida voltando pela porta de serviço. Ela
+    # está VAZIA hoje (isto é: removida), e o bloco mais abaixo diz por quê.
     # ─────────────────────────────────────────────────────────────────────────
     #
     # ═══ O 429 DE `olhar-telas-do-epico`: RESOLVIDO DUAS VEZES, EM CAMADAS DIFERENTES ═══
@@ -202,48 +211,43 @@ jobs:
         followup-dossie.spec.ts followup-tempo-adaptativo.spec.ts
         gatilho-de-etapa.spec.ts gatilho-de-caso.spec.ts
         marca-logo.spec.ts
-      # Cada item aqui tem o motivo MEDIDO, não presumido — e o gate cobra que a
-      # lista exista e some com as outras duas.
+      # ═══ `FORA_DO_CI` NÃO EXISTE MAIS NESTE ARQUIVO — E ISSO É UMA AFIRMAÇÃO ═══
       #
-      # `vps-fresh-onboarding` fica fora por DUAS razões, e só a primeira estava
-      # escrita — com o número errado, contradito 8 linhas abaixo neste mesmo
-      # arquivo, que já usava 17 como controle positivo:
+      # A lista tinha UM item, `vps-fresh-onboarding.spec.ts`, com duas razões
+      # escritas. As duas deixaram de valer, e por caminhos diferentes:
       #
-      #   (1) 17 linhas dependem de WAHA/Resend/Nuvemshop/Redis
-      #       (`grep -ciE "waha|resend|nuvemshop|redis"` → 17 linhas, 22 ocorrências).
+      #   (1) "depende de WAHA/Resend/Nuvemshop/Redis". Parcialmente falso, e a
+      #       parte falsa é a que travava. MEDIDO no HEAD desta branch:
       #
-      #   (2) `orgRow()` (`:41-43`) faz `.limit(1).single()` em `organizations` —
-      #       pressupõe banco de UMA organização só. O banco do CI é compartilhado
-      #       entre as duas partes do job, e `signup-journey.spec.ts:32` cria uma
-      #       segunda org sem cleanup: quando a parte 2 começa há ≥2, e o `.single()`
-      #       falha. Esta razão NÃO se resolve com variável de ambiente — é o desenho
-      #       do rig, e é por isso que "basta dar as credenciais" não destrava.
+      #         $ grep -oiE "waha|resend|nuvemshop|redis" \
+      #             tests/e2e/vps-fresh-onboarding.spec.ts | sort | uniq -c
+      #           1 nuvemshop   1 Nuvemshop   1 Redis
+      #           1 resend      1 Resend      2 RESEND
+      #           8 waha        6 WAHA
       #
-      # Continua sendo a P0 da doutrina de QA Visual: `e2e` verde NÃO prova a
-      # jornada de instalação fresca, que é o produto que se vende.
+      #       Resend e Nuvemshop aparecem só em COMENTÁRIO e em ASSERÇÃO DE
+      #       AUSÊNCIA: J1.8 exige que a tela diga que a instalação não manda
+      #       e-mail, e J1.6 exige que pular o WhatsApp caia em `setup-ai`
+      #       porque o passo da loja não existe com `NUVEMSHOP_ENABLED` falso.
+      #       Subir dublê dos dois inverteria as duas asserções. O que a spec
+      #       de fato precisa é WAHA (8+6 usos, `/api/sessions` e o QR) e Redis
+      #       — e os dois são os MESMOS serviços do `docker-compose.prod.yml`,
+      #       via `docker-compose.e2e.yml`.
       #
-# As CINCO specs da missão "Follow-up Vivo" (`followup-linguagem`,
-      # `followup-ramos`, `followup-dossie`, `followup-tempo-adaptativo`,
-      # `gatilho-de-etapa`) entraram nas listas de execução, e não aqui, porque a
-      # medição não dá motivo para excluí-las: grep de waha/resend/nuvemshop/redis
-      # devolve **0 em todas as cinco** (controle positivo: `vps-fresh-onboarding`
-      # devolve 17). Usam o endpoint de cron, como a `followup-journey` que já roda.
+      #   (2) "`orgRow()` faz `.limit(1).single()`, e o banco do job tem ≥2
+      #       organizações". Verdade, e é por isso que a spec NÃO entrou nas
+      #       listas acima: ela roda num JOB SEPARADO, com banco próprio, onde
+      #       só o `bootstrap-owner.ts` corre — uma organização, como na VPS
+      #       recém-instalada. A razão não foi contornada; o rig foi desenhado
+      #       para ela.
       #
-      # ⚠️ O QUE NÃO ESTÁ MEDIDO: elas passam LOCALMENTE, e verde local não é verde
-      # de CI. Nenhuma delas rodou num job ainda — foram escritas nesta missão e
-      # ficaram fora de todas as listas, isto é, existiam e nenhum job as invocava.
-      # A primeira execução do `e2e` neste PR é que decide; se alguma reprovar por
-      # ambiente, o lugar dela é aqui embaixo COM o motivo medido, nunca uma
-      # exclusão preventiva "por garantia" — que é exatamente a dívida entrando
-      # pela porta de serviço que este bloco existe para barrar.
+      # O mecanismo `FORA_DO_CI` continua SUPORTADO por
+      # `tests/unit/e2e-cobertura-completa.test.ts`: quando alguma spec voltar a
+      # ficar de fora, redeclare a variável AQUI com o motivo medido no
+      # comentário. O que não pode voltar é uma spec sumir de todas as listas.
       #
-      # `prova-painel-provedores` esteve aqui e SAIU: em 2026-08-08 o caso F3 exigia
-      # mais de 50 modelos da OpenRouter e o catálogo chegava ao CI com 2 linhas — a
-      # spec media a sorte do ambiente. `scripts/seed-e2e-catalogo-openrouter.ts`
-      # (main, 2026-08-09) semeia o catálogo no job, então a condição que a excluía
-      # deixou de existir e ela voltou para a lista de execução.
-      FORA_DO_CI: >-
-        vps-fresh-onboarding.spec.ts
+      # (`prova-painel-provedores` esteve na lista e saiu em 2026-08-09, quando
+      # `scripts/seed-e2e-catalogo-openrouter.ts` passou a semear o catálogo.)
     steps:
       - uses: actions/checkout@v7
 
@@ -475,17 +479,24 @@ jobs:
           # existia para declarar a lacuna estava, ela mesma, desatualizada.
           NO_DISCO=$(ls tests/e2e/*.spec.ts | wc -l | tr -d ' ')
           RODOU=$(echo $SPECS_PARTE_1 $SPECS_PARTE_2 | wc -w | tr -d ' ')
-          FORA=$(echo $FORA_DO_CI | wc -w | tr -d ' ')
+          FORA=$(echo ${FORA_DO_CI:-} | wc -w | tr -d ' ')
           {
             echo "## E2E — cobertura deste job"
             echo ""
             echo "**Rodou: ${RODOU} de ${NO_DISCO} specs.**"
             echo ""
-            echo "**Não rodou (${FORA}):**"
-            for s in $FORA_DO_CI; do echo "- \`${s}\` — precisa de WAHA + Redis + Resend + Nuvemshop (P0 da doutrina de QA Visual)"; done
+            echo "O resto roda no job \`e2e-onboarding-fresco\`, que sobe WAHA e Redis"
+            echo "e prova a jornada de instalação fresca contra um banco de UMA organização."
+            echo ""
+            echo "**Fora de todo job (${FORA}):**"
+            if [ "$FORA" = "0" ]; then
+              echo "- nenhuma."
+            else
+              for s in $FORA_DO_CI; do echo "- \`${s}\` — ver o motivo medido no comentário de \`FORA_DO_CI\`"; done
+            fi
             echo ""
             echo "A soma é conferida mecanicamente por \`tests/unit/e2e-cobertura-completa.test.ts\`:"
-            echo "spec no disco que não esteja em nenhuma das três listas reprova o build."
+            echo "spec no disco que não esteja em nenhuma das listas reprova o build."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
@@ -495,4 +506,158 @@ jobs:
           path: |
             playwright-report/
             test-results/
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # A JORNADA DE INSTALAÇÃO FRESCA — a P0 da doutrina de QA Visual.
+  #
+  # Job SEPARADO, e a separação é o desenho, não conveniência:
+  #
+  #  - `orgRow()` da spec faz `.limit(1).single()` em `organizations`. Isso não
+  #    é preguiça do teste: é a afirmação de que uma instalação recém-feita tem
+  #    UMA organização. O banco do job `e2e` acima tem várias (o
+  #    `seed-e2e-credentials` cria a sua, `signup-journey` cria outra), então a
+  #    spec só pode rodar contra um banco em que APENAS o `bootstrap-owner.ts`
+  #    correu — que é literalmente o que o `install.sh` faz na VPS.
+  #  - o rig sobe WAHA e Redis de verdade (`docker-compose.e2e.yml`, `extends`
+  #    do `docker-compose.prod.yml`), e nenhuma outra spec precisa deles.
+  #
+  # ⚠️ AINDA NÃO É CHECK OBRIGATÓRIO. A branch protection tinha, medido em
+  # 2026-08-14: `verify, build-and-size, invariants, e2e, imagens-ok` — este job
+  # não está lá, porque acabou de nascer e ninguém pode adicioná-lo pelo PR.
+  # Ele roda em todo PR e o vermelho aparece na lista de checks; o que ele ainda
+  # NÃO faz é barrar merge. Promover, depois de execuções verdes seguidas:
+  #
+  #   $ gh api -X PATCH repos/melgarafael/DeskcommCRM/branches/main/protection \
+  #       --input <json com o contexto novo somado aos cinco>
+  #
+  # A régua, para reconferir em vez de acreditar nesta linha:
+  #
+  #   $ gh api repos/melgarafael/DeskcommCRM/branches/main/protection \
+  #       --jq '.required_status_checks.contexts|join(", ")'
+  # ═══════════════════════════════════════════════════════════════════════════
+  e2e-onboarding-fresco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Uma lista, um item — e o gate a soma às outras duas. Ela existe como
+      # VARIÁVEL, e não digitada no `run:`, pelo mesmo motivo das de cima: uma
+      # spec só está coberta quando um job a INVOCA, e o teste de cobertura
+      # confere que a variável é passada ao playwright.
+      SPECS_ONBOARDING_FRESCO: >-
+        vps-fresh-onboarding.spec.ts
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: supabase/setup-cli@v3
+        with:
+          version: latest
+
+      # Mesmo prelúdio do job de cima, e pelo mesmo motivo: a cadeia de
+      # migrations não sobe em banco novo; o que o self-hoster aplica é o
+      # `baseline.sql`.
+      - name: Subir Supabase local (sem a cadeia de migrations)
+        run: |
+          mv supabase/migrations /tmp/migrations-off
+          mkdir -p supabase/migrations
+          supabase start
+
+      - name: Habilitar extensões exigidas pelo baseline
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -v ON_ERROR_STOP=1 -q <<'SQL'
+          create schema if not exists extensions;
+          create extension if not exists "uuid-ossp" with schema extensions;
+          create extension if not exists pgcrypto with schema extensions;
+          create extension if not exists vector with schema public;
+          create extension if not exists citext with schema public;
+          create extension if not exists pg_trgm with schema public;
+          SQL
+
+      - name: Aplicar o baseline.sql (o mesmo que o install.sh do kit aplica)
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            -v ON_ERROR_STOP=1 -q -f supabase/baseline.sql
+
+      - name: Exportar credenciais do stack local
+        run: |
+          supabase status -o env > /tmp/sb.env
+          {
+            echo "NEXT_PUBLIC_SUPABASE_URL=$(grep '^API_URL=' /tmp/sb.env | cut -d'"' -f2)"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$(grep '^ANON_KEY=' /tmp/sb.env | cut -d'"' -f2)"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$(grep '^SERVICE_ROLE_KEY=' /tmp/sb.env | cut -d'"' -f2)"
+          } >> "$GITHUB_ENV"
+
+      - name: Gerar o .env.e2e (ambiente da suíte)
+        run: pnpm e2e:env
+
+      - name: Publicar o .env.e2e no ambiente do job
+        run: grep -vE '^[[:space:]]*(#|$)' .env.e2e >> "$GITHUB_ENV"
+
+      # WAHA + Redis + Redis-HTTP, das MESMAS imagens da VPS. O script deriva
+      # portas e segredos do `.env.e2e` — não há um segundo lugar onde a chave
+      # do WAHA esteja escrita.
+      #
+      # ⚠️ NÃO existe dublê de Resend nem de Nuvemshop, de propósito: a spec
+      # prova a AUSÊNCIA dos dois (é o estado de um primeiro deploy). O motivo
+      # medido está no cabeçalho do `docker-compose.e2e.yml`.
+      - name: Subir o rig da instalação fresca (WAHA + Redis)
+        run: bash scripts/e2e-rig-fresco.sh up
+
+      - name: Build de produção (com o ambiente do E2E)
+        run: pnpm e2e:build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          # `off`, NÃO vazio — vazio seleciona o Sentry DA COMUNIDADE.
+          SENTRY_DSN: "off"
+
+      - name: Instalar o browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      # ⚠️ AQUI NÃO RODA `seed-e2e-credentials.ts`, e a ausência é a precondição
+      # do teste. Aquele seed cria a SEGUNDA organização, e a spec afirma que
+      # uma instalação recém-feita tem uma só. O único bootstrap é o mesmo que o
+      # `install.sh` executa na VPS.
+      - name: Bootstrap do dono (o que o install.sh faz na VPS)
+        run: |
+          cp .env.e2e .env.local
+          pnpm exec tsx scripts/bootstrap-owner.ts
+        env:
+          OWNER_EMAIL: dono@qa.local
+          OWNER_PASSWORD: "QaVps!2026#Dono"
+          # O nome DEFAULT de propósito: o instalador nunca pergunta o nome do
+          # negócio, e o passo 1 do wizard trata "Minha Empresa" como
+          # placeholder (`aindaSemNomeProprio`). Batizar a organização aqui
+          # esconderia esse caminho.
+          OWNER_ORG_NAME: Minha Empresa
+
+      # Sem `AUTH_RATE_LIMIT_LOGIN_IP` de propósito: este job TEM Redis de
+      # verdade, e a jornada faz ~14 logins contra um teto de 60/300s. Afrouxar
+      # o limitador aqui desligaria justamente a peça que o rig existe para
+      # exercitar.
+      - name: E2E — jornada de instalação fresca
+        run: pnpm exec playwright test --workers=1 $SPECS_ONBOARDING_FRESCO
+        env:
+          SENTRY_DSN: "off"
+
+      - name: Logs do rig quando a jornada reprova
+        if: failure()
+        run: bash scripts/e2e-rig-fresco.sh logs || true
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report-onboarding-fresco
+          path: |
+            playwright-report/
+            test-results/
+            .superpowers/evidence/vps-qa/
           retention-days: 7

@@ -1,0 +1,87 @@
+# Os serviços externos de que a jornada de instalação FRESCA precisa — WhatsApp
+# (WAHA) e Redis — para que `tests/e2e/vps-fresh-onboarding.spec.ts` possa rodar
+# num runner de CI e na máquina de quem desenvolve.
+#
+# ═══ POR QUE ESTE ARQUIVO NÃO REDECLARA NADA ═══
+#
+# Cada serviço aqui é `extends` do `docker-compose.prod.yml`. Imagem, tag,
+# digest, engine do WAHA, flags — tudo vem de lá. Copiar as linhas criaria uma
+# SEGUNDA VERDADE: o dia em que a VPS pinasse outra tag do WAHA, o CI seguiria
+# provando a instalação fresca contra um transporte que ninguém mais roda, e o
+# verde deixaria de significar o que diz.
+#
+# `extends` não copia `depends_on` (é ignorado por desenho do Compose) — por
+# isso o `srh` o redeclara abaixo. Volumes nomeados precisam ser declarados
+# neste arquivo; o Compose os prefixa com o nome do PROJETO, então não colidem
+# com os da stack de produção na mesma máquina.
+#
+# ═══ E POR QUE NÃO HÁ DUBLÊ DE RESEND NEM DE NUVEMSHOP ═══
+#
+# MEDIDO na spec: ela não CHAMA nenhum dos dois — ela prova a AUSÊNCIA deles,
+# que é o estado real de um primeiro deploy.
+#
+#   $ grep -n "resend\|nuvemshop" -i tests/e2e/vps-fresh-onboarding.spec.ts
+#   7:  - WAHA ativo, Redis local, RESEND_API_KEY VAZIO (realidade da VPS fresca)
+#   174:  // Com Nuvemshop desabilitado (VPS fresca), pular o WhatsApp deve cair
+#   253:  test("J1.8 convite SEM Resend: a UI não pode mentir que enviou email"...
+#
+# J1.8 exige que a tela diga que a instalação não manda e-mail e ofereça o link
+# de aceite; J1.6 exige que pular o WhatsApp caia em `setup-ai` porque o passo
+# da loja NÃO EXISTE quando `NUVEMSHOP_ENABLED` é falso. Subir dublê dos dois
+# não tornaria a prova mais forte: inverteria as duas asserções e reprovaria a
+# spec. Quando existir caso que EXERCITE o envio, o dublê entra junto com ele —
+# receiver HTTP de verdade, como manda a doutrina de QA Visual, nunca mock em
+# processo.
+#
+# ═══ FIAÇÃO: uma fonte só, o `.env.e2e` ═══
+#
+# Portas e segredos NÃO estão escritos aqui. `scripts/e2e-rig-fresco.sh` os
+# deriva do `.env.e2e` — o mesmo arquivo que o app sob teste lê. Um hash de
+# chave copiado para cá seria a terceira redação do mesmo segredo, e as duas
+# anteriores já divergiram (ver o comentário do `INTERNAL_SECRET` no e2e.yml).
+#
+#   Uso:  bash scripts/e2e-rig-fresco.sh up     (e `down` para derrubar)
+
+services:
+  waha:
+    extends:
+      file: docker-compose.prod.yml
+      service: waha
+    ports:
+      - "${E2E_WAHA_PORT}:3000"
+    # A stack de produção não declara healthcheck para o WAHA (o Caddy depende
+    # do app, não dele). Aqui ele é obrigatório: o rig só pode devolver o
+    # controle quando o transporte responde, senão J1.5 corre contra um QR que
+    # ainda não existe. `/ping` é o único endpoint sem auth desta build.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 5s
+
+  redis:
+    extends:
+      file: docker-compose.prod.yml
+      service: redis
+
+  srh:
+    extends:
+      file: docker-compose.prod.yml
+      service: srh
+    ports:
+      - "${E2E_SRH_PORT}:80"
+    # `extends` ignora `depends_on` de propósito (Compose), então a ordem que a
+    # produção declara precisa ser reescrita — sem isto o srh sobe antes do
+    # redis e o primeiro `INCR` do limitador cai no fallback em memória.
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  waha-data:
+  waha-media:
+
+networks:
+  internal:
+    driver: bridge

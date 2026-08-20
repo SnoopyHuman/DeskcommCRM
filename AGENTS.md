@@ -70,12 +70,15 @@ mudança toca schema, RLS ou UI, `gov:verify` verde **não** é prova — rode `
 **O que o CI cobre.** `.github/workflows/ci.yml`: `verify` = typecheck + lint + test:unit;
 `invariants` = `pnpm test:db` (isolamento RLS + invariantes de governança contra Postgres
 efêmero pg17). `.github/workflows/perf.yml`: `build-and-size` = `pnpm build`.
-`.github/workflows/e2e.yml` roda **45 das 46 specs** Playwright contra um Supabase local de
-verdade com o `baseline.sql` aplicado — o mesmo banco que o self-hoster tem. **É check
-obrigatório desde 2026-08-08.** A **única** de fora é `vps-fresh-onboarding` (WAHA + Redis +
-Resend + Nuvemshop; é a P0 da doutrina de QA) — ou seja, `e2e` verde não prova a jornada de
-instalação fresca. `followup-journey`, `webhooks` e `capacidades-do-agente` estiveram fora e
-**voltaram**: rodam hoje (`e2e.yml`, listas `SPECS_PARTE_1`/`SPECS_PARTE_2`).
+`.github/workflows/e2e.yml` roda a suíte Playwright contra um Supabase local de verdade com o
+`baseline.sql` aplicado — o mesmo banco que o self-hoster tem. São DOIS jobs: `e2e` (**check
+obrigatório desde 2026-08-08**) roda o grosso, e `e2e-onboarding-fresco` (issue #179) sobe WAHA
+e Redis das mesmas imagens da VPS e roda a jornada de instalação fresca, a P0 da doutrina de QA.
+**Nenhuma spec do disco fica de fora dos dois** — e não é promessa: quem confere é
+`tests/unit/e2e-cobertura-completa.test.ts`, no `verify`, que também cobra os números escritos no
+`CLAUDE.md`. Não recopie contagem para cá; a que vale está lá e é a única que um gate lê.
+⚠️ `e2e-onboarding-fresco` ainda **não** está na branch protection: ele mostra vermelho, não barra
+merge.
 
 `.github/workflows/publish-image.yml`: `imagens-ok` = as três imagens Docker constroem. **Obrigatório
 desde 2026-08-13.**
@@ -160,17 +163,18 @@ Medido em 2026-08-14 @ `741c4ec8`, com o comando ao lado de cada número:
 - **102** arquivos de invariante de banco em `tests/invariants/` (`git ls-files 'tests/invariants/*.test.ts' | wc -l`) — RLS/isolamento cross-tenant,
   RBAC, governança (G1–G6). Excluídos do `test:unit` de propósito; rodam via `pnpm test:db`
   **e no job `invariants` do CI**.
-- **46** specs Playwright em `tests/e2e/` (`ls tests/e2e/*.spec.ts | wc -l`). **45 rodam no CI** (via `e2e.yml`,
-  **obrigatório**). A única de fora é `vps-fresh-onboarding`, por dependência de serviço externo
-  (WAHA/Redis/Resend/Nuvemshop). Ver issue #63.
+- Specs Playwright em `tests/e2e/` (`ls tests/e2e/*.spec.ts | wc -l`). **Todas rodam no CI**,
+  divididas entre os jobs `e2e` (obrigatório) e `e2e-onboarding-fresco` (issue #179, ainda não
+  obrigatório). Spec que não esteja em nenhuma lista reprova o `verify`. Ver issues #63 e #179.
 
 ## Limitações conhecidas (estado em 2026-07-29, contra `origin/main` @ 789dfa6)
 
-- **1 das 46 specs E2E segue fora do CI** (`vps-fresh-onboarding`), e o `e2e` **é** check
-  obrigatório desde 2026-08-08. Ou seja: um PR que quebre o `e2e` não entra — mas a jornada de
-  instalação fresca, que é o produto que se vende, continua sem gate. Se você mexeu nela, a
-  prova é sua. *(Corrigido em 2026-08-14; a redação anterior — "4 das 32, não-obrigatório" —
-  mudava a régua de qualquer triagem que a lesse.)*
+- **A jornada de instalação fresca já tem job, mas ele ainda não barra merge.**
+  `vps-fresh-onboarding` rodava em job NENHUM até a issue #179; agora roda em
+  `e2e-onboarding-fresco`, que não está na branch protection. Vermelho ali aparece na lista de
+  checks e não segura o merge — até alguém promovê-lo. Se você mexeu nessa jornada, olhe o job.
+  *(As duas redações anteriores deste item — "4 das 32, não-obrigatório" e "1 das 46 fora do CI" —
+  mudavam a régua de qualquer triagem que as lesse.)*
 - Rate limit HTTP: `lib/auth/rate-limit.ts` cobre **login, signup, recuperação de senha e
   aceite de convite** (contando por IP **e** por identificador hasheado); `checkRateLimit` cobre
   o webhook de captação e o dispatcher de IA. **Crons e MCP seguem sem.** Meça antes de agir:

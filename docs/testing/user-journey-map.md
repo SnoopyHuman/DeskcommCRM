@@ -23,9 +23,9 @@
 Contexto do código: primeiro usuário nasce do `scripts/bootstrap-owner.ts`
 (install.sh); quem é convidado e ainda não tem conta entra por `/signup?invite=`.
 Wizard: welcome → whatsapp → (nuvemshop se `NUVEMSHOP_ENABLED`) → setup-ai →
-**testar** → invite-team → done. A ordem, os rótulos e o resumo final saem de uma
+**funil** → **testar** → invite-team → done. A ordem, os rótulos e o resumo final saem de uma
 fonte só (`lib/onboarding/passos.ts`) — eram três listas que discordavam. Gate:
-`organizations.onboarded_at`. MFA obrigatório pra admin logo após o wizard.
+`organizations.onboarded_at`. MFA é OPCIONAL e se liga em Configurações › Segurança (ver J1.33–J1.35).
 
 | # | Caso | Expectativa |
 |---|------|-------------|
@@ -66,9 +66,11 @@ fonte só (`lib/onboarding/passos.ts`) — eram três listas que discordavam. Ga
 | J1.34 | Ligar e desligar a verificação, pela tela | o único ponto de cadastro do produto era o próprio bloqueador — sem um botão em Configurações › Segurança, tornar o cadastro opcional deixaria a proteção INALCANÇÁVEL. E desligar não existia em lugar nenhum: `enrollMfa` só apaga fator não verificado. Desligar o próprio fator exige sessão `aal2`, senão uma sessão roubada desliga a proteção com um clique · **PASS** (`tests/e2e/mfa-opcional.spec.ts`) |
 | J1.35 | Cadastrar e PROVAR são perguntas diferentes | `mfaEmDivida()` começava consultando a política, então quem ativasse a verificação por vontade própria teria o fator ignorado na sessão — o mesmo que não ter. Com o cadastro opcional isso viraria o buraco central da mudança. Agora quem TEM fator prova, sempre, qualquer que seja o papel · **PASS** (`tests/unit/require-role-mfa.test.ts` — o caso do manager INVERTEU, e a inversão aperta) |
 
-> **Cobertura em camadas (J1.22/J1.23):** a decisão de *não provisionar* é provada por unitário, porque é uma função pura e roda no gate obrigatório. O caso de tela cobre o caminho visível (CTA → signup com o token → campos certos). O que **não** está coberto ponta a ponta é a volta do link de confirmação de e-mail: exigiria caixa de e-mail no e2e, e a spec que faria isso é a de instalação fresca, que está fora do CI.
+> **Cobertura em camadas (J1.22/J1.23):** a decisão de *não provisionar* é provada por unitário, porque é uma função pura e roda no gate obrigatório. O caso de tela cobre o caminho visível (CTA → signup com o token → campos certos). O que **não** está coberto ponta a ponta é a volta do link de confirmação de e-mail: exigiria caixa de e-mail no e2e. A spec de instalação fresca — que é quem faria isso — já roda no CI (job `e2e-onboarding-fresco`), mas não cobre este caminho.
 
-> **A jornada J1 passou a ter GATE.** `tests/e2e/wizard-do-funcionario.spec.ts` roda no CI (SPECS_PARTE_1) e cobre o wizard inteiro pela tela — do login ao "Começar a usar" — criando a PRÓPRIA organização, porque o seed compartilhado entrega uma já onboardada e zerá-la mandaria as specs seguintes para dentro do onboarding. Fica de fora só o ensaio com resposta real, que exige chave de IA com saldo. `vps-fresh-onboarding.spec.ts` continua fora do gate (depende de WAHA, Redis, Resend e Nuvemshop) e segue sendo a prova mais completa, para rodar à mão.
+> **A jornada J1 passou a ter GATE.** `tests/e2e/wizard-do-funcionario.spec.ts` roda no CI (SPECS_PARTE_1) e cobre o wizard inteiro pela tela — do login ao "Começar a usar" — criando a PRÓPRIA organização, porque o seed compartilhado entrega uma já onboardada e zerá-la mandaria as specs seguintes para dentro do onboarding. Fica de fora só o ensaio com resposta real, que exige chave de IA com saldo. `vps-fresh-onboarding.spec.ts` **entrou no CI** pela issue #179: job `e2e-onboarding-fresco` (`.github/workflows/e2e.yml`), com WAHA e Redis das mesmas imagens da VPS (`docker-compose.e2e.yml` + `scripts/e2e-rig-fresco.sh`) e um banco de UMA organização, criada só pelo `bootstrap-owner.ts`. Resend e Nuvemshop **não** ganharam dublê: a spec prova a AUSÊNCIA dos dois, que é o estado de um primeiro deploy. O job ainda não é obrigatório na branch protection — mostra vermelho, não barra merge.
+
+> **O que a primeira leitura do HEAD pegou** (isto é: o custo dos sete dias sem gate): o `<img>` do QR Code tinha sumido da tela de conectar o WhatsApp no commit `3adbd5aa` (2026-08-13), que reescreveu a copy da tela. Ela seguia dizendo "Escaneie o código abaixo com o celular que vai atender" e não havia código nenhum abaixo. `showQr` e `qrTick` viraram variáveis mortas — warning no eslint, não erro. Restaurado nesta mesma issue.
 
 > **Achado ABERTO (não é regressão, é primeira impressão):** percorrendo o wizard inteiro num tenant fresco, o botão "Começar a usar" entrega o dono no Inbox e a PRIMEIRA coisa que ele vê é um modal bloqueante de verificação em duas etapas — um sétimo passo que a barra de progresso do wizard nunca anunciou. O MFA obrigatório para `admin` é decisão de produto e está correto; o que está errado é ele aparecer como surpresa depois de seis passos que se apresentaram como o caminho completo. Conserto natural: virar passo do wizard, ou ao menos ser anunciado na tela final. Fora do escopo da frente do quadro de clientes.
 
