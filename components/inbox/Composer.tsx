@@ -67,8 +67,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     focus: () => taRef.current?.focus(),
   }));
 
-  const isDisabled =
-    disabled || !!blockedReason || send.isPending || upload.isPending || createNote.isPending;
+  // send/createNote fora do disable: o texto some na hora do envio; travar o campo
+  // até a API voltar impedia digitar a próxima mensagem com o campo ainda cheio.
+  const isDisabled = disabled || !!blockedReason || upload.isPending;
   // A janela só alcança o que SAI. Em modo nota o composer segue liberado: a
   // nota interna nunca chega ao cliente, e é onde o atendente registra por que
   // a conversa esfriou — barrá-la tira exatamente o que ainda dá para fazer.
@@ -84,26 +85,22 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   function handleSubmit() {
     const body = text.trim();
     if (!body || (mode === "note" ? isDisabled : respostaBarrada)) return;
+
+    setText("");
+    requestAnimationFrame(() => autoresize());
+
+    const restoreOnError = () => {
+      setText(body);
+      requestAnimationFrame(() => autoresize());
+    };
+
     if (mode === "note") {
-      createNote.mutate(
-        { conversation_id: conversationId, body },
-        {
-          onSuccess: () => {
-            setText("");
-            requestAnimationFrame(() => autoresize());
-          },
-        },
-      );
+      createNote.mutate({ conversation_id: conversationId, body }, { onError: restoreOnError });
       return;
     }
     send.mutate(
       { conversation_id: conversationId, body, type: "text" },
-      {
-        onSuccess: () => {
-          setText("");
-          requestAnimationFrame(() => autoresize());
-        },
-      },
+      { onError: restoreOnError },
     );
   }
 

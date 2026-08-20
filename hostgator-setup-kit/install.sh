@@ -1454,6 +1454,10 @@ esac
   printf '# então ligar isto sem um WAHA Plus (ou proxy que assine) para a ingestão\n'
   printf '# de mensagens. A rota global já não é publicada na internet (ver Caddyfile).\n'
   envq WAHA_WEBHOOK_REQUIRE_SIGNATURE "${WAHA_WEBHOOK_REQUIRE_SIGNATURE:-false}"
+  printf '# Retoma as sessões já pareadas quando o contêiner do transporte reinicia.\n'
+  printf '# Sem isto o número segue pareado no volume e MUDO até alguém abrir a tela\n'
+  printf '# e clicar Reconectar — nada entra nem sai nesse meio-tempo.\n'
+  envq WHATSAPP_RESTART_ALL_SESSIONS "${WHATSAPP_RESTART_ALL_SESSIONS:-True}"
   # PINADA. Sem a tag, `devlikeapro/waha` é `:latest`, e esta linha gravava isso
   # no .env de todo cliente — por cima do default pinado do compose, que então
   # nunca chegava a ninguém. O `dc pull` de cada update entregava qualquer versão
