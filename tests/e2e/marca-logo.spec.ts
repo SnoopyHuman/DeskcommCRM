@@ -141,6 +141,35 @@ const SVG_DISFARCADO = Buffer.from(
 // ── Helpers de tela ─────────────────────────────────────────────────────────
 
 /**
+ * ORÇAMENTO DO LOGIN INTEIRO — um relógio só, e não uma soma de tetos.
+ *
+ * ⚠️ ESTE HELPER JÁ TEVE UM PIOR CAMINHO MAIOR QUE O TETO DO CASO, e isso apaga
+ * justamente a mensagem que ele existe para dar. Com 60s de teto por tentativa,
+ * o pior caminho era 60s (tentativa 1 sem desfecho) + até 30,2s (virada da
+ * janela do TOTP) + 60s (tentativa 2) ≈ 150s — acima dos 120s que o `describe`
+ * dava ao caso. Quem estouraria primeiro seria o Playwright, e a reprovação
+ * voltaria a sair como `Test timeout` no lugar da frase que diz onde a página
+ * parou — ou seja, o diagnóstico opaco que a issue #274 existe para eliminar.
+ *
+ * Somar tetos não conserta. A soma honesta de TODAS as esperas (`goto` 30s +
+ * clique 15s + `waitForURL` 30s + duas tentativas + a janela) passa de 200s, e
+ * um caso de quatro minutos é o mesmo relógio, só que mais caro no CI. O que
+ * conserta é o teto deixar de ser POR ESPERA e passar a ser DO LOGIN: `sobra()`
+ * devolve o que resta do orçamento, toda espera recebe isso, e nenhuma
+ * composição de esperas ultrapassa o total. O teto do CASO então é
+ * `ORCAMENTO_DO_LOGIN_MS + FOLGA_DO_CASO_MS`, e a folga é do corpo do caso — o
+ * login já não pode invadi-la.
+ *
+ * 100s cobre com margem o pior caminho MEDIDO: a navegação para `/app/inbox`
+ * chegando em +30,8s sob `Emulation.setCPUThrottlingRate` 8, mais os 30s da
+ * virada de janela entre as duas tentativas.
+ */
+const ORCAMENTO_DO_LOGIN_MS = 100_000;
+
+/** Folga para o CORPO do caso, depois que o login gastou o orçamento dele. */
+const FOLGA_DO_CASO_MS = 60_000;
+
+/**
  * Entra com senha + TOTP, e só volta quando a tentativa TERMINOU.
  *
  * ⚠️ O LAÇO ANTERIOR DESISTIA NO RELÓGIO E REDIGITAVA EM CIMA DE UMA TELA QUE
@@ -181,11 +210,24 @@ const SVG_DISFARCADO = Buffer.from(
  * o relógio do protocolo, e só ele.
  */
 async function loginComTotp(page: Page, email: string, secret: string): Promise<void> {
-  await page.goto("/login");
-  await page.locator("#email").fill(email);
-  await page.locator("#password").fill(creds.password);
-  await page.getByRole("button", { name: /entrar/i }).click({ timeout: 15_000 });
-  await page.waitForURL(/\/login\/mfa/);
+  const fimDoOrcamento = Date.now() + ORCAMENTO_DO_LOGIN_MS;
+  /**
+   * O que resta do orçamento. Nunca 0: no Playwright `timeout: 0` significa
+   * ESPERAR PARA SEMPRE — o modo de falha que este helper existe para tirar do
+   * caminho. Estourado o orçamento, a espera seguinte falha na hora e quem
+   * reprova é a mensagem daqui de baixo, não o relógio do caso.
+   */
+  const sobra = (): number => Math.max(1, fimDoOrcamento - Date.now());
+
+  // Todas as ações levam teto: o `playwright.config.ts` não define
+  // `actionTimeout` (default 0 = SEM teto), então um controle que não aparece
+  // esperaria até o timeout do CASO e a reprovação sairia como "Test timeout"
+  // apontando para a ação — sem dizer onde o login parou.
+  await page.goto("/login", { timeout: sobra() });
+  await page.locator("#email").fill(email, { timeout: sobra() });
+  await page.locator("#password").fill(creds.password, { timeout: sobra() });
+  await page.getByRole("button", { name: /entrar/i }).click({ timeout: sobra() });
+  await page.waitForURL(/\/login\/mfa/, { timeout: sobra() });
 
   const digito1 = page.locator('input[aria-label="Dígito 1"]');
   // Escopado no `<form>` de propósito: o `<Toaster/>` do layout raiz também
@@ -195,18 +237,15 @@ async function loginComTotp(page: Page, email: string, secret: string): Promise<
 
   for (let tentativa = 0; tentativa < 2; tentativa++) {
     if (msUntilNextTotpWindow() < 3_000) await page.waitForTimeout(msUntilNextTotpWindow() + 200);
-    // Teto EXPLÍCITO no clique: sem `actionTimeout` no config, um controle que
-    // sumiu esperaria até o timeout do caso e a reprovação sairia como "Test
-    // timeout" apontando para o clique — sem dizer que o login já tinha entrado.
-    await digito1.click({ timeout: 15_000 });
+    await digito1.click({ timeout: sobra() });
     await page.keyboard.type(generateTotp(secret), { delay: 40 });
 
     const desfecho = await Promise.race([
-      page.waitForURL(/\/app\//, { timeout: 60_000 }).then(
+      page.waitForURL(/\/app\//, { timeout: sobra() }).then(
         () => "entrou" as const,
         () => "sem-desfecho" as const,
       ),
-      recusa.waitFor({ state: "visible", timeout: 60_000 }).then(
+      recusa.waitFor({ state: "visible", timeout: sobra() }).then(
         () => "recusado" as const,
         () => "sem-desfecho" as const,
       ),
@@ -214,8 +253,9 @@ async function loginComTotp(page: Page, email: string, secret: string): Promise<
     if (desfecho === "entrou") return;
     if (desfecho === "sem-desfecho") {
       throw new Error(
-        `o desafio de MFA de ${email} não terminou em 60s: a URL não virou /app/… ` +
-          `e o formulário não recusou. url=${page.url()}`,
+        `o desafio de MFA de ${email} não terminou dentro do orçamento de ` +
+          `${ORCAMENTO_DO_LOGIN_MS}ms: a URL não virou /app/… e o formulário não ` +
+          `recusou. url=${page.url()}`,
       );
     }
     await page.waitForTimeout(msUntilNextTotpWindow() + 200);
@@ -443,8 +483,14 @@ test.describe("o logo subido pela tela chega à tela", () => {
    * O teto de login não é razão para economizar sessão aqui: o CI roda com
    * `AUTH_RATE_LIMIT_LOGIN_IP: "1000"` (`.github/workflows/e2e.yml`), e as specs
    * vizinhas — `system-update.spec.ts`, seis casos, seis logins — fazem assim.
+   *
+   * O teto é DERIVADO do orçamento do login (`ORCAMENTO_DO_LOGIN_MS`) em vez de
+   * ser um número escrito à mão: escrito à mão, ele já ficou MENOR que o pior
+   * caminho do próprio helper — e um caso que morre no relógio do Playwright
+   * antes de o helper falar volta a reprovar com `Test timeout`, sem dizer onde
+   * a página parou. Ver o comentário da constante.
    */
-  test.setTimeout(120_000);
+  test.setTimeout(ORCAMENTO_DO_LOGIN_MS + FOLGA_DO_CASO_MS);
 
   test("(1) o dono do servidor sobe o logo e ele aparece na barra lateral", async ({ page }) => {
     const secret = creds.dono_totp?.secret;
@@ -689,10 +735,12 @@ test.describe("o logo subido pela tela chega à tela", () => {
    */
   test.afterAll(async ({ browser }) => {
     // O `test.setTimeout` do topo do `describe` vale para os CASOS; um hook nasce
-    // com o timeout do config (30s). E aqui cabe um login com TOTP, que na
-    // segunda tentativa espera a janela virar (até ~30s em `loginComTotp`) — sem
-    // esta linha a restauração viraria vermelho por relógio, não por defeito.
-    test.setTimeout(120_000);
+    // com o timeout do config (30s). E aqui cabe um login com TOTP inteiro, que
+    // no pior caminho gasta o `ORCAMENTO_DO_LOGIN_MS` (recusa na primeira
+    // tentativa + virada da janela + segunda tentativa) — sem esta linha a
+    // restauração viraria vermelho por relógio, não por defeito. Mesma folga do
+    // `describe`: depois do login ainda cabem duas remoções pela tela.
+    test.setTimeout(ORCAMENTO_DO_LOGIN_MS + FOLGA_DO_CASO_MS);
     const contexto = await browser.newContext();
     try {
       const pagina = await contexto.newPage();
