@@ -40,6 +40,7 @@ export {
   ArrowsClockwise,
   Dot,
   // actions
+  List,
   Bell,
   PaperPlaneTilt,
   Smiley,
