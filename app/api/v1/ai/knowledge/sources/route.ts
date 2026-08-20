@@ -15,6 +15,12 @@ import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseFaqMarkdown } from "@/lib/ai/rag/ingest/faq";
+import {
+  ingereTextoColado,
+  mensagemDeTipoJaEmUso,
+  ROTULO_DO_TIPO,
+  TIPOS_DE_FONTE,
+} from "@/lib/ai/knowledge/tipos-de-fonte";
 
 export const dynamic = "force-dynamic";
 
@@ -29,35 +35,7 @@ const faqItemSchema = z.object({
   locale: z.string().optional().default("pt-BR"),
 });
 
-const sourceTypeEnum = z.enum([
-  "faq",
-  "policy",
-  "conversation",
-  "conversations",
-  "catalog",
-  "nuvemshop_catalog",
-]);
-
-type SourceType = z.infer<typeof sourceTypeEnum>;
-
-/**
- * Tipos cujo conteúdo colado (`items` / `markdown_blob`) esta rota realmente
- * ingere. Os outros valores existem no CHECK do banco, mas são preenchidos por
- * pipeline: `conversations` nasce da ingestão anonimizada
- * (`lib/ai/rag/ingest/conversations.ts`, via cron `kb-conversations-batch`) e
- * `catalog` vem da sincronização do e-commerce.
- */
-const TIPOS_QUE_INGEREM_TEXTO: ReadonlySet<SourceType> = new Set<SourceType>(["faq", "policy"]);
-
-/** Nome do tipo em português, para mensagem de erro que alguém lê na tela. */
-const ROTULO_DO_TIPO: Record<SourceType, string> = {
-  faq: "FAQ",
-  policy: "política",
-  conversation: "conversas",
-  conversations: "conversas",
-  catalog: "catálogo",
-  nuvemshop_catalog: "catálogo",
-};
+const sourceTypeEnum = z.enum(TIPOS_DE_FONTE);
 
 const createSourceSchema = z.object({
   agent_id: z.string().uuid(),
@@ -139,7 +117,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   // honesta — o mesmo defeito que o bloco de `policy` abaixo já pagou uma vez.
   const temConteudo =
     (input.items?.length ?? 0) > 0 || (input.markdown_blob?.trim().length ?? 0) > 0;
-  if (temConteudo && !TIPOS_QUE_INGEREM_TEXTO.has(input.source_type)) {
+  if (temConteudo && !ingereTextoColado(input.source_type)) {
     return fail(
       "unprocessable_entity",
       `Fonte de ${ROTULO_DO_TIPO[input.source_type]} não recebe conteúdo colado — ela é preenchida automaticamente.`,
@@ -172,7 +150,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   // pergunta/resposta na mesma tabela.
   let faqItems: Array<{ question: string; answer: string; tags: string[]; locale: string }> = [];
 
-  if (input.source_type === "faq" || input.source_type === "policy") {
+  if (ingereTextoColado(input.source_type)) {
     if (input.items && input.items.length > 0) {
       faqItems = input.items.map((it) => ({
         question: it.question,
@@ -219,8 +197,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (ksErr?.code === "23505") {
       return fail(
         "knowledge_source_type_in_use",
-        `Já existe uma fonte de ${ROTULO_DO_TIPO[input.source_type]} ativa para este agente. ` +
-          `Edite ou arquive a existente em vez de criar outra.`,
+        mensagemDeTipoJaEmUso(input.source_type),
         409,
         { requestId },
       );

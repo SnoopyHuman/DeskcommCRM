@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { TipoComTextoColado } from "@/lib/ai/knowledge/tipos-de-fonte";
 import {
   Dialog,
   DialogContent,
@@ -33,14 +34,6 @@ const EXEMPLO = `## Pergunta: Qual o prazo de entrega?
 
 ## Pergunta: Vocês fazem troca?
 ## Resposta: Sim, em até 30 dias, com o produto sem uso.`;
-
-/**
- * Só os dois tipos cujo conteúdo colado a API ingere de fato. `conversations` e
- * `catalog` são preenchidos por pipeline (ingestão anonimizada e sincronização
- * do e-commerce) e não têm o que colar — oferecê-los aqui obrigava a mentir o
- * tipo no envio, que é o que produzia a colisão do índice único.
- */
-type TipoComTextoColado = "faq" | "policy";
 
 interface Props {
   agentId: string;

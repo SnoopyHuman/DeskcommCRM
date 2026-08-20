@@ -17,6 +17,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ingestPolicyFile, PdfExtractError } from "@/lib/ai/rag/ingest/policy";
+import { mensagemDeTipoJaEmUso } from "@/lib/ai/knowledge/tipos-de-fonte";
 
 export const dynamic = "force-dynamic";
 
@@ -195,6 +196,17 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (ksErr || !ks) {
     // Cleanup blob
     await admin.storage.from("ai-policy").remove([blobPath]);
+    // Mesma tabela, mesmo índice único `(agent_id, source_type) WHERE
+    // is_active`, mesma colisão: com uma política já ativa, o 23505 saía como
+    // 500 mudo aqui também. O conserto da issue #265 tratou só a rota irmã — e
+    // conserto por instância deixa a classe do defeito viva. Esta rota está
+    // inalcançável pela tela hoje ("Upload de política em breve." é um toast),
+    // o que baixa a gravidade, não a elimina: a API é pública e documentada.
+    if (ksErr?.code === "23505") {
+      return fail("knowledge_source_type_in_use", mensagemDeTipoJaEmUso("policy"), 409, {
+        requestId,
+      });
+    }
     console.error("[ai-policy-upload] insert knowledge source failed:", ksErr?.message);
     return fail("internal_error", "Erro ao registrar fonte de conhecimento.", 500, { requestId });
   }

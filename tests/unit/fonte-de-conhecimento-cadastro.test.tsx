@@ -143,10 +143,24 @@ describe("KnowledgeSourceCard — só oferece cadastro onde existe cadastro", ()
       // explicação é o que sobra no lugar do controle que não existia.
       expect(screen.queryByText("Nenhuma fonte configurada.")).toBeNull();
       const explicacao =
-        tipo === "catalog" ? /sincronização com o e-commerce/i : /anonimizadas e indexadas/i;
+        tipo === "catalog" ? /sincronização com o e-commerce/i : /já anonimizadas/i;
       expect(screen.getByText(explicacao)).toBeInTheDocument();
     });
   }
+
+  it('"conversations" não manda ninguém marcar conversa — não há onde', () => {
+    // O texto dizia que "conversas resolvidas que ALGUÉM MARCAR como
+    // aproveitáveis pela IA" entram no lote. A rota que marca existe
+    // (POST /api/v1/conversations/:id/usable-for-rag) e NENHUM componente, hook
+    // ou tela a chama: era porta que não existe, exatamente o defeito que o
+    // resto deste arquivo tirou dos botões. Descrever o que acontece sozinho é
+    // o que sobra enquanto o controle não for construído.
+    render(<KnowledgeSourceCard type="conversations" source={null} agentId={AGENT_ID} />);
+
+    const cartao = screen.getByText(/Entra sozinha/i).textContent ?? "";
+    expect(cartao).not.toMatch(/alguém marcar/i);
+    expect(cartao).toMatch(/ainda não tem controle na tela/i);
+  });
 
   it("sem agentId nenhum botão é oferecido — ele não teria formulário para abrir", () => {
     render(<KnowledgeSourceCard type="faq" source={null} />);

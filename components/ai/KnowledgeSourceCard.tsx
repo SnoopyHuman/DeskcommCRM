@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { SourceStatusBadge, deriveBadgeStatus } from "@/components/ai/SourceStatusBadge";
 import { NovaFonteDialog } from "@/components/ai/NovaFonteDialog";
 import type { SourceRow } from "@/hooks/ai/useKnowledgeSources";
+import { ingereTextoColado } from "@/lib/ai/knowledge/tipos-de-fonte";
 
 export type KnowledgeSourceType = "faq" | "policy" | "conversations" | "catalog";
 
@@ -53,8 +54,12 @@ const TYPE_META: Record<
     label: "Conversas opt-in",
     Icon: MessageSquare,
     description: "Conversas anonimizadas para aprendizado.",
+    // NÃO prometa "alguém marca": `conversations.usable_for_rag` só tem um
+    // escritor (POST /api/v1/conversations/:id/usable-for-rag) e NENHUMA tela,
+    // componente ou hook o chama — o fluxo de marcar segue em aberto no PRD 05.
+    // Enquanto não houver o controle, o cartão descreve o que acontece sozinho.
     comoSePreenche:
-      "Entra sozinha: conversas resolvidas que alguém marcar como aproveitáveis pela IA são anonimizadas e indexadas em lote. Não há conteúdo para colar aqui.",
+      "Entra sozinha: toda madrugada o sistema indexa, já anonimizadas, as conversas resolvidas que estiverem marcadas como aproveitáveis pela IA. A marcação ainda não tem controle na tela. Não há conteúdo para colar aqui.",
   },
   catalog: {
     label: "Catálogo",
@@ -91,8 +96,11 @@ export function KnowledgeSourceCard({
   if (!source) {
     // Sem `agentId` o diálogo nem era montado e o botão abria coisa nenhuma —
     // controle decorativo. Só oferece cadastro quem tem os dois: tipo que
-    // aceita texto colado e agente para amarrar a fonte.
-    const cadastroManual = (type === "faq" || type === "policy") && !!agentId;
+    // aceita texto colado e agente para amarrar a fonte. Quem responde "aceita
+    // texto colado?" é a mesma função que a API consulta, e não uma cópia da
+    // regra aqui — divergirem é como a tela passou a oferecer o que a rota não
+    // ingeria.
+    const cadastroManual = ingereTextoColado(type) && !!agentId;
     return (
       <Card className="flex h-full flex-col">
         <CardHeader>

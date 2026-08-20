@@ -1,6 +1,6 @@
 /**
  * PATCH  /api/v1/ai/knowledge/sources/[id]  — update knowledge source
- * DELETE /api/v1/ai/knowledge/sources/[id]  — soft-delete (status='archived')
+ * DELETE /api/v1/ai/knowledge/sources/[id]  — soft-delete (status='archived', is_active=false)
  *
  * Auth: cookie session. Role >= manager required.
  * organization_id is ALWAYS resolved from the authenticated session — never from body/path.
@@ -209,9 +209,17 @@ export async function DELETE(
   }
 
   const admin = createAdminClient();
+  // `is_active` JUNTO com `status`, e não só o status: o índice
+  // `ai_knowledge_sources_unique_per_agent` é `(agent_id, source_type) WHERE
+  // is_active`, então a fonte arquivada continuava ocupando o slot do tipo e
+  // nenhuma outra podia nascer. Como nada no repo punha essa coluna em false, o
+  // beco não tinha saída: arquivar era a única instrução que o 409 dava e ela
+  // não liberava nada. Nenhum consumidor depende de fonte arquivada seguir
+  // `is_active` — o indexador filtra `status = 'ready'`
+  // (workers/rag-indexer.ts) e `listar_materiais(apenas_ativos)` fica correto.
   const { error: archiveErr } = await admin
     .from("ai_knowledge_sources")
-    .update({ status: "archived" })
+    .update({ status: "archived", is_active: false })
     .eq("id", sourceId)
     .eq("organization_id", activeOrg.orgId);
 
@@ -220,5 +228,5 @@ export async function DELETE(
     return fail("internal_error", "Erro ao arquivar fonte.", 500, { requestId });
   }
 
-  return ok({ id: sourceId, status: "archived" }, { requestId });
+  return ok({ id: sourceId, status: "archived", is_active: false }, { requestId });
 }
