@@ -2086,28 +2086,293 @@ NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'")"
 ) || fail=1
 rm -rf "$TMP_DDL_C"
 
-echo "DDL: nenhum script do kit manda a string do APP para o Postgres"
-# A guarda de CLASSE. Os três cenários acima provam o install.sh e o update.sh
-# pelo comportamento; esta linha alcança os irmãos que nenhuma fixture roda
-# (backup.sh, restore.sh, reset-mfa.sh via psql_run) — onde o mesmo defeito
-# reapareceria sem ninguém ver. Um sítio que volte a `psql "$SUPABASE_DB_URL"`
-# reprova aqui.
+echo "DDL: nenhum script manda a string do APP para o Postgres (dentro E fora do kit)"
+# A guarda de CLASSE. Os cenários acima provam o install.sh e o update.sh pelo
+# comportamento; esta parte alcança os irmãos que nenhuma fixture roda — o
+# `montar_vps` copia só install/update/backup/_common, então `restore.sh` e
+# `reset-mfa.sh` não têm NENHUMA outra guarda.
+#
+# Duas coisas que a primeira versão desta guarda errava, e ambas a deixavam
+# VERDE com um sítio perdido (medido pelo verificador cético):
+#
+#  1. Casava UMA grafia literal, `"$SUPABASE_DB_URL"`. Reverter o `restore.sh`
+#     para `"${SUPABASE_DB_URL}"` — as chaves, que o bash aceita igual — saía
+#     limpo. Agora o padrão casa as duas, e também a forma sem aspas.
+#  2. Tinha PISO (`convertidos -lt 10`, com 11 sítios): perder um caía exatamente
+#     no limite e era tolerado. Um número global não sabe QUEM sumiu. Agora a
+#     cobrança é POR ARQUIVO — quem tem trabalho de schema tem de aparecer pelo
+#     nome, e um arquivo revertido reprova nomeando a si mesmo.
+#
 # `--exclude` para não casar as próprias frases deste arquivo — que fala do
 # defeito para explicá-lo, e ficaria eternamente vermelho por citar o que vigia.
-sobrando="$(grep -nE --exclude='test-validators.sh' '(psql|pg_dump) "\$SUPABASE_DB_URL"' ./*.sh 2>/dev/null || true)"
-convertidos="$(grep -hoE --exclude='test-validators.sh' '(psql|pg_dump) "\$\(url_do_schema\)"' ./*.sh 2>/dev/null | grep -c . || true)"
-if [ -n "$sobrando" ]; then
-  printf '  ✗ script do kit ainda manda a string do app para o Postgres:\n'
-  printf '%s\n' "$sobrando" | sed 's/^/       /'
-  fail=1
-elif [ "${convertidos:-0}" -lt 10 ]; then
-  # Vacuidade: uma varredura que não achasse NADA devolveria a mesma lista vazia
-  # de infratores. O número é piso, não igualdade — sítio novo não deve reprovar.
-  printf '  ✗ a varredura só achou %s sítio(s) convertido(s) — ela está cega, não limpa\n' "${convertidos:-0}"
+PADRAO_DA_STRING_DO_APP='(psql|pg_dump)[[:space:]]+"?\$\{?SUPABASE_DB_URL\}?"?'
+# Fora do kit também: `scripts/backup-db.sh` é o backup que o README §6 manda pôr
+# no cron da VPS, e ele é o sítio mais caro da classe — `pg_dump` com role menor
+# despeja só o que ela enxerga e sai VERDE. Ele não é do kit e não tem
+# `url_do_schema`; o que se cobra dele é conhecer a chave (o comportamento está
+# provado no cenário logo abaixo).
+ARQUIVOS_DO_KIT=(./*.sh)
+ARQUIVOS_DE_FORA=(../scripts/*.sh)
+if [ "${#ARQUIVOS_DO_KIT[@]}" -lt 5 ] || [ ! -f "${ARQUIVOS_DE_FORA[0]}" ]; then
+  # Vacuidade: um glob que não casasse nada devolveria o PADRÃO literal como
+  # único elemento, e a varredura sairia com a mesma lista vazia de infratores
+  # que uma varredura limpa. Daí o `-f` em vez de contar elementos.
+  printf '  ✗ a varredura não achou arquivo para varrer (kit=%s, fora=%s) — cega, não limpa\n' \
+    "${#ARQUIVOS_DO_KIT[@]}" "${ARQUIVOS_DE_FORA[0]}"
   fail=1
 else
-  printf '  ✓ %s sítio(s) pela conexão do schema, nenhum pela do app\n' "$convertidos"
+  # O segundo grep tira as linhas de COMENTÁRIO (`arquivo:N:   # …`). Sem ele a
+  # guarda mede prosa: o `_common.sh` explica o defeito citando-o, e a suíte
+  # ficava vermelha por uma frase (medido — foi o primeiro vermelho desta
+  # rodada). Só a linha inteira comentada sai; um comando com comentário no fim
+  # continua sendo comando, e continua sendo pego.
+  sobrando="$(grep -nE --exclude='test-validators.sh' "$PADRAO_DA_STRING_DO_APP" \
+    "${ARQUIVOS_DO_KIT[@]}" "${ARQUIVOS_DE_FORA[@]}" 2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+  # Cada arquivo que faz trabalho de schema, e o sítio que prova que ele o faz
+  # pela conexão certa. Arquivo que sair desta lista tem de sair por decisão, não
+  # por um número que já não fecha.
+  faltando=""
+  for arq in _common.sh install.sh update.sh backup.sh restore.sh; do
+    grep -qF -- '$(url_do_schema)' "./$arq" || faltando="$faltando $arq"
+  done
+  grep -qF 'SUPABASE_DB_ADMIN_URL' ../scripts/backup-db.sh || faltando="$faltando scripts/backup-db.sh"
+
+  if [ -n "$sobrando" ]; then
+    printf '  ✗ script ainda manda a string do app para o Postgres:\n'
+    printf '%s\n' "$sobrando" | sed 's/^/       /'
+    fail=1
+  elif [ -n "$faltando" ]; then
+    printf '  ✗ arquivo(s) que fazem trabalho de schema e NÃO passam pela conexão do dono:%s\n' "$faltando"
+    fail=1
+  else
+    n_conv="$(grep -hoF --exclude='test-validators.sh' -- '$(url_do_schema)' ./*.sh | grep -c . || true)"
+    printf '  ✓ 6 arquivo(s) cobrados nominalmente (%s sítios via url_do_schema), nenhum pela string do app\n' "$n_conv"
+  fi
 fi
+
+echo "DDL: o backup do cron (scripts/backup-db.sh) dumpa pela conexão do dono"
+# O irmão FORA do kit — e o mais caro da classe. A guarda de texto acima só sabe
+# que ele NOMEIA a chave; aqui ele é executado, com um `pg_dump` dublê que anota
+# a connection string que recebeu. O par (sem a chave / com a chave) é o que
+# distingue "resolve" de "trocaram tudo": sem ela o cron de quem já existe tem de
+# continuar dumpar pela string de sempre.
+#
+# Cópia num diretório temporário, e não o script no lugar: ele resolve o `.env`
+# por `dirname $0/..`, e rodá-lo daqui leria o `.env.local` REAL do repositório —
+# que aponta para um banco de verdade.
+TMP_BKP="$(mktemp -d)"
+(
+  mkdir -p "$TMP_BKP/scripts" "$TMP_BKP/bin" "$TMP_BKP/dumps"
+  cp ../scripts/backup-db.sh "$TMP_BKP/scripts/backup-db.sh"
+  cat > "$TMP_BKP/bin/pg_dump" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$PGDUMP_LOG"
+for a in "$@"; do case "$a" in --file=*) : > "${a#--file=}" ;; esac; done
+STUB
+  chmod +x "$TMP_BKP/bin/pg_dump"
+  # O ambiente de quem roda a suíte já tem SUPABASE_DB_URL exportada (o
+  # `INSTALL_SH_LIB` lá em cima). Sem tirá-la daqui, o cenário mediria o shell da
+  # suíte em vez do `.env` do cenário.
+  unset SUPABASE_DB_URL SUPABASE_DB_ADMIN_URL
+  export PGDUMP_LOG="$TMP_BKP/pgdump.log"
+
+  # 1) Como está o parque instalado: só a string de sempre, e com ASPAS, que é
+  #    como o `envq` do kit escreve o .env de verdade.
+  printf "SUPABASE_DB_URL=\"%s\"\n" "$URL_DO_APP" > "$TMP_BKP/.env"
+  : > "$PGDUMP_LOG"
+  PATH="$TMP_BKP/bin:$PATH" bash "$TMP_BKP/scripts/backup-db.sh" "$TMP_BKP/dumps" >/dev/null 2>&1 \
+    || { printf '  ✗ o backup-db.sh saiu com erro no cenário sem a chave nova\n'; exit 1; }
+  visto="$(sort -u "$PGDUMP_LOG")"
+  if [ "$visto" != "$URL_DO_APP" ]; then
+    printf '  ✗ sem SUPABASE_DB_ADMIN_URL o backup deixou de usar a string de sempre: [%s]\n' "$visto"; exit 1
+  fi
+  printf '  ✓ sem a chave nova: dumpa pela string de sempre (quem já tem o cron não muda)\n'
+
+  # 2) Com a credencial do dono no `.env.kit` — o arquivo que o compose NÃO
+  #    entrega aos contêineres. Prova as duas coisas de uma vez: a precedência e
+  #    o fato de o script enxergar o arquivo certo.
+  printf "SUPABASE_DB_ADMIN_URL=\"%s\"\n" "$URL_DO_DONO" > "$TMP_BKP/.env.kit"
+  : > "$PGDUMP_LOG"
+  PATH="$TMP_BKP/bin:$PATH" bash "$TMP_BKP/scripts/backup-db.sh" "$TMP_BKP/dumps" >/dev/null 2>&1 \
+    || { printf '  ✗ o backup-db.sh saiu com erro no cenário com a chave nova\n'; exit 1; }
+  visto="$(sort -u "$PGDUMP_LOG")"
+  if [ "$visto" != "$URL_DO_DONO" ]; then
+    printf '  ✗ com SUPABASE_DB_ADMIN_URL declarada, o dump NÃO foi por ela: [%s]\n' "$visto"
+    printf '     esperava: %s\n' "$URL_DO_DONO"; exit 1
+  fi
+  printf '  ✓ com a chave no .env.kit: dumpa pela conexão do dono (backup completo)\n'
+) || fail=1
+rm -rf "$TMP_BKP"
+
+echo "DDL: o .env.kit dá a conexão do dono ao kit sem dá-la aos contêineres"
+# A saída do trade-off que a issue #192 abria: na única configuração que mantém a
+# atualização SOZINHA (o cron do `agent.sh` chama o update.sh), a credencial do
+# dono precisava morar no `.env` — o mesmo arquivo que o compose entrega ao `app`
+# e ao `worker` por `env_file`. O privilégio saía do contêiner e voltava com
+# outro nome. `enter_project` passa a ler também um `.env.kit`, que nenhum
+# serviço do compose referencia.
+TMP_KIT="$(mktemp -d)"
+(
+  montar_vps "$TMP_KIT" "crmkit" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  mkdir -p "$VPS_PROJ/supabase"; : > "$VPS_PROJ/supabase/baseline.sql"
+  export SUPABASE_DB_ADMIN_URL="$URL_DO_DONO"
+  rodar install.sh --yes >/dev/null
+  unset SUPABASE_DB_ADMIN_URL
+
+  if [ ! -f "$VPS_PROJ/.env.kit" ]; then
+    printf '  ✗ o install.sh não gravou o .env.kit — a credencial teria de ser repassada em toda atualização\n'; exit 1
+  fi
+  if [ "$(valor_no_env "$VPS_PROJ/.env.kit" SUPABASE_DB_ADMIN_URL)" != "$URL_DO_DONO" ]; then
+    printf '  ✗ o .env.kit não guardou a conexão do dono: [%s]\n' \
+      "$(valor_no_env "$VPS_PROJ/.env.kit" SUPABASE_DB_ADMIN_URL)"; exit 1
+  fi
+  if grep -q 'SUPABASE_DB_ADMIN_URL' "$VPS_PROJ/.env"; then
+    printf '  ✗ a credencial do dono foi parar no .env, que o compose entrega aos contêineres\n'; exit 1
+  fi
+  printf '  ✓ install.sh grava a conexão do dono no .env.kit e NÃO no .env\n'
+
+  # E agora o que isso compra: o update.sh SEM a variável no ambiente e SEM ela
+  # no `.env` — o estado do cron — continua fazendo schema pela conexão do dono.
+  # O `.gitignore` imita o do repositório (`.env*`): sem ele o `.env` que o
+  # `rodar` reescreve a cada rodada viraria mudança local e o `git checkout` da
+  # etapa 3 do update.sh reprovaria por um motivo que não é o do teste.
+  printf '.env*\n' > "$VPS_PROJ/.gitignore"
+  (cd "$VPS_PROJ" && git init -q -b main . \
+    && git -c user.email=t@exemplo -c user.name=teste add -A \
+    && git -c user.email=t@exemplo -c user.name=teste commit -qm base \
+    && git tag v9.9.9) >/dev/null 2>&1
+  # `rodar` reescreve o .env do zero; o .env.kit é justamente o que sobrevive.
+  saida="$(rodar update.sh "" "INTERNAL_SECRET='segredo-de-teste'
+NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'")"
+  n_psql="$(grep -cE 'psql ' "$VPS_LOG")"
+  if [ "${n_psql:-0}" -lt 2 ]; then
+    printf '  ✗ o update.sh não chegou ao banco (psql=%s) — inconclusivo, não verde\n' "${n_psql:-0}"
+    printf '     última linha: %s\n' "$(printf '%s' "$saida" | tail -1)"; exit 1
+  fi
+  vistas="$(strings_de_banco)"
+  if [ "$vistas" != "$URL_DO_DONO" ]; then
+    printf '  ✗ o update.sh do cron não usou a conexão do dono guardada no .env.kit:\n'
+    printf '%s\n' "$vistas" | sed 's/^/       /'; exit 1
+  fi
+  printf '  ✓ e o update.sh do cron a encontra sozinho — sem ninguém repassar nada\n'
+
+  # Retrocompatibilidade: sem o arquivo, nada muda para quem já instalou.
+  rm -f "$VPS_PROJ/.env.kit"
+  saida="$(rodar update.sh "" "INTERNAL_SECRET='segredo-de-teste'
+NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'")"
+  vistas="$(strings_de_banco)"
+  if [ "$vistas" != "$URL_DO_APP" ]; then
+    printf '  ✗ sem o .env.kit o update.sh deveria cair na string de sempre, e usou:\n'
+    printf '%s\n' "$vistas" | sed 's/^/       /'; exit 1
+  fi
+  printf '  ✓ sem o .env.kit, cai na string de sempre (ausência não quebra ninguém)\n'
+) || fail=1
+rm -rf "$TMP_KIT"
+
+echo "DDL: o update.sh diz o que fazer quando o erro do banco é de PERMISSÃO"
+# O `case` que classifica o erro (update.sh, no bloco "Atualizando o banco de
+# dados") existe justamente para o cenário desta issue: quem seguiu o §2 do
+# README e pôs a role menor no `.env` vê o baseline falhar e não tem como saber
+# por quê. O par é o que prova que ele CLASSIFICA em vez de sempre imprimir:
+# erro de permissão ensina a chave; erro de outra natureza não.
+TMP_PERM="$(mktemp -d)"
+(
+  montar_vps "$TMP_PERM" "crmperm" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+# Só a re-aplicação do baseline responde: é a saída dela que o update.sh lê.
+case "$*" in
+  *" -f /b.sql"*) printf '%s\n' "$SAIDA_DO_BASELINE"; exit 0 ;;
+esac
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  mkdir -p "$VPS_PROJ/supabase"; : > "$VPS_PROJ/supabase/baseline.sql"
+  (cd "$VPS_PROJ" && git init -q -b main . \
+    && git -c user.email=t@exemplo -c user.name=teste add -A \
+    && git -c user.email=t@exemplo -c user.name=teste commit -qm base \
+    && git tag v9.9.9) >/dev/null 2>&1
+  extra="INTERNAL_SECRET='segredo-de-teste'
+NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'"
+
+  export SAIDA_DO_BASELINE='psql:/b.sql:12: ERROR:  permission denied for schema public'
+  saida="$(rodar update.sh "" "$extra")"
+  if ! printf '%s' "$saida" | grep -q 'NÃO são os esperados'; then
+    printf '  ✗ o update.sh nem chegou a reclamar do banco — inconclusivo, não verde\n'
+    printf '     última linha: %s\n' "$(printf '%s' "$saida" | tail -1)"; exit 1
+  fi
+  if ! printf '%s' "$saida" | grep -q 'SUPABASE_DB_ADMIN_URL'; then
+    printf '  ✗ erro de permissão e nenhuma palavra sobre a conexão de schema:\n'
+    printf '%s\n' "$saida" | grep -A3 'NÃO são os esperados' | sed 's/^/       /'; exit 1
+  fi
+  printf '  ✓ erro de permissão: a tela ensina a declarar SUPABASE_DB_ADMIN_URL\n'
+
+  # O outro lado. Sem ele, um `c_ylw` incondicional passaria pela asserção acima
+  # — e a mensagem mandaria trocar a connection string de quem tem outro problema.
+  export SAIDA_DO_BASELINE='psql:/b.sql:12: ERROR:  relation "crm_leads" does not exist'
+  saida="$(rodar update.sh "" "$extra")"
+  if ! printf '%s' "$saida" | grep -q 'NÃO são os esperados'; then
+    printf '  ✗ o update.sh nem chegou a reclamar do banco no 2º cenário — inconclusivo\n'; exit 1
+  fi
+  if printf '%s' "$saida" | grep -q 'SUPABASE_DB_ADMIN_URL'; then
+    printf '  ✗ erro que NÃO é de permissão e a tela manda trocar a conexão mesmo assim:\n'
+    printf '%s\n' "$saida" | grep -A3 'NÃO são os esperados' | sed 's/^/       /'; exit 1
+  fi
+  printf '  ✓ erro de outra natureza: a mensagem NÃO aparece (classifica, não repete)\n'
+) || fail=1
+rm -rf "$TMP_PERM"
+
+echo "DDL: sem NENHUMA connection string, o kit PARA em vez de chamar psql vazio"
+# O que existia ANTES de `url_do_schema` era `psql "$SUPABASE_DB_URL"` sob
+# `set -u`, e erro de expansão derruba o script mesmo dentro de `|| true`
+# (medido: exit=1). A primeira versão da função usava `${SUPABASE_DB_URL:?…}`
+# dentro de `$( )` — e `:?` mata só o SUBSHELL: o pai seguia, chamava
+# `psql ""` e podia sair 0. Uma correção de DDL não pode trocar fecha-a-porta
+# por deixa-passar, então a função para o script com `kill -TERM $$`.
+#
+# `env -u` das duas: o shell da suíte tem `SUPABASE_DB_URL` exportada (o
+# `INSTALL_SH_LIB` no topo), e sem tirá-la o caso mediria o ambiente da suíte.
+TMP_VAZIO="$(mktemp -d)"
+(
+  cat > "$TMP_VAZIO/prova.sh" <<'FIM'
+#!/usr/bin/env bash
+set -euo pipefail
+. ./_common.sh
+printf 'RESOLVEU=[%s]\n' "$(url_do_schema)"
+printf 'SEGUIU\n'
+FIM
+  saida="$(env -u SUPABASE_DB_URL -u SUPABASE_DB_ADMIN_URL bash "$TMP_VAZIO/prova.sh" 2>&1)"
+  rc=$?
+  # A ordem importa: o COMPORTAMENTO primeiro. Uma versão que só troque a
+  # palavra da mensagem não deve reprovar aqui pelo texto — deve reprovar (ou
+  # passar) por parar ou não parar. Com o `:?` de volta, é esta asserção que
+  # dispara, e a saída anexa mostra `RESOLVEU=[]` seguido de `SEGUIU`.
+  if printf '%s' "$saida" | grep -q 'SEGUIU'; then
+    printf '  ✗ o script SEGUIU depois de não achar connection string (rc=%s):\n' "$rc"
+    printf '%s\n' "$saida" | sed 's/^/       /'
+    printf '     — a linha seguinte rodaria com psql "", que erra longe da causa.\n'; exit 1
+  fi
+  if [ "$rc" = 0 ]; then
+    printf '  ✗ o script saiu 0 sem connection string nenhuma — quem o chamou acha que deu certo\n'; exit 1
+  fi
+  # E só então o texto: parar calado manda o operador caçar a causa no psql.
+  if ! printf '%s' "$saida" | grep -q 'SUPABASE_DB_URL'; then
+    printf '  ✗ parou, mas sem dizer QUAL variável falta:\n'
+    printf '%s\n' "$saida" | sed 's/^/       /'; exit 1
+  fi
+  printf '  ✓ derruba o script (rc=%s) e nomeia a variável que falta, sem chegar ao psql\n' "$rc"
+) || fail=1
+rm -rf "$TMP_VAZIO"
 
 echo "integração: update.sh quando a rede do proxy sumiu"
 # O guard da rede nasceu só no install.sh, e o `dc up -d` do update.sh corre o
