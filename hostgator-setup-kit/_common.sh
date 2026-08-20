@@ -304,6 +304,20 @@ enter_project() {
   else die "Não achei $COMPOSE. Rode a partir da pasta do projeto."; fi
   [ -f .env ] || die "Falta o .env (rode install.sh primeiro)."
   load_env .env
+  # ── .env.kit: o que é do KIT e não dos contêineres ─────────────────────────
+  # O `docker-compose.prod.yml` entrega o `.env` INTEIRO ao `app` e ao `worker`
+  # (`env_file: .env`). Uma credencial de dono do banco declarada lá volta para
+  # dentro do contêiner do app — exatamente o privilégio que a issue #192 tirou
+  # dele, de volta com outro nome.
+  #
+  # Este arquivo é lido só aqui: nenhum serviço do compose o referencia. É o que
+  # torna a atualização automática (o `update.sh` do cron do `agent.sh`) possível
+  # SEM pôr `SUPABASE_DB_ADMIN_URL` no `.env`. Vem DEPOIS do `.env` de propósito:
+  # onde as duas fontes declararem a mesma chave, vale a do kit.
+  #
+  # Ausente, `load_env` volta calado (`[ -f ] || return 0`) — quem já instalou
+  # não tem este arquivo e não muda de comportamento.
+  load_env .env.kit
   PROJECT_DIR="$(pwd)"
 }
 
@@ -330,13 +344,35 @@ enter_project() {
 # (`${SUPABASE_DB_URL:-}`) seria pior: o valor CONGELA vazio e todo sítio de DDL
 # passa a rodar `psql ""`. A resolução tem de acontecer na hora do uso.
 #
-# `:?` e não `:-`: sem NENHUMA das duas, o certo é parar com uma frase que diz o
-# que fazer, não seguir para um `psql ""` que erra longe da causa. O limite é
-# honesto — isto roda em substituição de comando, e um subshell não derruba o
-# pai; o que a mensagem garante é que a causa apareça na tela antes do erro de
-# conexão que os chamadores já tratam.
+# Sem NENHUMA das duas, PARA — e para o script inteiro, não só este subshell.
+# A primeira versão usava `${SUPABASE_DB_URL:?...}`, e isso trocava um comporta-
+# mento fecha-a-porta por um deixa-passar sem ninguém pedir: medido, `${VAR:?}`
+# dentro de `$( )` mata só o subshell, o pai continua e sai 0 (`echo "[$(f)]"`
+# imprime `[]` e a linha seguinte roda). O que havia ANTES desta função era
+# `psql "$SUPABASE_DB_URL"` sob `set -u`, e isso derrubava o script mesmo dentro
+# de `|| true` (medido: exit=1) — porque erro de expansão não é erro de comando.
+# Trocar DDL que para por DDL que segue com `psql ""` é fail-open numa AÇÃO.
+#
+# `kill -TERM $$` e não `exit`: `$$` continua sendo o PID do script mesmo dentro
+# da substituição de comando, então isto derruba o pai (medido: exit=143). É o
+# preço de a resolução acontecer na hora do uso — e ela precisa acontecer na hora
+# do uso, porque o `_common.sh` é *sourced* ANTES do `load_env`.
+#
+# É FUNÇÃO, e não uma atribuição no topo deste arquivo, pelo mesmo motivo: o
+# arquivo abre com `set -euo pipefail`, e uma linha
+# `X="${SUPABASE_DB_ADMIN_URL:-$SUPABASE_DB_URL}"` aqui morre em "variável não
+# associada" e leva o kit inteiro junto (medido: a suíte de shell inteira foi a
+# EXIT=1 com 0 casos executados). Com guarda (`${SUPABASE_DB_URL:-}`) seria
+# pior: o valor CONGELA vazio e todo sítio de DDL passa a rodar `psql ""`.
 url_do_schema() {
-  printf '%s' "${SUPABASE_DB_ADMIN_URL:-${SUPABASE_DB_URL:?sem connection string de banco no .env — rode o install.sh}}"
+  local u="${SUPABASE_DB_ADMIN_URL:-}"
+  [ -n "$u" ] || u="${SUPABASE_DB_URL:-}"
+  if [ -z "$u" ]; then
+    printf 'FATAL: sem connection string de banco — nem SUPABASE_DB_ADMIN_URL nem SUPABASE_DB_URL.\n' >&2
+    printf '       Confira o .env do projeto (ou rode o install.sh). NÃO mexi no banco.\n' >&2
+    kill -TERM $$
+  fi
+  printf '%s' "$u"
 }
 
 # psql efêmero via container (não exige psql no host). Usa a conexão de schema:

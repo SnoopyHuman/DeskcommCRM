@@ -1487,6 +1487,27 @@ chmod 600 .env
 rm -f "$PARTIAL_FILE"
 c_grn "✓ .env escrito (permissão 600)"
 
+# ── .env.kit: a conexão de DDL, guardada FORA do que vai aos contêineres ─────
+# O `docker-compose.prod.yml` entrega o `.env` inteiro ao `app` e ao `worker`
+# (`env_file: .env`), então a credencial do dono do banco não pode morar lá — é
+# o privilégio que a issue #192 tirou do contêiner voltando com outro nome.
+#
+# Sem este arquivo, quem passa `SUPABASE_DB_ADMIN_URL` no comando teria de
+# repassá-la em TODA atualização — e o `update.sh` roda sozinho, pelo cron do
+# `agent.sh`, onde não há ninguém para repassar nada. Aqui a credencial fica num
+# arquivo que só o kit lê (`enter_project` → `load_env .env.kit`) e que nenhum
+# serviço do compose referencia.
+#
+# Só quando ela veio pelo ambiente: instalação que não usa Supabase próprio não
+# ganha arquivo nenhum, e quem preferiu declará-la no `.env` continua valendo
+# (o laço de preservação acima a copia de volta).
+if [ -n "${SUPABASE_DB_ADMIN_URL:-}" ]; then
+  ( umask 077; { printf '# Só o kit lê este arquivo — o compose NÃO o entrega aos contêineres.\n'
+                 envq SUPABASE_DB_ADMIN_URL "$SUPABASE_DB_ADMIN_URL"; } > .env.kit )
+  chmod 600 .env.kit
+  c_grn "✓ .env.kit escrito — a conexão de schema fica fora do .env do app"
+fi
+
 # ── 6. Checagem de DNS ──────────────────────────────────────────────────────
 fase 3 "Banco de dados e domínio"
 step "Conferindo DNS de ${DOMAIN}"
