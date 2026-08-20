@@ -128,11 +128,37 @@ const FRASES_INEQUIVOCAS = new RegExp(
   "iu",
 );
 
-/** Só o pedido, tolerando pontuação e uma cortesia curta em volta. */
+/** Só o pedido, tolerando pontuação, símbolo (emoji) e uma cortesia curta em volta. */
 const SO_O_PEDIDO = new RegExp(
-  `^[\\s\\p{P}]*(${PALAVRAS})[\\s\\p{P}]*(por favor|pf|please|obrigad[oa]|gracias)?[\\s\\p{P}]*$`,
+  `^[\\s\\p{P}\\p{S}]*(${PALAVRAS})[\\s\\p{P}\\p{S}]*(por favor|pf|please|obrigad[oa]|gracias)?[\\s\\p{P}\\p{S}]*$`,
   "iu",
 );
+
+/**
+ * Teto de comprimento ANTES de rodar `SO_O_PEDIDO` — e ele não é higiene, é a
+ * diferença entre o webhook responder e o processo parar.
+ *
+ * O padrão tem duas estrelas sobre a mesma classe com um `$` que pode falhar
+ * (`[\s\p{P}\p{S}]*` … grupo opcional … `[\s\p{P}\p{S}]*$`), que é a forma
+ * canônica do backtracking quadrático. Medido no head deste PR, em node 22:
+ *
+ *   "STOP" + 65.000 pontos + "x"  →  21.391 ms   (segunda medição: 33.195 ms)
+ *   "PARAR" + 30.000 espaços + "x" →  6.775 ms
+ *   a mesma entrada contra a STOP_RX da main → 0,00–5,96 ms
+ *
+ * `lib/waha/ingest.ts:580` e `lib/channels/zernio/ingest.ts:206` passam o corpo
+ * INTEIRO da mensagem, e a rota do webhook faz `await dispatchWahaEvent(...)`
+ * com `runtime = "nodejs"` — ou seja, dentro da request, no event loop único do
+ * contêiner. Uma mensagem basta para congelar todos os tenants daquela
+ * instalação por dezenas de segundos, e o transporte reentrega por timeout.
+ * É a mesma classe (js/polynomial-redos) que o PR #241 tirou deste caminho.
+ *
+ * O teto se justifica sozinho: a mensagem que É o pedido é curta por definição.
+ * Com ele, o caso de 65 mil caracteres cai de 21.391 ms para 0,05 ms, e o pior
+ * caso possível DENTRO do teto é 0,0003 ms. Vigiado por
+ * `tests/unit/pos-entrada-redos.test.ts`.
+ */
+const TETO_DO_PEDIDO_CURTO = 120;
 
 export type LeituraDoOptOut = "pediu" | "talvez" | "nao";
 
@@ -145,7 +171,7 @@ export type LeituraDoOptOut = "pediu" | "talvez" | "nao";
 export function lerPedidoDeSaida(texto: string | null): LeituraDoOptOut {
   const t = (texto ?? "").trim();
   if (!t) return "nao";
-  if (SO_O_PEDIDO.test(t)) return "pediu";
+  if (t.length <= TETO_DO_PEDIDO_CURTO && SO_O_PEDIDO.test(t)) return "pediu";
   if (FRASES_INEQUIVOCAS.test(t)) return "pediu";
   // A palavra aparece, mas embrulhada em outra coisa. Não dá para afirmar.
   if (STOP_RX.test(t)) return "talvez";
