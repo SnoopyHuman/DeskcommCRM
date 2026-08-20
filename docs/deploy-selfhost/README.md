@@ -112,15 +112,39 @@ grep -nE '(psql|pg_dump) "' hostgator-setup-kit/*.sh
 `url_do_schema` (em `hostgator-setup-kit/_common.sh`) é a resolução: usa
 `SUPABASE_DB_ADMIN_URL` e, ausente ou vazia, cai em `SUPABASE_DB_URL`.
 
-Duas consequências que valem saber antes de escolher onde declarar:
+### Onde declarar — três modos, e o que cada um custa
 
-- O `docker-compose.prod.yml` entrega o `.env` inteiro ao `app` e ao `worker`
-  (`env_file: .env`). Declarar `SUPABASE_DB_ADMIN_URL` ali a expõe aos
-  contêineres. Para não expor, passe-a só no comando:
-  `SUPABASE_DB_ADMIN_URL='...' bash hostgator-setup-kit/install.sh`.
-- Em compensação, o `update.sh` roda **sozinho** (cron do `agent.sh`) e é ele
-  que entrega migration nova ao clone. Sem a chave no `.env`, cada atualização
-  precisa da sua mão. Escolha consciente, não descuido.
+O `docker-compose.prod.yml` entrega o `.env` **inteiro** ao `app` e ao `worker`
+(`env_file: .env`). É esse fato que decide a escolha:
+
+| Onde | Atualização sozinha (cron) | O contêiner do app lê a credencial? |
+|---|---|---|
+| **`.env.kit`** (recomendado) | sim | **não** |
+| só no comando | não — cada atualização precisa da sua mão | não |
+| `.env` | sim | **sim** |
+
+- **`.env.kit`** — um arquivo ao lado do `.env`, na pasta do projeto, que
+  **só o kit lê** (`enter_project` → `load_env .env.kit`, depois do `.env`, e
+  onde as duas fontes repetirem uma chave vale a do kit). Nenhum serviço do
+  compose o referencia. O `install.sh` o escreve sozinho (600) quando você passa
+  a credencial no comando:
+  `SUPABASE_DB_ADMIN_URL='...' bash hostgator-setup-kit/install.sh`. Numa
+  instalação que já existe, crie-o à mão:
+
+  ```bash
+  cd /caminho/do/projeto            # onde está o docker-compose.prod.yml
+  umask 077 && printf "SUPABASE_DB_ADMIN_URL=\"%s\"\n" 'postgresql://…' > .env.kit
+  ```
+
+  Ausente, nada muda: o kit segue como sempre seguiu.
+- **Só no comando** (`SUPABASE_DB_ADMIN_URL='...' bash …/update.sh`) — não deixa
+  rastro em disco, mas o `update.sh` roda **sozinho** pelo cron do `agent.sh`, e
+  é ele que entrega migration nova ao clone. Nesse modo, cada atualização precisa
+  da sua mão.
+- **`.env`** — funciona e mantém a atualização automática, mas, dito com todas as
+  letras: a credencial de DDL passa a ser **legível de dentro do contêiner do
+  app e do worker**, que é exatamente o privilégio que esta separação existe para
+  tirar deles. Prefira o `.env.kit`.
 
 O `install.sh` **nunca grava** `SUPABASE_DB_ADMIN_URL` no `.env` — se ela estiver
 lá, foi você que pôs.
@@ -235,6 +259,11 @@ e é preciso repetir o comando quando a marca mudar.
 
 - **Backup diário** (do seu crontab na VPS):
   `0 3 * * * /caminho/repo/scripts/backup-db.sh /var/backups/deskcomm`
+  O script dumpa pela mesma conexão de schema do kit — `SUPABASE_DB_ADMIN_URL`
+  (do ambiente, do `.env.kit`, do `.env.local` ou do `.env`) e, ausente, a de
+  sempre. Não é detalhe: `pg_dump` despeja **só o que a role enxerga**, então
+  com a role menor do §2 o backup sai parcial **e sai verde** — e isso só
+  aparece na hora de restaurar.
   (restaure com
   `pg_restore --clean --no-owner -d "${SUPABASE_DB_ADMIN_URL:-$SUPABASE_DB_URL}" arquivo.dump`
   — `--clean` derruba e recria objetos, o que é trabalho de dono do banco)
