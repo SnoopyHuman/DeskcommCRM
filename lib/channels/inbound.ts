@@ -63,6 +63,19 @@ export type InboundWebhookOutcome =
        */
       code: "unauthorized" | "provider_mismatch" | "invalid_json" | "contrato_violado";
       message: string;
+      /**
+       * Os campos recusados, um por entrada — nunca concatenados na `message`.
+       *
+       * É o mesmo formato que as rotas dos outros dois canais devolvem em
+       * `details.campos`, e a razão de ser uma LISTA é que quem consome os três
+       * canais programaticamente lê campo por campo. Texto corrido obriga cada
+       * consumidor a inventar o próprio split — e o separador vira contrato sem
+       * ninguém ter decidido isso.
+       *
+       * Só existe em `contrato_violado`: as outras recusas não têm campo a
+       * nomear.
+       */
+      campos?: string[];
     };
 
 /**
@@ -125,7 +138,8 @@ async function zernioInbound(
     return {
       ok: false,
       code: "contrato_violado",
-      message: `payload fora do contrato do canal: ${leitura.campos.join(", ")}`,
+      message: "payload fora do contrato do canal",
+      campos: leitura.campos,
     };
   }
   const payload = leitura.envelope;

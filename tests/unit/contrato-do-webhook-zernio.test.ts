@@ -196,7 +196,13 @@ describe("a rota — o desfecho que o provider enxerga", () => {
     const res = await POST(pedido({ ...REAL, message: { ...REAL.message, conversationId: 12345 } }), ctx);
 
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ error: { code: "invalid_request" } });
+    // O MESMO desfecho das rotas do WAHA e da Meta: `validation_failed` e os
+    // campos em `details.campos`, um por entrada. Concatená-los na mensagem
+    // (como esta rota fazia) obriga quem integra os três canais a tratar este
+    // de um jeito e os outros dois de outro.
+    expect(await res.json()).toMatchObject({
+      error: { code: "validation_failed", details: { campos: ["message.conversationId"] } },
+    });
     expect(ingeridos).toHaveLength(0);
     // `validSignature` fica `null` e não `false`: a assinatura CONFERIU; o que
     // falhou foi o formato, e marcá-la como inválida mandaria quem investiga

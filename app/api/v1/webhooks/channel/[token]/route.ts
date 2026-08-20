@@ -139,8 +139,26 @@ export async function POST(
       // que o parser recusou não é problema de segredo, e marcá-lo como se
       // fosse mandaria quem investiga procurar no lugar errado.
       validSignature: r.code === "unauthorized" ? false : null,
-      erro: r.message,
+      // A coluna do arquivo é UMA string, então aqui os campos entram no texto
+      // — é leitura humana, não contrato de máquina. Quem consome por API os
+      // recebe em `details.campos`, abaixo.
+      erro: r.campos?.length ? `${r.message}: ${r.campos.join(", ")}` : r.message,
     });
+    // ─── Um payload fora do contrato responde IGUAL nos três canais ──────────
+    //
+    // `validation_failed` + `details.campos`, o mesmo que as rotas do WAHA e da
+    // Meta devolvem. Isto aqui respondia `invalid_request` com os campos
+    // concatenados na mensagem: quem integra os três canais tinha de tratar
+    // este de um jeito e os outros dois de outro, sem nada no comportamento que
+    // justificasse a diferença. `invalid_json` e `provider_mismatch` seguem
+    // `invalid_request` — não são o formato do payload, são o corpo e a
+    // configuração.
+    if (r.code === "contrato_violado") {
+      return fail("validation_failed", r.message, 400, {
+        requestId,
+        details: { campos: r.campos ?? [] },
+      });
+    }
     return fail(
       r.code === "unauthorized" ? "unauthorized" : "invalid_request",
       r.message,
