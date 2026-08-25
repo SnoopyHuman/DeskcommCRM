@@ -15,8 +15,16 @@ import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createLeadHandler } from "@/app/api/v1/leads/_handler";
+import { emitLeadActivity } from "@/lib/leads/activity-emitter";
 import type { CreateLeadInput } from "@/lib/schemas";
 import { mapInboundPayload, verifyInboundSignature, type FieldMap } from "@/lib/webhooks/inbound";
+import {
+  buildContactConsentGrant,
+  isRespondiPayload,
+  mapRespondiPayload,
+  respondiLeadTitle,
+  type RespondiMapped,
+} from "@/lib/webhooks/respondi";
 import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
 import { ApiError } from "@/lib/api/types";
 
@@ -134,13 +142,26 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
     attempts: 0,
   });
 
+  // Respondi manda `{ form: {...}, respondent: { answers: {...} } }` — dois
+  // níveis aninhados que o mapeador genérico descarta por desenho (ele só lê
+  // chave de topo). Detecta a forma UMA vez aqui; `respondiMapped` alimenta
+  // tanto o idempotency key quanto o mapeamento de campos mais abaixo.
+  const respondiMapped: RespondiMapped | null = isRespondiPayload(payload)
+    ? mapRespondiPayload(payload)
+    : null;
+
   // Idempotência (spec §5): `external_id` é campo reservado do envio — quem
   // integra via sistema (Zapier/n8n/loja) manda o ID único do disparo e o
   // reenvio automático (retry por timeout) NUNCA duplica o lead. O índice
   // uniq_crm_leads_org_source_external garante a corrida; aqui vai o fast-path.
+  // Respondi não manda `external_id` de topo — manda `respondent.respondent_id`
+  // aninhado; sem este fallback, um retry do Respondi (timeout, reenvio manual)
+  // criaria um segundo lead para a mesma resposta de formulário.
   const externalIdRaw = payload["external_id"];
   const externalId =
-    typeof externalIdRaw === "string" && externalIdRaw.trim() ? externalIdRaw.trim().slice(0, 255) : null;
+    typeof externalIdRaw === "string" && externalIdRaw.trim()
+      ? externalIdRaw.trim().slice(0, 255)
+      : (respondiMapped?.externalId ?? null);
 
   const respondWithLead = (leadId: string): NextResponse => {
     if (isForm && source.redirect_to) {
@@ -172,7 +193,8 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
   // external_id não é dado do lead — sai do payload antes do mapeamento pra
   // não virar custom_field (o log de recebimento acima preserva o original).
   const { external_id: _reservedExternalId, ...payloadForMapping } = payload;
-  const mapped = mapInboundPayload(externalId ? payloadForMapping : payload, fieldMap);
+  const mapped =
+    respondiMapped ?? mapInboundPayload(externalId ? payloadForMapping : payload, fieldMap);
   if (!mapped.phone) {
     const rawPhone = findRawPhoneIfUnnormalized(payload, fieldMap);
     if (rawPhone) mapped.source_metadata.raw_phone = rawPhone;
@@ -195,6 +217,22 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
         .is("is_merged_into", null)
         .maybeSingle();
 
+    // uniq_contacts_org_email (baseline.sql) é um SEGUNDO índice único parcial,
+    // independente de uniq_contacts_org_phone — um INSERT pode colidir nele
+    // mesmo com telefone inédito (mesma pessoa manda e-mail repetido, telefone
+    // novo). email_normalized é coluna GERADA (`lower(trim(email))`), então a
+    // comparação replica exatamente essa normalização — não `email` bruto.
+    const selectActiveByEmail = (): ReturnType<typeof selectActiveByPhone> | null => {
+      if (!mapped.email) return null;
+      return admin
+        .from("contacts")
+        .select("id")
+        .eq("organization_id", source.organization_id)
+        .eq("email_normalized", mapped.email.trim().toLowerCase())
+        .is("is_merged_into", null)
+        .maybeSingle();
+    };
+
     const { data: existing } = await selectActiveByPhone();
     if (existing) {
       contactId = existing.id as string;
@@ -208,16 +246,34 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
           email: mapped.email,
           source: "webhook",
           source_metadata: { webhook_source_id: source.id, ...mapped.source_metadata },
+          // Consentimento explícito só quando o Respondi confirmou concessão.
+          // Recusa NUNCA vira concessão por omissão: sem esta chave o INSERT
+          // usa o DEFAULT da coluna (tudo null == não concedido), que já é o
+          // estado correto — a recusa fica registrada no lead (custom_fields
+          // + atividade na timeline), não fabricada aqui como consentimento.
+          ...(respondiMapped?.consent.granted
+            ? { consent: buildContactConsentGrant(respondiMapped.custom_fields.respondi_form_id ?? null) }
+            : {}),
         })
         .select("id")
         .maybeSingle();
       if (insertErr) {
         if (insertErr.code === "23505") {
-          // Corrida: outro POST concorrente com o mesmo telefone novo já
-          // criou o contato entre o select e o insert. Re-seleciona o
-          // vencedor em vez de deixar o lead órfão.
-          const { data: winner } = await selectActiveByPhone();
-          contactId = (winner?.id as string | undefined) ?? undefined;
+          // Corrida OU duplicidade real: outro contato já existe com o mesmo
+          // TELEFONE (corrida clássica: dois POSTs concorrentes) ou com o
+          // mesmo E-MAIL (telefone inédito, e-mail repetido — o caso que
+          // órfãava o lead antes desta linha, achado em 2026-08-25 rodando os
+          // testes do fix do Respondi). Telefone primeiro — é o identificador
+          // mais confiável do produto; e-mail só como fallback, e só quando o
+          // payload realmente trouxe um.
+          const { data: winnerByPhone } = await selectActiveByPhone();
+          if (winnerByPhone) {
+            contactId = winnerByPhone.id as string;
+          } else {
+            const byEmail = selectActiveByEmail();
+            const { data: winnerByEmail } = byEmail ? await byEmail : { data: null };
+            contactId = (winnerByEmail?.id as string | undefined) ?? undefined;
+          }
         } else {
           logger.error("[webhooks.inbound] contact insert failed", {
             webhookSourceId: source.id,
@@ -239,7 +295,9 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
   } = {
     pipeline_id: source.default_pipeline_id,
     stage_id: source.default_stage_id,
-    title: mapped.name ?? mapped.phone ?? mapped.email ?? "Lead sem nome",
+    title: respondiMapped
+      ? respondiLeadTitle(respondiMapped)
+      : (mapped.name ?? mapped.phone ?? mapped.email ?? "Lead sem nome"),
     contact_id: contactId,
     currency: "BRL",
     tags: [],
@@ -287,6 +345,36 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
     requestId,
     metadata: { webhook_source_id: source.id },
   });
+
+  // Recusa de consentimento é sinal, não ausência de sinal (mesma regra da
+  // timeline pra veto/handoff): registrada aqui pra quem olha o dossiê saber
+  // POR QUE nenhuma automação de 1º toque disparou pra este lead — nunca pra
+  // autorizar contato, só pra deixar a recusa visível.
+  if (respondiMapped && !respondiMapped.consent.granted) {
+    const atividade = await emitLeadActivity(admin, {
+      organizationId: source.organization_id,
+      leadId: String(lead.id),
+      contactId: contactId ?? null,
+      type: "consent_declined",
+      sourceModule: "webhook",
+      sourceId: source.id,
+      actor: { type: "webhook_source", id: source.id },
+      reason: "Respondente não concedeu consentimento de contato no formulário Respondi.",
+      payload: {
+        webhook_source_id: source.id,
+        detected_via: respondiMapped.consent.detectedVia,
+        raw_answer: respondiMapped.consent.rawAnswer,
+      },
+    });
+    if (!atividade.ok) {
+      logger.error("[webhooks.inbound] consent_declined activity failed", {
+        webhookSourceId: source.id,
+        organizationId: source.organization_id,
+        leadId: String(lead.id),
+        error: atividade.error,
+      });
+    }
+  }
 
   return respondWithLead(String(lead.id));
 }

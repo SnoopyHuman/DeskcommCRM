@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -270,6 +271,14 @@ const WHIN_SOURCE_JSON = "dddddddd-5555-4000-8000-000000000001";
 const WHIN_SOURCE_FORM = "dddddddd-5555-4000-8000-000000000002";
 const WHIN_SOURCE_INACTIVE = "dddddddd-5555-4000-8000-000000000003";
 const WHIN_SOURCE_SECRET = "dddddddd-5555-4000-8000-000000000004";
+const WHIN_SOURCE_RESPONDI = "dddddddd-5555-4000-8000-000000000005";
+// Fixture própria (namespace ffffffff, mesmo padrão de webhooks-rls.test.ts) —
+// org B só pra provar que o fallback por e-mail não cruza tenant.
+const WHIN_ORG_B = "ffffffff-0000-4000-8000-000000000101";
+const WHIN_PIPELINE_B = "ffffffff-5555-4000-8000-000000000101";
+const WHIN_STAGE_B = "ffffffff-5555-4000-8000-000000000102";
+const WHIN_SOURCE_RESPONDI_B = "ffffffff-5555-4000-8000-000000000103";
+const TOKEN_RESPONDI_B = "wh-in-respondi-org-b-token-1234";
 const SECRET = "test-webhook-secret-abc123";
 const REDIRECT_TO = "https://example.com/obrigado";
 
@@ -278,6 +287,40 @@ const TOKEN_FORM = "wh-in-form-token-1234";
 const TOKEN_INACTIVE = "wh-in-inactive-token-1234";
 const TOKEN_SECRET = "wh-in-secret-token-1234";
 const TOKEN_UNKNOWN = "wh-in-does-not-exist-1234";
+const TOKEN_RESPONDI = "wh-in-respondi-token-1234";
+
+/** Fixture sanitizada — mesma FORMA do payload real do Respondi (webhook_events_log, 2026-08-25). */
+const RESPONDI_FIXTURE = JSON.parse(
+  readFileSync("tests/fixtures/webhooks/respondi-imobiliario.json", "utf8"),
+) as Record<string, unknown>;
+
+/**
+ * Cópia funda com respondent_id, telefone e e-mail trocados.
+ *
+ * `respondent_id` — cada teste precisa do seu, senão o dedup por external_id
+ * os confunde. `phone`/`email` — idem para o contato: `uniq_contacts_org_email`
+ * (baseline.sql:2911) é tão real quanto `uniq_contacts_org_phone`, e a rota
+ * reusa contato existente por telefone OU colide no INSERT por e-mail
+ * repetido — dois testes que compartilham qualquer um dos dois acabam no
+ * MESMO contato (ou, pior, um 23505 por e-mail que a rota só sabe
+ * recuperar re-selecionando por TELEFONE — achado à parte, fora do escopo
+ * deste fix). Cada `it()` usa telefone E e-mail próprios.
+ */
+function respondiPayload(
+  respondentId: string,
+  phone: string,
+  email: string,
+  overrides: (p: Record<string, unknown>) => void = () => {},
+) {
+  const clone = JSON.parse(JSON.stringify(RESPONDI_FIXTURE)) as Record<string, unknown>;
+  const respondent = clone.respondent as Record<string, unknown>;
+  respondent.respondent_id = respondentId;
+  const answers = respondent.answers as Record<string, unknown>;
+  answers["Qual é o melhor WhatsApp para falarmos sobre essa análise?"] = phone;
+  answers["Qual é o seu melhor e-mail?"] = email;
+  overrides(clone);
+  return clone;
+}
 
 beforeAll(() => {
   seedGov();
@@ -305,6 +348,23 @@ beforeAll(() => {
     insert into public.webhook_sources
       (id, organization_id, name, path_token, default_pipeline_id, default_stage_id, secret_encrypted)
       values ('${WHIN_SOURCE_SECRET}', '${GOV_ORG}', 'Secret source', '${TOKEN_SECRET}', '${GOV_PIPELINE}', '${GOV_STAGE}', public.fn_encrypt_oauth('${SECRET}'))
+      on conflict do nothing;
+    insert into public.webhook_sources
+      (id, organization_id, name, path_token, default_pipeline_id, default_stage_id)
+      values ('${WHIN_SOURCE_RESPONDI}', '${GOV_ORG}', 'Respondi — Decola Aí Imobiliário', '${TOKEN_RESPONDI}', '${GOV_PIPELINE}', '${GOV_STAGE}')
+      on conflict do nothing;
+    insert into public.organizations (id, slug, legal_name, display_name)
+      values ('${WHIN_ORG_B}', 'gov-inv-whin-org-b', 'Gov Invariant Webhooks-In Org B', 'Gov Inv Whin B')
+      on conflict do nothing;
+    insert into public.crm_pipelines (id, organization_id, name, slug)
+      values ('${WHIN_PIPELINE_B}', '${WHIN_ORG_B}', 'Pipeline B', 'pipeline-b')
+      on conflict do nothing;
+    insert into public.crm_stages (id, organization_id, pipeline_id, name, slug, position)
+      values ('${WHIN_STAGE_B}', '${WHIN_ORG_B}', '${WHIN_PIPELINE_B}', 'Novo', 'novo', 1000)
+      on conflict do nothing;
+    insert into public.webhook_sources
+      (id, organization_id, name, path_token, default_pipeline_id, default_stage_id)
+      values ('${WHIN_SOURCE_RESPONDI_B}', '${WHIN_ORG_B}', 'Respondi Org B', '${TOKEN_RESPONDI_B}', '${WHIN_PIPELINE_B}', '${WHIN_STAGE_B}')
       on conflict do nothing;
   `);
 });
@@ -467,4 +527,209 @@ describe("POST /api/v1/webhooks/in/[token] (Task 6)", () => {
   // unit test em lib/ai/dispatcher/rate-limit.ts. Provar o 429 aqui exigiria
   // 61 chamadas sequenciais só pra exercitar um path já testado; pulado.
   it.skip("rate limit 429 após estourar a janela — coberto por unit test do fallback in-memory", () => {});
+});
+
+describe("POST /api/v1/webhooks/in/[token] — Respondi (payload aninhado, achado 2026-08-25)", () => {
+  it("caso 1 — envio real do Respondi cria contato + lead com campos mapeados, título empresa+nome, consentimento gravado", async () => {
+    const payload = respondiPayload("resp-int-happy-0001", "55 15988880001", "maria.exemplo+0001@example.com");
+    const res = await POST(jsonReq(TOKEN_RESPONDI, payload), reqCtx(TOKEN_RESPONDI));
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { data: { lead_id: string } };
+    const leadId = json.data.lead_id;
+    expect(leadId).toBeTruthy();
+
+    const leadRows = rows(`select * from public.crm_leads where id = '${leadId}'`);
+    expect(leadRows.length).toBe(1);
+    const lead = leadRows[0]!;
+    // Título: empresa + contato — NUNCA um rótulo genérico fixo.
+    expect(lead.title).toBe("Exemplo Incorporadora — Maria Exemplo");
+    expect(lead.external_id).toBe("respondi:resp-int-happy-0001");
+    const cf = lead.custom_fields as Record<string, unknown>;
+    expect(cf.company_name).toBe("Exemplo Incorporadora");
+    expect(cf.segment).toBe("Incorporadora");
+    expect(cf.viable_investment_range).toBe("De R$ 4 mil a R$ 7 mil por mês");
+    expect(cf.respondi_score).toBe("55");
+    expect(cf.respondi_form_id).toBe("9FiY9mrO");
+    expect(cf.consent_marketing_status).toBe("granted");
+
+    const contactRows = rows(`select * from public.contacts where id = '${lead.contact_id}'`);
+    expect(contactRows.length).toBe(1);
+    const contact = contactRows[0]!;
+    expect(contact.phone_number).toBe("+5515988880001");
+    expect(contact.email).toBe("maria.exemplo+0001@example.com");
+    const consent = contact.consent as { marketing: { granted_at: string | null; source: string | null } };
+    expect(consent.marketing.granted_at).not.toBeNull();
+    expect(consent.marketing.source).toBe("webhook:respondi");
+  });
+
+  it("caso 2 — o MESMO envio (mesmo respondent_id) reenviado não duplica o lead (idempotência via respondent_id)", async () => {
+    const payload = respondiPayload("resp-int-idempotent-0002", "55 15988880002", "maria.exemplo+0002@example.com");
+    const res1 = await POST(jsonReq(TOKEN_RESPONDI, payload), reqCtx(TOKEN_RESPONDI));
+    expect(res1.status).toBe(200);
+    const leadId1 = ((await res1.json()) as { data: { lead_id: string } }).data.lead_id;
+
+    const res2 = await POST(jsonReq(TOKEN_RESPONDI, payload), reqCtx(TOKEN_RESPONDI));
+    expect(res2.status).toBe(200);
+    const leadId2 = ((await res2.json()) as { data: { lead_id: string } }).data.lead_id;
+
+    expect(leadId2).toBe(leadId1);
+    const count = Number(
+      rows(`select count(*) as n from public.crm_leads where external_id = 'respondi:resp-int-idempotent-0002'`)[0]!
+        .n,
+    );
+    expect(count).toBe(1);
+  });
+
+  it("caso 3 — consentimento recusado: lead é criado, contato NÃO ganha consent.marketing, e a recusa vira atividade na timeline", async () => {
+    const payload = respondiPayload("resp-int-declined-0003", "55 15988880003", "maria.exemplo+0003@example.com", (p) => {
+      const respondent = p.respondent as Record<string, unknown>;
+      const rawAnswers = respondent.raw_answers as Array<Record<string, unknown>>;
+      const legaltext = rawAnswers.find(
+        (r) => (r.question as Record<string, unknown>).question_type === "legaltext",
+      )!;
+      legaltext.answer = "no";
+      (respondent.answers as Record<string, unknown>)["Autorização de contato"] = "Não aceito";
+    });
+
+    const res = await POST(jsonReq(TOKEN_RESPONDI, payload), reqCtx(TOKEN_RESPONDI));
+    expect(res.status).toBe(200);
+    const leadId = ((await res.json()) as { data: { lead_id: string } }).data.lead_id;
+
+    const lead = rows(`select * from public.crm_leads where id = '${leadId}'`)[0]!;
+    expect((lead.custom_fields as Record<string, unknown>).consent_marketing_status).toBe("declined");
+
+    const contact = rows(`select * from public.contacts where id = '${lead.contact_id}'`)[0]!;
+    const consent = contact.consent as { marketing: { granted_at: string | null } };
+    // Recusa NUNCA vira concessão por omissão: continua no default (tudo null).
+    expect(consent.marketing.granted_at).toBeNull();
+
+    const activityRows = rows(
+      `select * from public.crm_lead_activities where lead_id = '${leadId}' and type = 'consent_declined'`,
+    );
+    expect(activityRows.length).toBe(1);
+    expect(activityRows[0]!.actor_kind).toBe("system");
+  });
+
+  it("caso 4 — compatibilidade: o botão interno 'Enviar lead de teste' (payload genérico) continua funcionando sem passar pelo caminho Respondi", async () => {
+    // Mesmo payload literal que SourceDetail.tsx manda — bate numa fonte
+    // comum (não-Respondi), prova que o normalizador novo não interfere.
+    const res = await POST(
+      jsonReq(TOKEN_JSON, { nome: "Lead de Teste", telefone: "11999990000", utm_source: "teste" }),
+      reqCtx(TOKEN_JSON),
+    );
+    expect(res.status).toBe(200);
+    const leadId = ((await res.json()) as { data: { lead_id: string } }).data.lead_id;
+    const lead = rows(`select * from public.crm_leads where id = '${leadId}'`)[0]!;
+    expect(lead.title).toBe("Lead de Teste");
+  });
+
+  it("caso 5 — campo (empresa) ausente no envio: título cai pro nome, sem quebrar", async () => {
+    const payload = respondiPayload("resp-int-sem-empresa-0005", "55 15988880005", "maria.exemplo+0005@example.com", (p) => {
+      const respondent = p.respondent as Record<string, unknown>;
+      delete (respondent.answers as Record<string, unknown>)["Qual é o nome da sua empresa?"];
+    });
+    const res = await POST(jsonReq(TOKEN_RESPONDI, payload), reqCtx(TOKEN_RESPONDI));
+    expect(res.status).toBe(200);
+    const leadId = ((await res.json()) as { data: { lead_id: string } }).data.lead_id;
+    const lead = rows(`select * from public.crm_leads where id = '${leadId}'`)[0]!;
+    expect(lead.title).toBe("Maria Exemplo");
+    expect((lead.custom_fields as Record<string, unknown>).company_name).toBeUndefined();
+  });
+
+  it("caso 6 — MESMO e-mail, telefone DIFERENTE: conflito 23505 por e-mail não órfã o lead (achado do fix anterior)", async () => {
+    // Pré-semeia um contato ATIVO com um e-mail que o próximo envio vai
+    // repetir — telefone deliberadamente diferente do que o payload vai usar,
+    // pra garantir que o pré-check por telefone NÃO encontre nada e a rota
+    // realmente tente o INSERT (e bata no uniq_contacts_org_email).
+    const preexistingId = "dddddddd-7777-4000-8000-000000000001";
+    const sharedEmail = "colisao.email@example.com";
+    sql(`
+      insert into public.contacts (id, organization_id, name, phone_number, email, source)
+      values ('${preexistingId}', '${GOV_ORG}', 'Dono Original do E-mail', '+5515900000001', '${sharedEmail}', 'manual')
+      on conflict do nothing;
+    `);
+
+    const payload = respondiPayload("resp-int-mesmo-email-0006", "55 15900000099", sharedEmail);
+    const res = await POST(jsonReq(TOKEN_RESPONDI, payload), reqCtx(TOKEN_RESPONDI));
+    expect(res.status).toBe(200);
+    const leadId = ((await res.json()) as { data: { lead_id: string } }).data.lead_id;
+
+    const lead = rows(`select * from public.crm_leads where id = '${leadId}'`)[0]!;
+    // O CORAÇÃO do fix: contact_id NÃO pode ficar null.
+    expect(lead.contact_id).not.toBeNull();
+    expect(lead.contact_id).toBe(preexistingId);
+
+    // Nenhum contato NOVO foi criado — reusou o existente por e-mail.
+    const emailCount = Number(
+      rows(
+        `select count(*) as n from public.contacts where organization_id = '${GOV_ORG}' and email_normalized = '${sharedEmail}'`,
+      )[0]!.n,
+    );
+    expect(emailCount).toBe(1);
+  });
+
+  it("caso 7 — MESMO telefone: continua reusando o contato existente por telefone (regressão do fallback por e-mail)", async () => {
+    const preexistingId = "dddddddd-7777-4000-8000-000000000002";
+    const sharedPhone = "+5515900000002";
+    sql(`
+      insert into public.contacts (id, organization_id, name, phone_number, email, source)
+      values ('${preexistingId}', '${GOV_ORG}', 'Dono Original do Telefone', '${sharedPhone}', 'outro.email@example.com', 'manual')
+      on conflict do nothing;
+    `);
+
+    // Mesmo telefone do contato pré-existente, e-mail NOVO — prova que o
+    // telefone continua tendo prioridade sobre e-mail (não troca o contato
+    // reusado por um e-mail diferente).
+    const payload = respondiPayload("resp-int-mesmo-telefone-0007", "55 15900000002", "email.novo.0007@example.com");
+    const res = await POST(jsonReq(TOKEN_RESPONDI, payload), reqCtx(TOKEN_RESPONDI));
+    expect(res.status).toBe(200);
+    const leadId = ((await res.json()) as { data: { lead_id: string } }).data.lead_id;
+
+    const lead = rows(`select * from public.crm_leads where id = '${leadId}'`)[0]!;
+    expect(lead.contact_id).toBe(preexistingId);
+
+    const phoneCount = Number(
+      rows(
+        `select count(*) as n from public.contacts where organization_id = '${GOV_ORG}' and phone_number = '${sharedPhone}'`,
+      )[0]!.n,
+    );
+    expect(phoneCount).toBe(1);
+  });
+
+  it("caso 8 — organizações DIFERENTES: mesmo e-mail e mesmo telefone em duas orgs nunca se cruzam", async () => {
+    const sharedEmail = "cross.org@example.com";
+    const sharedPhoneDigits = "15900000008";
+
+    const payloadOrgA = respondiPayload(
+      "resp-int-org-a-0008",
+      `55 ${sharedPhoneDigits}`,
+      sharedEmail,
+    );
+    const resA = await POST(jsonReq(TOKEN_RESPONDI, payloadOrgA), reqCtx(TOKEN_RESPONDI));
+    expect(resA.status).toBe(200);
+    const leadIdA = ((await resA.json()) as { data: { lead_id: string } }).data.lead_id;
+
+    const payloadOrgB = respondiPayload(
+      "resp-int-org-b-0008",
+      `55 ${sharedPhoneDigits}`,
+      sharedEmail,
+    );
+    const resB = await POST(jsonReq(TOKEN_RESPONDI_B, payloadOrgB), reqCtx(TOKEN_RESPONDI_B));
+    expect(resB.status).toBe(200);
+    const leadIdB = ((await resB.json()) as { data: { lead_id: string } }).data.lead_id;
+
+    const leadA = rows(`select * from public.crm_leads where id = '${leadIdA}'`)[0]!;
+    const leadB = rows(`select * from public.crm_leads where id = '${leadIdB}'`)[0]!;
+    expect(leadA.organization_id).toBe(GOV_ORG);
+    expect(leadB.organization_id).toBe(WHIN_ORG_B);
+    // Contatos DIFERENTES — nenhum vazamento cross-tenant via e-mail/telefone.
+    expect(leadA.contact_id).not.toBe(leadB.contact_id);
+
+    const contactA = rows(`select * from public.contacts where id = '${leadA.contact_id}'`)[0]!;
+    const contactB = rows(`select * from public.contacts where id = '${leadB.contact_id}'`)[0]!;
+    expect(contactA.organization_id).toBe(GOV_ORG);
+    expect(contactB.organization_id).toBe(WHIN_ORG_B);
+    expect(contactA.email).toBe(sharedEmail);
+    expect(contactB.email).toBe(sharedEmail);
+  });
 });

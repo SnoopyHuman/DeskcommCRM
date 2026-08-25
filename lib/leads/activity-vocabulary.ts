@@ -66,7 +66,14 @@ export type ActivityType =
   | "conversation_claimed"
   | "conversation_transferred"
   | "conversation_released"
-  | "conversation_ai_paused";
+  | "conversation_ai_paused"
+  /**
+   * O respondente disse NÃO no formulário de captação (ex.: Respondi). A
+   * recusa é sinal, não ausência de sinal — sem linha na timeline, "por que
+   * ninguém mandou WhatsApp pra este lead" fica sem resposta visível, e é
+   * justamente esse silêncio que a automação de 1º toque precisa respeitar.
+   */
+  | "consent_declined";
 
 export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   lead_created: "Entrou pelo WhatsApp",
@@ -143,6 +150,7 @@ export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   // arquivos e o controle NEGATIVO de `handoff-por-orcamento.test.ts` usa
   // literalmente "Voltar para a IA" como a sabotagem que deve reprovar.
   conversation_ai_paused: "Pausou o automático",
+  consent_declined: "Consentimento de contato recusado no formulário",
 };
 
 /** Quando o tipo é legado/desconhecido, a linha ainda é honesta — sem jargão. */
