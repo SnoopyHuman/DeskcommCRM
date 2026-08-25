@@ -1084,6 +1084,27 @@ async function executarTurnoDoAgente(
   // hora do envio, teria passado.
   if (turnoVaiFalarComOLead(job)) {
     const { knobs } = await loadChannelKnobs(pool, tenantId, input.channelSessionId, runLog);
+    // O RELÓGIO DO TURNO, não o do processo.
+    //
+    // Aqui estava `new Date()` cru, e o turno inteiro tem um clock injetável
+    // (`deps.clock`) — que é como todo o resto decide "que horas são". Dois
+    // relógios no mesmo caminho, e o desfecho é do que não foi injetado.
+    //
+    // O sintoma: três invariantes que exercitam o turno completo
+    // (`agent-send-template-turn`, `agent-no-credential`,
+    // `limite-de-envios-por-turno`) fixam o clock DENTRO da janela — 15:00Z,
+    // 18:00Z — e mesmo assim reprovavam com "fora da janela anti-ban" sempre
+    // que o relógio REAL estivesse fora dela. Ou seja: passavam de dia e
+    // falhavam de noite, e a mensagem culpava o anti-ban em vez do relógio.
+    // Medido em 2026-08-24 às 22:29 local, e reproduzido no CI às 01:37 UTC.
+    // (Este parágrafo veio do PR #322, que achou o mesmo defeito de forma
+    // independente — a QUARTA convergência sobre ele. O código é o do #319,
+    // que declara o clock uma vez no topo e cobre TAMBÉM a segunda guarda de
+    // horário, 100 linhas abaixo; a versão do #322 consertava só esta.)
+    //
+    // Em produção `deps.clock` é ausente e isto continua sendo `new Date()` —
+    // nada muda para quem roda. O que muda é o teste poder decidir a hora, que
+    // é o ponto de um clock injetável.
     const agora = clock();
     if (!janelaDeEnvioAberta(agora, knobs)) {
       const abertura = proximaAberturaDaJanela(agora, knobs);

@@ -223,6 +223,12 @@ const TABLES = [
   // sabotada para `... or true` a suíte seguia 31/31 verde num banco em que o vizinho
   // lia e escrevia. É o modo de falha que o aviso acima descreve, encontrado vivo.
   "org_guardrail_layers",
+  // ⚠️ `webhook_lead_captures` (migration 0169) NÃO entra nesta lista, e a
+  // ausência é deliberada: a policy dela exige `manager`, e o usuário semeado
+  // aqui é `agent` — o controle positivo falharia por ACERTO, e a "correção"
+  // natural seria afrouxar a policy para caber no molde. A prova dela vive em
+  // `tests/invariants/historico-de-captacao-rls.test.ts`, que mede as duas
+  // direções MAIS o gate de papel (o `viewer` que não lê o formulário).
 ] as const;
 
 describe("RLS tenant isolation (fn_user_org_ids pattern)", () => {

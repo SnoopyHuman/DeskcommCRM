@@ -65,3 +65,23 @@ export const AUTOMATED_SEND_SPACING_MS = 1200;
 export function jitterMs(): number {
   return Math.floor(Math.random() * 801);
 }
+
+/**
+ * Espaçamento entre envios automatizados do MESMO número, dentro do tique do
+ * drain. Intervalo fixo é assinatura de robô, daí o jitter.
+ *
+ * O estado é de módulo — suficiente para a instância única do cron, e é o que
+ * já valia quando isto morava dentro da ação de WhatsApp. Virou função aqui
+ * porque a ação de IA precisa do MESMO espaçamento: duas cópias do contador
+ * dariam a cada uma seu próprio relógio, e duas ações na mesma regra
+ * disparariam em rajada pelo mesmo número — exatamente o padrão que faz o
+ * WhatsApp banir.
+ */
+const _ultimoEnvioPorSessao = new Map<string, number>();
+
+export async function espacarEnvio(sessionId: string): Promise<void> {
+  const ultimo = _ultimoEnvioPorSessao.get(sessionId) ?? 0;
+  const esperar = ultimo + AUTOMATED_SEND_SPACING_MS + jitterMs() - Date.now();
+  if (esperar > 0) await new Promise((r) => setTimeout(r, esperar));
+  _ultimoEnvioPorSessao.set(sessionId, Date.now());
+}

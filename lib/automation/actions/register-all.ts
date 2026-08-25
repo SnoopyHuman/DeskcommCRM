@@ -4,3 +4,4 @@ import "@/lib/automation/actions/assign-owner";
 import "@/lib/automation/actions/create-or-move-lead";
 import "@/lib/automation/actions/call-webhook";
 import "@/lib/automation/actions/send-whatsapp";
+import "@/lib/automation/actions/send-ai-message";

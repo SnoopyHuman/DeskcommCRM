@@ -13,12 +13,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePipelines, usePipelineStages } from "@/hooks/webhooks/useWebhookSources";
+import { useAgentsList } from "@/hooks/ai/useAgents";
 import { channelLabel, useChannelSessions } from "@/hooks/channels/useChannelSessions";
 import { useAssignableMembers } from "@/hooks/inbox/useAssignableMembers";
 
 export type ActionItem =
   | { type: "create_or_move_lead"; config: { pipeline_id: string; stage_id: string } }
   | { type: "send_whatsapp_message"; config: { channel_session_id: string; template: string } }
+  | {
+      type: "send_ai_message";
+      config: { agent_id: string; channel_session_id: string; instruction: string };
+    }
   | { type: "add_tag"; config: { tags: string[] } }
   | { type: "assign_owner"; config: { user_id: string } }
   | { type: "call_webhook"; config: { url: string; secret?: string; secret_enc?: string } };
@@ -29,6 +34,8 @@ export function defaultActionConfig(type: ActionItem["type"]): ActionItem {
       return { type, config: { pipeline_id: "", stage_id: "" } };
     case "send_whatsapp_message":
       return { type, config: { channel_session_id: "", template: "" } };
+    case "send_ai_message":
+      return { type, config: { agent_id: "", channel_session_id: "", instruction: "" } };
     case "add_tag":
       return { type, config: { tags: [] } };
     case "assign_owner":
@@ -174,8 +181,101 @@ function SendWhatsappForm({
           placeholder="Oi {{nome}}, tudo bem?"
         />
         <p className="text-xs text-muted-foreground">
-          Enviamos só entre 7h e 22h e respeitamos o limite diário do número — fora disso a
-          mensagem espera a próxima janela.
+          {/* NÃO cravar "7h e 22h": a janela passou a vir dos ajustes DO NÚMERO
+              (Conexões), no fuso da sua organização, e quem a mudou lá veria a
+              tela continuar prometendo outro horário. Rótulo visível é contrato. */}
+          Respeitamos a janela de envio e o limite diário configurados para esse número em
+          Conexões — fora da janela, a mensagem espera a próxima.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Mensagem escrita pela IA" — o agente publicado lê o formulário e escreve.
+ *
+ * Três campos e uma ordem deliberada: QUEM escreve (o agente, que carrega o
+ * tom e o conhecimento do negócio), POR ONDE sai (o número), e — o campo que
+ * faz a diferença — O QUE FAZER com o que a pessoa preencheu.
+ *
+ * Esse terceiro campo é o mesmo desenho do "Instrução para a IA" de um passo de
+ * follow-up. Sem ele o agente receberia um punhado de dados e nenhuma tarefa, e
+ * escreveria o genérico que qualquer IA escreve. Os exemplos abaixo do campo
+ * não são enfeite: eles mostram o NÍVEL de instrução que funciona, que é a
+ * dúvida real de quem nunca escreveu prompt.
+ */
+function SendAiMessageForm({
+  config,
+  onChange,
+}: FormProps<{ agent_id: string; channel_session_id: string; instruction: string }>) {
+  const { data: agentes } = useAgentsList();
+  const { data: sessions } = useChannelSessions();
+  const publicados = (agentes ?? []).filter((a) => Boolean(a.published_version_id));
+  const semPublicado = (agentes ?? []).length > 0 && publicados.length === 0;
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <Label>Qual agente escreve</Label>
+        <Select
+          value={config.agent_id}
+          onValueChange={(v) => onChange({ ...config, agent_id: v })}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Escolha o agente" />
+          </SelectTrigger>
+          <SelectContent>
+            {(agentes ?? []).map((a) => (
+              <SelectItem key={a.id} value={a.id} disabled={!a.published_version_id}>
+                {a.name + (a.published_version_id ? "" : " — não publicado")}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          {semPublicado
+            ? "Nenhum agente está publicado. Publique um em Agentes de IA para poder usá-lo aqui."
+            : "Ele escreve com o mesmo tom e o mesmo conhecimento que usa no atendimento."}
+        </p>
+      </div>
+
+      <div className="space-y-1">
+        <Label>Número de WhatsApp</Label>
+        <Select
+          value={config.channel_session_id}
+          onValueChange={(v) => onChange({ ...config, channel_session_id: v })}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Escolha o número" />
+          </SelectTrigger>
+          <SelectContent>
+            {(sessions ?? []).map((s) => (
+              <SelectItem key={s.id} value={s.id} disabled={s.status !== "WORKING"}>
+                {channelLabel(s) + (s.status !== "WORKING" ? " — desconectado" : "")}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor="ai-instruction">O que a IA deve fazer com os dados</Label>
+        <Textarea
+          id="ai-instruction"
+          rows={4}
+          maxLength={1000}
+          value={config.instruction}
+          onChange={(e) => onChange({ ...config, instruction: e.target.value })}
+          placeholder={
+            "Ex.: Agradeça o interesse citando o segmento que a pessoa informou, mostre em uma frase " +
+            "como a gente resolve a dificuldade que ela descreveu, e pergunte qual o melhor horário para conversar."
+          }
+        />
+        <p className="text-xs text-muted-foreground">
+          O agente já sabe que é a PRIMEIRA mensagem, logo depois de a pessoa preencher o
+          formulário, e recebe todos os campos que ela respondeu. Aqui você diz o que fazer com
+          eles — quanto mais concreto, melhor a mensagem.
         </p>
       </div>
     </div>
@@ -284,6 +384,13 @@ export function ActionConfigForm({
     case "send_whatsapp_message":
       return (
         <SendWhatsappForm
+          config={action.config}
+          onChange={(config) => onChange({ type: action.type, config })}
+        />
+      );
+    case "send_ai_message":
+      return (
+        <SendAiMessageForm
           config={action.config}
           onChange={(config) => onChange({ type: action.type, config })}
         />

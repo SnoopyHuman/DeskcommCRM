@@ -58,6 +58,10 @@ export {
   Copy,
   DownloadSimple,
   Archive,
+  // origem de uma captação de formulário (página, IP, link para o lead)
+  Globe,
+  ArrowSquareOut,
+  Tray,
   // feedback
   CheckCircle,
   Warning,

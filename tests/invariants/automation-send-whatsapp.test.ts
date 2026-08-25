@@ -321,6 +321,7 @@ function baseCtx(overrides: Partial<ActionCtx> = {}): ActionCtx {
     admin,
     organizationId: GOV_ORG,
     ruleId: RULE_ID,
+  ruleName: "Automação de teste",
     event: { id: lastLine(sql(`select gen_random_uuid();`)) } as unknown as EventRow,
     context: {},
     requestId: "test-request-id",
@@ -353,8 +354,24 @@ describe("send_whatsapp_message — execute (Task 11)", () => {
       template: "Oi {{contact.name}}",
     });
 
-    expect(result.status).toBe("success");
-    expect(result.detail?.queued_reason).toBe("waha_not_configured");
+    // ⚠️ ESTA ASSERÇÃO DIZIA `success`, E ERA ELA QUE CODIFICAVA O DEFEITO.
+    //
+    // O próprio caso já sabia que a mensagem NÃO tinha saído — ele afirmava
+    // `queued_reason: "waha_not_configured"` na linha seguinte. Ou seja: o
+    // invariante congelava "a automação chama de sucesso uma mensagem que
+    // ficou na fila", que é exatamente o que um usuário relatou em 2026-08-24
+    // (aba Atividade com ✓ verde, cliente sem receber nada).
+    //
+    // `postponed` é o desfecho honesto para `queued`: não saiu AINDA, e pode
+    // sair — o watchdog resgata `sent_via='ai'` em `queued` quando o canal
+    // volta. `failed` seria a mentira oposta, e faria quem lê desistir de uma
+    // mensagem que está a caminho.
+    //
+    // O que a mudança NÃO afrouxa: a mensagem continua sendo criada, com o
+    // corpo renderizado, e o motivo continua sendo cobrado — abaixo, na chave
+    // `reason`, que é onde `desfechoDoEnvio` o publica.
+    expect(result.status).toBe("postponed");
+    expect(result.detail?.reason).toBe("waha_not_configured");
     const messageId = String(result.detail?.message_id);
     expect(messageId).toBeTruthy();
 
@@ -368,21 +385,63 @@ describe("send_whatsapp_message — execute (Task 11)", () => {
 });
 
 describe("send_whatsapp_message — postponeUntil (Task 11)", () => {
-  it("3. fora da janela (23h): adia pra 7h de amanhã", async () => {
-    vi.setSystemTime(new Date("2026-07-17T23:00:00"));
+  it("3. fora da janela (23h no fuso do TENANT): adia pra 7h de amanhã", async () => {
+    // ⚠️ INSTANTE ABSOLUTO (com `Z`), e as asserções no fuso do TENANT.
+    //
+    // Era `new Date("2026-07-17T23:00:00")` — sem `Z` —, que o JS lê no fuso do
+    // PROCESSO, mais `next.getHours()`, idem. Isso casava enquanto a janela era
+    // avaliada com `new Date().getHours()` do servidor. Mas essa era justamente
+    // a metade errada: a janela passou a ser avaliada no fuso da ORGANIZAÇÃO
+    // (`channel_knobs.timezone`, default America/Sao_Paulo), que é o conserto —
+    // num contêiner em UTC, "7h-22h" do servidor virava 4h-19h de Brasília.
+    //
+    // Consequência medida no CI (runner em UTC): 23:00 sem `Z` = 20:00 em São
+    // Paulo = DENTRO da janela, e `postponeUntil` devolvia null. O teste passava
+    // na minha máquina (BRT) e falhava no CI — pelo fuso, não pelo código.
+    //
+    // 2026-07-18T02:00:00Z é 23:00 de 17/07 em São Paulo, em qualquer máquina.
+    vi.setSystemTime(new Date("2026-07-18T02:00:00Z"));
     const executor = getAction("send_whatsapp_message")!;
     const until = await executor.postponeUntil!(baseCtx(), {
       channel_session_id: SESSION_ID,
       template: "x",
     });
     expect(until).not.toBeNull();
-    const next = new Date(until!);
-    expect(next.getHours()).toBe(7);
-    expect(next.getDate()).toBe(18);
+    const noFusoDoTenant = new Date(until!).toLocaleString("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    // 18/07 às 07:00 — a abertura seguinte. O `proximaAberturaDaJanela` soma
+    // jitter de até 800ms, que não muda o minuto.
+    expect(noFusoDoTenant).toContain("18/07");
+    expect(noFusoDoTenant).toContain("07:00");
   });
 
   it("4. limite diário atingido: adia pra 7h de amanhã (daily_limit)", async () => {
-    vi.setSystemTime(new Date("2026-07-17T10:00:00"));
+    // Instante ABSOLUTO dentro da janela do tenant (13:00Z = 10:00 em São
+    // Paulo). Era `"2026-07-17T10:00:00"` sem `Z`, lido no fuso do PROCESSO:
+    // em Asia/Tokyo isso cai às 22:00 de São Paulo do dia anterior — FORA da
+    // janela —, então a checagem de janela vencia e este caso reprovava com
+    // `expected 19 to be 7`. Medido rodando com TZ=Asia/Tokyo.
+    //
+    // ⚠️ O QUE ESTE CASO NÃO PROVA, e é maior que ele: `channel_session_warmup`
+    // NÃO TEM ESCRITOR no produto — `grep -rn channel_session_warmup app/ lib/
+    // workers/ scripts/` devolve só o LEITOR (`lib/automation/throttle.ts`) e
+    // este `insert`, que é do próprio teste. O contador que o pacing de verdade
+    // usa é `pacing_ledger` (escrito em `lib/agent-engine/pacing/store.ts`).
+    // Ou seja: `sent` é sempre 0 em produção e o cap diário da automação NUNCA
+    // dispara — um controle que não controla. Este caso exercita o leitor
+    // contra uma tabela semeada à mão, e é isso que ele prova.
+    //
+    // E `checkDailyLimit` ainda calcula "hoje" em UTC e a volta com `setHours`
+    // no fuso do PROCESSO — o mesmo defeito de fuso que a janela acabou de
+    // deixar de ter. Não foi consertado aqui porque ligar a automação ao
+    // `pacing_ledger` muda comportamento anti-ban real e é frente própria; a
+    // asserção abaixo congela o comportamento ATUAL, não o desejado.
+    vi.setSystemTime(new Date("2026-07-17T13:00:00Z"));
     sql(`
       insert into public.channel_session_warmup (channel_session_id, organization_id, day, messages_sent)
         values ('${SESSION_ID}', '${GOV_ORG}', '2026-07-17', 300)

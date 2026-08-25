@@ -113,6 +113,7 @@ export function PipelinePageClient({
           pipeline={data.pipeline}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
+          leadInicial={searchParams.get("lead")}
         />
       )}
       <BulkActionBar

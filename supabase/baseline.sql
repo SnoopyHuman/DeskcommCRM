@@ -13284,6 +13284,49 @@ comment on table public.api_audit_log is
   'app/api/v1/cron/data-retention. Não há camada cold/S3.';
 
 notify pgrst, 'reload schema';
+-- ---- LGPD alcança o histórico de captação: função + trigger (migration 0169) ----
+--
+-- A PRIMEIRA metade da 0169. Está aqui, e não no fim do arquivo, porque cria
+-- FUNÇÃO — e o bloco da VARREDURA anon (logo abaixo) proíbe qualquer
+-- `create function` depois dele: a função nasceria com EXECUTE para `anon` em
+-- quem ATUALIZA, sem nada mais adiante para tirar. A tabela vai no bloco do
+-- fim, e a ordem entre os dois não importa: o corpo de uma plpgsql só resolve
+-- os nomes na execução, e o trigger é de UPDATE (nada dispara durante o
+-- baseline).
+--
+-- `fn_lgpd_cascade_redact_contact` tem 180 linhas; acrescentar um 9º passo
+-- exigiria reescrevê-la inteira aqui, e a partir daí existiriam duas cópias —
+-- a do dump e a do apêndice — que divergem no primeiro conserto que alguém
+-- fizer na de cima. O gancho é a transição `is_anonymized false → true` na
+-- própria `contacts`, que é o último fato da anonimização e roda na MESMA
+-- transação do cascade. E alcança mais que o 9º passo alcançaria: qualquer
+-- caminho que anonimize um contato passa por este UPDATE.
+create or replace function public.fn_redigir_captacoes_do_contato_anonimizado()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  update public.webhook_lead_captures
+     set captured_name = null,
+         captured_phone = null,
+         captured_email = null,
+         fields = '{}'::jsonb,
+         utm = '{}'::jsonb,
+         remote_ip = null,
+         user_agent = null
+   where organization_id = new.organization_id
+     and contact_id = new.id;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_redigir_captacoes_do_contato_anonimizado() from public, anon, authenticated;
+grant execute on function public.fn_redigir_captacoes_do_contato_anonimizado() to service_role;
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES
@@ -13976,5 +14019,127 @@ alter table public.messages
 create index if not exists messages_reply_to_idx
   on public.messages (reply_to_message_id)
   where reply_to_message_id is not null;
+
+notify pgrst, 'reload schema';
+
+
+-- ---- histórico DURÁVEL de leads captados: tabela (migration 0169) ----
+--
+-- A SEGUNDA metade da 0169. A função e o trigger de LGPD estão ANTES do bloco
+-- da VARREDURA anon, e a razão está escrita lá.
+--
+-- Quem publica uma landing page precisa responder depois: "chegou alguém?",
+-- "com que dados?" e "de onde?". A única coisa que existia era o ARQUIVO
+-- FORENSE (`webhook_events_log`), que é DESCARTÁVEL por desenho: o cron
+-- `webhook-log-retention` zera `raw_body`/`payload_parsed`/`headers` em D+7 e
+-- apaga a linha em D+90 (migration 0163). Foi a decisão certa — ele era 468 MB
+-- de um banco de 545 MB numa instalação real — mas transforma qualquer
+-- histórico construído sobre ele numa tela que MENTE a partir do sétimo dia.
+--
+-- O que esta tabela guarda e o arquivo não guardava: o IP em coluna tipada (lá
+-- ele só existia solto dentro de `headers`, que é podado); o DESFECHO (o
+-- arquivo registra "chegou um POST" e não sabe se virou lead, se caiu na
+-- deduplicação, ou se foi RECUSADO — que é justamente o caso em que a pessoa
+-- não vê nada hoje); e o nome da fonte NO MOMENTO da captação.
+--
+-- RLS exige `manager`: `fields` carrega o formulário como a pessoa preencheu, e
+-- a policy de `webhook_events_log` é org-flat sem gate de papel — qualquer
+-- `viewer` lê aquela PII pelo PostgREST, mesmo com a rota HTTP exigindo
+-- manager. Não repetir o buraco. Sem policy de escrita: só o service role
+-- escreve (a rota pública de captação), e ele bypassa RLS.
+create table if not exists public.webhook_lead_captures (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  webhook_source_id uuid references public.webhook_sources(id) on delete set null,
+  source_name text not null,
+  lead_id uuid references public.crm_leads(id) on delete set null,
+  contact_id uuid references public.contacts(id) on delete set null,
+  outcome text not null
+    check (outcome in ('criado', 'duplicado', 'recusado')),
+  reject_reason text,
+  captured_name text,
+  captured_phone text,
+  captured_email text,
+  fields jsonb not null default '{}'::jsonb,
+  utm jsonb not null default '{}'::jsonb,
+  remote_ip inet,
+  user_agent text,
+  origin text,
+  request_id uuid,
+  received_at timestamptz not null default now()
+);
+
+create index if not exists webhook_lead_captures_org_recebido_idx
+  on public.webhook_lead_captures (organization_id, received_at desc, id desc);
+create index if not exists webhook_lead_captures_fonte_idx
+  on public.webhook_lead_captures (webhook_source_id, received_at desc)
+  where webhook_source_id is not null;
+create index if not exists webhook_lead_captures_lead_idx
+  on public.webhook_lead_captures (lead_id)
+  where lead_id is not null;
+create index if not exists webhook_lead_captures_poda_idx
+  on public.webhook_lead_captures (received_at);
+
+comment on table public.webhook_lead_captures is
+  'Histórico DURÁVEL de leads captados por formulário/webhook: o que chegou, quando, de onde (IP, página, UTM) e no que deu. '
+  'Distinto de webhook_events_log, que é arquivo forense e é PODADO (corpo em D+7, linha em D+90).';
+comment on column public.webhook_lead_captures.remote_ip is
+  'IP de origem do POST, lido de x-forwarded-for/x-real-ip. Informativo — forjável, nada no produto decide com base nele. NULL = não havia proxy à frente.';
+comment on column public.webhook_lead_captures.outcome is
+  'criado = virou lead novo; duplicado = mesmo external_id já capturado antes (retry da ferramenta); recusado = não entrou (reject_reason diz por quê).';
+comment on column public.webhook_lead_captures.source_name is
+  'Nome da fonte NO MOMENTO da captação. Cópia deliberada: a fonte pode ser renomeada ou excluída, e o histórico responde de onde o contato veio.';
+
+alter table public.webhook_lead_captures enable row level security;
+
+drop policy if exists "webhook_lead_captures_manager_read" on public.webhook_lead_captures;
+create policy "webhook_lead_captures_manager_read" on public.webhook_lead_captures
+  for select using (
+    public.fn_is_platform_admin()
+    or ((organization_id in (select public.fn_user_org_ids()))
+        and public.fn_role_at_least(organization_id, 'manager'))
+  );
+
+-- O trigger vive aqui (e não com a função, no bloco de cima) porque só faz
+-- sentido depois que a tabela existe.
+drop trigger if exists trg_redigir_captacoes_ao_anonimizar on public.contacts;
+create trigger trg_redigir_captacoes_ao_anonimizar
+  after update of is_anonymized on public.contacts
+  for each row
+  when (new.is_anonymized is true and old.is_anonymized is distinct from true)
+  execute function public.fn_redigir_captacoes_do_contato_anonimizado();
+
+
+-- ---- a automação precisa poder dizer "ainda não" (migration 0170) ----
+--
+-- `automation_rule_runs.status` aceitava success/partial/failed. Faltava o
+-- quarto estado que o motor JÁ produz: quando uma ação de envio pede adiamento
+-- (fora da janela do número, cap diário), `runAutomationForEvent` devolve
+-- `retry` e sai SEM GRAVAR LINHA NENHUMA — e a aba Atividade não mostra nada
+-- enquanto isso. Para quem montou a regra, "não apareceu nada" e "não rodou"
+-- são a mesma tela.
+--
+-- Valor novo em vez de reusar `partial`: `partial` é "algumas ações falharam" e
+-- a tela pinta de amarelo com esse texto; adiamento não é falha nenhuma.
+--
+-- CHECK reconstruído em UM bloco só (lição do #159, a mesma de
+-- `agent_inbox_items_kind_check`): N blocos quebram o `update.sh` de um clone
+-- com vocabulário posterior. Aditiva — só alarga o conjunto, nada a corrigir
+-- antes.
+alter table public.automation_rule_runs
+  drop constraint if exists automation_rule_runs_status_check;
+
+alter table public.automation_rule_runs
+  add constraint automation_rule_runs_status_check check (status in (
+    'success',
+    'partial',
+    'failed',
+    'adiado'
+  ));
+
+comment on column public.automation_rule_runs.status is
+  'success = todas as ações funcionaram; partial = algumas falharam; failed = todas falharam; '
+  'adiado = nada chegou ao cliente e ainda pode chegar — a regra espera a janela de envio do '
+  'número, ou a mensagem ficou na fila do canal.';
 
 notify pgrst, 'reload schema';

@@ -8,7 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Check, X, SkipForward, ArrowsClockwise, PaperPlaneTilt } from "@/lib/ui/icons";
+import {
+  Check,
+  X,
+  SkipForward,
+  ArrowsClockwise,
+  PaperPlaneTilt,
+  ClockCountdown,
+} from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 import {
   useAutomationRuns,
@@ -26,16 +33,66 @@ function relativeCreatedAt(iso: string): string {
   return formatDistanceToNowStrict(new Date(iso), { addSuffix: true, locale: ptBR });
 }
 
-function statusBadgeVariant(status: AutomationRuleRunRow["status"]): "success" | "error" | "warning" {
+function statusBadgeVariant(
+  status: AutomationRuleRunRow["status"],
+): "success" | "error" | "warning" | "info" {
   if (status === "success") return "success";
   if (status === "failed") return "error";
+  if (status === "adiado") return "info";
   return "warning";
 }
 
 function statusBadgeLabel(status: AutomationRuleRunRow["status"]): string {
   if (status === "success") return "Sucesso";
   if (status === "failed") return "Falhou";
+  // "Aguardando envio", e não "Aguardando horário": desde que o agregador passou
+  // a marcar `adiado` também quando a mensagem ficou na fila do canal (número
+  // desconectado, transporte não configurado), o rótulo antigo afirmava uma
+  // causa — o relógio — que muitas vezes não é a certa. A causa exata aparece
+  // na linha da ação, logo abaixo, onde ela pode ser específica.
+  if (status === "adiado") return "Aguardando envio";
   return "Parcial";
+}
+
+/**
+ * POR QUE a ação não aconteceu, em português.
+ *
+ * Os motivos técnicos vinham no `detail.reason` e NUNCA chegavam à tela: o ícone
+ * de "pulou" aparecia sozinho, e quem montou a automação ficava sem saber se o
+ * contato estava bloqueado, sem telefone, ou se a regra simplesmente não tinha
+ * a quem escrever. `explicacao` é a frase que o backend já monta quando conhece
+ * o caso (ver lib/automation/desfecho-do-envio.ts); este mapa cobre os motivos
+ * que nascem no próprio executor.
+ */
+const MOTIVO_DA_PARADA: Record<string, string> = {
+  no_contact: "Esse lead entrou sem contato vinculado, então não havia para quem escrever.",
+  contact_blocked: "O contato pediu para não receber mensagens (opt-out).",
+  no_phone: "O contato não tem telefone cadastrado.",
+  missing_config: "Falta preencher alguma configuração desta ação — abra a automação e revise.",
+  fora_da_janela_de_envio:
+    "Está fora da janela de envio configurada para esse número. A mensagem sai sozinha quando ela reabrir.",
+  aguardando_o_canal: "A mensagem está na fila e sai assim que o canal aceitar.",
+  sem_agente_publicado:
+    "O agente escolhido não tem versão publicada. Publique-o em Agentes de IA para a automação poder usá-lo.",
+  ia_indisponivel:
+    "A IA não está configurada nesta instalação — cadastre uma chave em Provedores de IA.",
+  texto_vazio: "A IA não devolveu texto. Revise o contexto que você escreveu para ela.",
+};
+
+function explicacaoDe(action: AutomationRuleRunActionResult): string | null {
+  const detail = action.detail ?? {};
+  if (typeof detail.explicacao === "string") return detail.explicacao;
+  const reason = typeof detail.reason === "string" ? detail.reason : null;
+  if (reason && MOTIVO_DA_PARADA[reason]) return MOTIVO_DA_PARADA[reason];
+  return reason;
+}
+
+function horarioDeRetorno(action: AutomationRuleRunActionResult): string | null {
+  const retryAt = action.detail?.retry_at;
+  if (typeof retryAt !== "string") return null;
+  const quando = new Date(retryAt);
+  if (Number.isNaN(quando.getTime())) return null;
+  return quando.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
 function ActionLine({ action, run }: { action: AutomationRuleRunActionResult; run: AutomationRuleRunRow }) {
@@ -46,9 +103,19 @@ function ActionLine({ action, run }: { action: AutomationRuleRunActionResult; ru
       <Check className="h-4 w-4 shrink-0 text-success" />
     ) : action.status === "failed" ? (
       <X className="h-4 w-4 shrink-0 text-error" />
+    ) : action.status === "postponed" ? (
+      <ClockCountdown className="h-4 w-4 shrink-0 text-muted-foreground" />
     ) : (
       <SkipForward className="h-4 w-4 shrink-0 text-muted-foreground" />
     );
+
+  // A explicação vale TAMBÉM em `failed` — era aqui que os motivos da ação de
+  // IA (`sem_agente_publicado`, `ia_indisponivel`, `texto_vazio`) morriam: eles
+  // chegam em `action.error` como CÓDIGO, o ramo de falha imprime `error` cru, e
+  // o mapa de frases logo acima nunca era consultado. Escrever as frases e não
+  // ligá-las é o mesmo que não tê-las.
+  const explicacao = explicacaoDe(action);
+  const retorno = horarioDeRetorno(action);
 
   return (
     <div className="space-y-1">
@@ -62,7 +129,12 @@ function ActionLine({ action, run }: { action: AutomationRuleRunActionResult; ru
         // comprido empurre o botão "Reenviar" pra fora da tela.
         <div className="ml-6 flex flex-wrap items-center justify-between gap-2 rounded-sm bg-muted px-2 py-1.5">
           <p className="min-w-0 break-words text-xs text-muted-foreground">
-            {action.error ?? "Essa ação não funcionou."}
+            {/* A frase ANTES do código cru. `action.error` já é texto de gente
+                nas falhas de envio (desfechoDoEnvio traduz), mas nas falhas da
+                IA ele é o código (`sem_agente_publicado`) — e é para esses que
+                `explicacao` existe. O `??` mantém o erro do webhook externo,
+                que não tem tradução possível e é a única pista real. */}
+            {explicacao ?? action.error ?? "Essa ação não funcionou."}
           </p>
           {action.type === "call_webhook" ? (
             <Button
@@ -80,6 +152,15 @@ function ActionLine({ action, run }: { action: AutomationRuleRunActionResult; ru
               <PaperPlaneTilt /> Reenviar
             </Button>
           ) : null}
+        </div>
+      ) : explicacao ? (
+        // Pular e adiar também precisam de razão visível: o ícone sozinho fazia
+        // "não fiz nada" parecer "fiz e deu certo, só sem alarde".
+        <div className="ml-6 rounded-sm bg-muted px-2 py-1.5">
+          <p className="break-words text-xs text-muted-foreground">
+            {explicacao}
+            {retorno ? ` Nova tentativa em ${retorno}.` : null}
+          </p>
         </div>
       ) : null}
     </div>
