@@ -290,7 +290,31 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // piso do composer (370px), em vez dos 2px que a versão de uma faixa só
   // deixava. Margem de 2px não é margem, é sorte.
   return (
-    <div className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:grid-cols-[300px_1fr] xl:grid-cols-[272px_1fr_296px] 2xl:grid-cols-[300px_1fr_320px]">
+    <div
+      className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:grid-cols-[300px_1fr] xl:grid-cols-[272px_1fr_296px] 2xl:grid-cols-[300px_1fr_320px]"
+      /*
+       * O ESTADO DO TEMPO REAL, LEGÍVEL DE FORA — mesmo par que o dossiê do lead
+       * já publica (`LeadDossier`), e pela mesma razão: quando a entrega morre,
+       * nenhuma tela avisa. Foi o único achado que atravessou o dia intacto
+       * quando o realtime quebrou pela primeira vez, e voltou a morder agora.
+       *
+       * `divergencias` é o que a rede de segurança contou: refetch trouxe estado
+       * novo que o canal NÃO tinha entregue. Zero com o canal vivo; subindo é a
+       * assinatura de canal que assina e não entrega — o defeito que não grita.
+       *
+       * ⚠️ `data-realtime-status` vem do STATUS do canal, não de um objeto que
+       * existe sempre. A primeira versão desta linha derivava o valor de
+       * `listQ.seguranca`, que nunca é nulo — ela diria `ativo` inclusive com o
+       * canal morto. Controle decorativo é pior que controle nenhum: mente com
+       * cara de instrumento.
+       *
+       * Atributo de dado e não texto na tela de propósito: quem lê isto é o
+       * teste e quem depura, não o atendente. Pôr um aviso permanente na cara de
+       * quem atende seria ruído; esconder o sinal do todo é o que custou o dia.
+       */
+      data-realtime-status={listQ.realtimeStatus}
+      data-refetch-divergencias={listQ.seguranca?.divergencias ?? 0}
+    >
       {/*
         NO CELULAR, UMA COISA POR VEZ.
 

@@ -129,6 +129,7 @@ export function ConversationListItem({
   return (
     <button
       type="button"
+      data-conversation-id={conversation.id}
       onClick={() => onSelect(conversation.id)}
       className={cn(
         "group flex w-full items-start gap-3 border-b border-border px-3 py-3 text-left transition-colors hover:bg-accent/40",

@@ -2,6 +2,7 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
+import { useRefetchDeSeguranca } from "@/hooks/realtime/useRefetchDeSeguranca";
 import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import type { Conversation } from "@/lib/types/messaging";
@@ -141,7 +142,7 @@ export function useConversationsRealtime(
   // com o filtro amplo `organization_id=eq.<org>` abaixo. Prova do filtro em
   // tests/invariants/gov-5-visibility-scope.test.ts (SELECT sob role agent = 0 rows
   // para conversa de outro atendente — o mesmo SELECT que o Realtime executa).
-  useRealtimeChannel({
+  const { status: realtimeStatus, ultimaEntrega } = useRealtimeChannel({
     name: orgId ? `inbox-${orgId}` : "inbox-disabled",
     postgresChanges: orgId
       ? {
@@ -155,5 +156,35 @@ export function useConversationsRealtime(
     enabled: !!orgId,
   });
 
-  return query;
+  /**
+   * A REDE DE SEGURANÇA — o inbox era a única tela viva que não tinha.
+   *
+   * O board e a linha do tempo do lead já a usavam; a lista de conversas só
+   * tinha `refetchOnWindowFocus`, que exige a pessoa TROCAR DE ABA para
+   * ressincronizar. Só que o inbox é a tela em que se fica parado olhando: com
+   * o canal morto e a aba em foco, ela ficava congelada indefinidamente num
+   * passado que parece presente — e o único conserto era o F5, que foi
+   * exatamente o sintoma relatado.
+   *
+   * A assinatura é a contagem de conversas mais o maior `last_message_at`: é
+   * sensível a tudo que o canal deveria ter trazido (conversa nova, mensagem
+   * nova numa existente) e barata de calcular. `updated_at` não serviria
+   * sozinho — o que muda a ordem da lista é a última mensagem.
+   */
+  const seguranca = useRefetchDeSeguranca<{ pages: ListResponse[] }>({
+    queryKey,
+    assinatura: (d) => {
+      const conversas = d?.pages.flatMap((p) => p.data) ?? [];
+      let maior = "";
+      for (const c of conversas) {
+        const t = c.last_message_at ?? "";
+        if (t > maior) maior = t;
+      }
+      return `${conversas.length}:${maior}`;
+    },
+    ultimaEntrega,
+    enabled: !!orgId,
+  });
+
+  return { ...query, realtimeStatus, seguranca };
 }

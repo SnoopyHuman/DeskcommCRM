@@ -842,3 +842,100 @@ Toda spec que usa o helper sobe o teto (240 s em quatro delas, 90 s em uma) —
 isso não está escrito em lugar nenhum, e quem adota o helper sem subir o teto vê
 dois testes alheios estourarem sem call log de locator. Se você for adotar o
 helper numa spec nova: `test.describe.configure({ timeout: 120_000 })`.
+
+## O inbox em tempo real — o defeito que veio de fora (2026-08-24)
+
+**Sintoma relatado pelo dono:** *"Recebemos mensagem e só reflete no inbox (na
+UI) se atualizarmos a página."*
+
+**Causa raiz, medida no socket — não estava em nenhuma linha nossa.** O cookie
+de sessão é httpOnly, então o supabase-js do browser não enxerga a sessão. Nesse
+caso a callback `accessToken` PADRÃO do `SupabaseClient` termina em
+`?? this.supabaseKey`: **o socket do Realtime assinava com a anon key**. Canal
+anônimo responde `SUBSCRIBED`, a RLS filtra do outro lado, e ele nunca entrega
+nada — em silêncio, com todo sinal disponível dizendo "saudável".
+
+O repo já corrigia isto chamando `supabase.realtime.setAuth(token)`. **Aquilo
+parou de funcionar num bump de dependência**, sem uma linha nossa mudar: a
+partir do realtime-js 2.112.x a callback vence o token manual, o que a própria
+biblioteca documenta em `setAuth` — *"the callback is the source of truth (…)
+even after a bootstrap/override `setAuth(token)` call"*.
+
+**Como foi medido** (ligando o `logger` do realtime-js e instrumentando
+`setAuth`, com dois canais no mesmo socket — que é o que o inbox faz, lista +
+conversa aberta):
+
+| Sonda | O que assinou | Entregas |
+|---|---|---|
+| tabela de controle sozinha, policy `using(true)` | 1 canal | **entregou** |
+| `conversations` sozinha | 1 canal | **entregou** |
+| controle **+** `conversations` no mesmo socket | 2 canais | 1º entregou, **2º zero** |
+
+O `phx_join` do 1º levava `{"iss":"…/auth/v1"}` (JWT do usuário); o do 2º levava
+`{"iss":"supabase-demo","role":"anon"}`. Instrumentando `setAuth`: o token do
+usuário durava ~2ms antes de `_setAuthSafely` o trocar, e o heartbeat (~30s)
+refazia a troca para sempre.
+
+**O que a tabela de controle provou, e por que ela importa.** Sem ela, "zero
+entregas" seria indistinguível de instrumento quebrado — que devolve zero do
+mesmo jeito. Ela é o controle positivo que valida a sonda.
+
+**Conserto:** fonte ÚNICA de token, na callback `realtime.accessToken` de
+`lib/supabase/browser.ts`. Ela é melhor que o `setAuth` por uma razão que
+independe do bug: o socket a chama de novo a cada heartbeat e em cada reconexão,
+então o token de 1h deixa de ser bomba-relógio para quem fica com o inbox
+aberto. Sai do `useRealtimeChannel` toda a dança de auth — mantê-la seria manter
+duas fontes, que era o defeito.
+
+**Segundo achado, do mesmo puxão:** o inbox era **a única tela viva sem rede de
+segurança**. Board (`useBoard`) e linha do tempo (`useLeadTimeline`) já usavam
+`useRefetchDeSeguranca`; o inbox tinha só `refetchOnWindowFocus`, que exige
+TROCAR DE ABA. E o inbox é a tela em que se fica parado olhando: com o canal
+morto e a aba em foco, a lista ficava congelada indefinidamente num passado que
+parece presente. Agora as duas pontas (lista e conversa) têm a rede.
+
+**Por que os testes estavam verdes o tempo todo** — a lição que vale além deste
+bug: eles exercitavam `authenticateRealtime` contra um cliente FAKE
+(`{ realtime: { setAuth: vi.fn() } }`) e afirmavam que `setAuth` fora CHAMADO. O
+que quebrou foi o EFEITO de chamá-lo. **Teste que guarda a chamada em vez do
+comportamento não vermelhece quando o comportamento morre.**
+
+| # | Caso | Prova |
+|---|------|-------|
+| JR.1 | Mensagem chega na conversa ABERTA, sem reload | `tests/e2e/inbox-tempo-real.spec.ts` (dirige a tela; nenhum `reload()` depois de abrir o inbox) |
+| JR.2 | A LISTA reage à mesma mensagem | mesmo spec — é o 2º canal do socket, o que ficava anônimo |
+| JR.3 | A callback é a fonte do token, e nunca a anon key | `tests/unit/realtime-token-do-socket.test.ts` |
+| JR.4 | O hook não autentica por conta própria (fonte única) | idem |
+| JR.5 | Token perto de vencer é renovado; token válido vem do cache | idem |
+| JR.6 | As duas pontas do inbox têm rede de segurança | `tests/unit/realtime-reconecta.test.ts` |
+
+**Sabotagens que confirmam que os testes vigiam** (rodadas em 2026-08-24, com o
+conserto já commitado):
+
+| Sabotagem | Reprovações |
+|---|---|
+| remover a callback de `browser.ts` | 6 de 7 |
+| a callback devolve a anon key (o que a PADRÃO fazia) | 3, incluindo *"devolve o token da sessão — NUNCA a anon key"* |
+| tirar a rede de segurança da lista de conversas | 1, apontando a lista |
+
+**A prova que fecha o caso — o mesmo teste dos dois lados** (2026-08-24, build de
+produção contra o Supabase local, banco semeado pelos scripts do repo):
+
+| Código sob teste | Resultado |
+|---|---|
+| com o conserto | `1 passed` — a mensagem apareceu na tela sem reload |
+| revertido ao da `main` (`git checkout main -- lib/supabase/browser.ts hooks/realtime/useRealtimeChannel.ts`) | `1 failed` — *element(s) not found*, 25 s |
+
+Reverter **só o fonte**, mantendo o teste, é o que separa "o teste vigia" de "o
+teste passa". Um verde sozinho não distingue as duas coisas.
+
+⚠️ **Achado de ambiente, não do repo:** o build morria com
+`'node_modules/node_modules' is a symlink causes that causes an infinite loop!` —
+um symlink auto-referente de 2026-08-13, resíduo de sessão anterior (nenhum
+script do repo o cria). E o primeiro build parecia ter passado porque
+`pnpm e2e:build 2>&1 | tail -20` devolve o exit do `tail`, não o do build
+([[feedback-pipe-tail-mascara-exit]]). Confira `.next/BUILD_ID`, nunca o exit de
+um pipe.
+
+**Evidência visual:** `evidence/inbox-tempo-real/mensagem-sem-reload.png` — a
+conversa aberta com as mensagens das rodadas, cada uma entregue sem recarregar.

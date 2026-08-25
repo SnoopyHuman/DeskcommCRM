@@ -201,8 +201,7 @@ jobs:
         escopo-de-funil-do-agente.spec.ts
         followup-dossie.spec.ts followup-tempo-adaptativo.spec.ts
         gatilho-de-etapa.spec.ts gatilho-de-caso.spec.ts
-        marca-logo.spec.ts
-        inbox-quem-manda.spec.ts
+        marca-logo.spec.ts inbox-quem-manda.spec.ts inbox-tempo-real.spec.ts
       # Cada item aqui tem o motivo MEDIDO, não presumido — e o gate cobra que a
       # lista exista e some com as outras duas.
       #
@@ -295,6 +294,41 @@ jobs:
         run: |
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
             -v ON_ERROR_STOP=1 -q -f supabase/baseline.sql
+
+      # ⚠️ O REALTIME PRECISA REINICIAR DEPOIS DO BASELINE — senão ele assina e
+      # não entrega, em silêncio.
+      #
+      # A ordem acima é `supabase start` (que sobe o Realtime) e SÓ DEPOIS o
+      # baseline, que é quem adiciona `messages`, `conversations`, `crm_leads` e
+      # as demais à publication `supabase_realtime`. O Realtime já subiu com a
+      # publication sem essas tabelas e não as reconhece depois.
+      #
+      # Medido no PR #327, com o defeito atravessando três rodadas: o script de
+      # apoio confirmou a gravação (`[e2e-chega-mensagem] entregue em 6f5fd1f2…`)
+      # e o snapshot da página no mesmo instante mostrava "Nenhuma mensagem nesta
+      # conversa." — gravado no banco, nunca entregue à tela. Canal anônimo e
+      # canal sem publication falham do MESMO jeito: respondem SUBSCRIBED e
+      # calam, que é a razão de isto ter custado três rodadas de 15 minutos.
+      #
+      # Na VPS o problema não existe: lá o `install.sh` aplica o baseline e só
+      # então o compose sobe os serviços. Reiniciar aqui é o que faz o ambiente
+      # do teste refletir o de quem instalou.
+      - name: Reiniciar o Realtime (a publication nasceu no passo anterior)
+        run: |
+          IDS=$(docker ps -q --filter name=supabase_realtime)
+          if [ -z "$IDS" ]; then
+            echo "::error::Nenhum container supabase_realtime — o stack não subiu como esperado."
+            exit 1
+          fi
+          docker restart $IDS
+          # Espera ficar saudável: seguir sem isso devolve o mesmo silêncio que
+          # este passo existe para eliminar, só que mais tarde e sem explicação.
+          for i in $(seq 1 30); do
+            estado=$(docker inspect -f '{{.State.Health.Status}}' $IDS 2>/dev/null || echo desconhecido)
+            [ "$estado" = "healthy" ] && { echo "realtime saudável em ~$((i*2))s"; break; }
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' $IDS
 
       - name: Exportar credenciais do stack local
         run: |
