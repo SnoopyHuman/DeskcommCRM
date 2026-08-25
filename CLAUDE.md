@@ -286,13 +286,13 @@ Checks **obrigatórios** na branch protection da `main` (verificado na configura
 - **`verify`** (`ci.yml`) — typecheck + lint + test:unit.
 - **`invariants`** (`ci.yml`) — `pnpm test:db`: sobe `pgvector/pgvector:pg17`, aplica `supabase/baseline.sql` em modo install (`ON_ERROR_STOP=1`) e update (idempotência), e roda os testes de invariante, incluindo o de isolamento RLS entre 2 organizações.
 - **`build-and-size`** (`perf.yml`) — `pnpm build` em Node 22.
-- **`e2e`** (`e2e.yml`) — sobe Supabase local, aplica o `baseline.sql` e roda **48 das 49 specs** Playwright (medido em 2026-08-14 @ `587a494d`; **reconte antes de citar** — este número já apodreceu **quatro** vezes). A **única** de fora é `vps-fresh-onboarding` (precisa de WAHA + Redis + Resend + Nuvemshop) — e ela é a **P0** da doutrina de QA Visual, ou seja, `e2e` verde **não** prova a jornada de instalação fresca, que é o produto que se vende.
+- **`e2e`** (`e2e.yml`) — sobe Supabase local, aplica o `baseline.sql` e roda **todas as specs Playwright menos uma**. O número saiu daqui de propósito: ele apodreceu **cinco** vezes (a quinta em 2026-08-24, quando `inbox-quem-manda.spec.ts` entrou), e a condição que o PR #242 pôs para parar de recontar já tinha vencido na quarta. Quem precisa do número roda o comando abaixo — comando não envelhece. A **única** de fora é `vps-fresh-onboarding` (precisa de WAHA + Redis + Resend + Nuvemshop) — e ela é a **P0** da doutrina de QA Visual, ou seja, `e2e` verde **não** prova a jornada de instalação fresca, que é o produto que se vende.
 
-  **A receita antiga de recontagem estava errada** e é provavelmente uma das causas do apodrecimento. `grep -oE '[a-z0-9-]+\.spec\.ts' .github/workflows/e2e.yml | sort -u | wc -l` devolve **49**, não 48 — mas *não* pelo motivo que este parágrafo afirmava até 2026-08-14. Ele dizia "conta menções em COMENTÁRIOS do workflow", e isso é falso: medido, o conjunto de specs citadas fora de variável é **vazio**. O excedente é a `FORA_DO_CI`, que é uma **variável YAML** como as outras — o grep não distingue a variável que o CI *invoca* da que ele só *declara*. Medir o arquivo inteiro mede quem é citado, não quem é invocado. O que roda são as `SPECS_PARTE_*`:
+  **Não confie em `grep` no arquivo inteiro.** `grep -oE '[a-z0-9-]+\.spec\.ts' .github/workflows/e2e.yml | sort -u | wc -l` conta quem é CITADO, não quem é INVOCADO: a `FORA_DO_CI` é uma variável YAML como as outras e entra na conta. (Até 2026-08-14 este parágrafo culpava "menções em comentários", e isso é falso — medido, o conjunto de specs citadas fora de variável é **vazio**.) O que roda são as `SPECS_PARTE_*`:
 
   ```bash
-  ls tests/e2e/*.spec.ts | wc -l                    # 49 em disco
-  python3 - <<'PY'                                  # 48 que o CI invoca
+  ls tests/e2e/*.spec.ts | wc -l                    # quantas existem
+  python3 - <<'PY'                                  # quantas o CI invoca
   import re
   y = open(".github/workflows/e2e.yml", encoding="utf-8").read()
   print(len({s for _, c in re.findall(r'(SPECS_PARTE_\d+):\s*>-\n((?:[ ]{8,}.*\n)+)', y)
@@ -300,7 +300,7 @@ Checks **obrigatórios** na branch protection da `main` (verificado na configura
   PY
   ```
 
-  **E a recontagem já não é o conserto.** A quarta vez era a condição que o PR #242 pôs para parar de recontar — ela aconteceu. O conserto devido é `tests/unit/e2e-cobertura-completa.test.ts` passar a cobrar também o texto daqui, como já cobra as três listas do workflow (medido em 2026-08-14: ele não cobra — `grep -c 'CLAUDE.md' tests/unit/e2e-cobertura-completa.test.ts` devolve 0). Prosa que nenhum gate lê é prosa que diverge — e uma triagem que a use como régua mede contra o número errado, que é o modo de falha nº 1 do procedimento.
+  **Por que não há mais número aqui.** O conserto que este parágrafo pedia era pôr a prosa sob gate — `tests/unit/e2e-cobertura-completa.test.ts` cobrando também o texto daqui. Tirar o número é melhor e mais barato: não há o que policiar, e a diferença entre disco e CI segue vigiada onde importa, no próprio teste, que reprova toda spec nova que não esteja em `SPECS_PARTE_*` ou em `FORA_DO_CI` **com motivo escrito**. Prosa que nenhum gate lê é prosa que diverge; prosa que não afirma número não tem como divergir.
 - **`imagens-ok`** (`publish-image.yml`) — reprova quando qualquer uma das três imagens Docker não constrói. **É obrigatório desde 2026-08-13**; este arquivo dizia o contrário em outro parágrafo (ver a doutrina de packaging acima, já corrigida).
 
 Todos os **cinco** são **obrigatórios** — medido em 2026-08-14 na branch protection:

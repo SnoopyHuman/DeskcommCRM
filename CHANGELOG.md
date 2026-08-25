@@ -20,6 +20,72 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
   conversa voltam a se sincronizar em pouco tempo em vez de ficar congeladas num passado que
   parece presente. Nada para você fazer — vale assim que atualizar.
 
+## [1.5.0] — 2026-08-25
+
+O Inbox passa a dizer **quem manda em cada conversa** — e o conserto principal não é de tela:
+clicar "Assumir" não parava o atendimento automático, então os dois respondiam o mesmo cliente.
+
+### ⚠️ Requer atenção
+
+**Assumir uma conversa agora PARA o atendimento automático nela. Antes não parava, e os dois
+respondiam o mesmo cliente.** Quem clicava "Assumir" no Inbox ganhava a conversa na tela, mas o
+automático continuava respondendo por baixo — ele só ficava quieto por 5 minutos depois que o
+atendente mandava uma mensagem, e voltava a falar sozinho em seguida. Agora assumir e transferir
+silenciam o automático naquela conversa; **"Liberar" e "Fechar" devolvem o comando a ele**. Se a sua
+equipe se acostumou a assumir a conversa e deixar a IA responder junto, esse hábito muda aqui.
+
+**A distribuição por rodízio NÃO cala o automático** — distribuir é escolher quem cuida se precisar,
+não tomar a conversa. Só o clique de uma pessoa silencia.
+
+**A aba "Fila" vai mostrar mais conversas do que mostrava, e o número do badge pode subir de uma
+vez.** Não é conversa nova: são as que a IA já tinha passado para uma pessoa e que não apareciam em
+aba nenhuma. Se o número saltar depois de atualizar, é isso — e vale olhar, porque são pessoas
+esperando resposta há mais tempo do que você imaginava.
+
+Esta versão **mexe no banco de dados**. O `update.sh` aplica sozinho; não há passo manual.
+
+**Se você está vindo da 1.4.0, os dois avisos abaixo são da 1.4.1 e valem para você.** A tela de
+atualização mostra só a seção da versão que você está instalando, então eles vão repetidos aqui
+para não passarem em branco. Se você já atualizou para a 1.4.1, já os leu — pule.
+
+- **A IA passa a atender aos domingos, e antes não atendia.** O padrão de fábrica da janela
+  anti-banimento mudou na 1.4.0: domingo era dia mudo e passou a ser dia normal (a faixa de
+  horário continua a mesma). Se o seu negócio depende de silêncio no domingo, desligue em
+  **Conexões › Proteção de envio › "Enviar aos domingos"**, por canal. Quem já tinha mexido ali
+  teve a escolha respeitada.
+- **Duas conexões oficiais do WhatsApp com a mesma conta da Meta: fica com o identificador a
+  conexão MAIS RECENTE**, e a mais antiga recebe o sufixo `-conflito-`. Nada foi apagado. A 1.4.0
+  disse o contrário — se você apagou a conexão SEM o sufixo por causa daquela frase, era a que
+  estava funcionando; reconecte o número em Conexões.
+
+### Corrigido
+
+- **A promessa da 1.4.0 sobre o limite de gasto agora é verdade.** Aquela versão disse que, quando o
+  limite para a IA, "as conversas que estavam sendo atendidas vão para a fila de atendimento
+  humano". Elas iam — mas a fila na tela não as mostrava: a aba, o contador e o painel do gerente
+  procuravam um estado e a conversa escalada ficava em outro. Quem confiou no aviso e foi olhar a
+  fila não encontrou nada lá. Vale para toda passagem para humano, não só a do limite.
+- **O número da fila que o cliente ouve e o que a equipe vê eram contados de formas diferentes.** O
+  "você é o Nº da fila" enviado pelo WhatsApp incluía as conversas escaladas; o número mostrado ao
+  atendente não. Agora é a mesma conta dos dois lados.
+- **Dava para saber quem atende uma conversa pela IA, mas não pela tela.** O nome do atendente
+  chegava ao agente e não ao Inbox, que só tinha o código interno. O cabeçalho e a lista passam a
+  mostrar **quem está no comando** — pessoa (com nome e iniciais) ou automático —, e o selo diz o
+  **motivo** quando o automático está parado: alguém assumiu, está pausado para aquele cliente, ou
+  volta sozinho em instantes.
+- **Faltava o botão de desligar.** Havia "Devolver ao automático" e nada para pausá-lo — ele só
+  parava por conta própria. Agora o mesmo lugar tem os dois lados.
+- **Assumir, transferir e liberar não apareciam no histórico da conversa.** Passavam sem deixar
+  rastro no painel lateral; o motivo escrito ao transferir ficava só no registro de auditoria, que
+  o atendente não abre. Agora as quatro ações viram linha na atividade, **com o nome de quem fez** —
+  antes toda ação humana aparecia como "Você/time".
+- **Conversa encerrada deixava de dizer quem a atendeu**, justamente na aba "Fechadas".
+- **Numa instalação sem nenhuma IA configurada, a tela dizia "Automático atendendo".** Não havia
+  automático nenhum: eram conversas sem ninguém.
+- **Quem não enxerga uma conversa conseguia ler o histórico de quem a atendeu.** Com a visibilidade
+  restrita por atendente, o registro de troca de responsável não respeitava esse limite.
+
+
 ## [1.4.1] — 2026-08-25
 
 O primeiro acesso passa a **perguntar como você já usa o seu número**, em vez de supor que

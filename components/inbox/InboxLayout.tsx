@@ -22,6 +22,8 @@ import { RetentionNotice } from "./RetentionNotice";
 import { CRMSidePanel } from "./CRMSidePanel";
 import type { Message as ConversationMensagem } from "@/lib/types/messaging";
 import { InboxKeyboardShortcuts } from "./InboxKeyboardShortcuts";
+import { CONVERSATION_QUEUE_STATUSES } from "@/lib/schemas";
+
 import { ShortcutsHelpDialog } from "./ShortcutsHelpDialog";
 // ADR-05: ícone de feature sai do mapa canônico, nunca do pacote direto.
 import { CaretLeft, IdentificationCard } from "@/lib/ui/icons";
@@ -62,7 +64,12 @@ export function colunasDoCelular(temSelecao: boolean): { lista: string; conversa
 export function tabToFilter(tab: InboxFiltersValue["tab"]): Partial<ConversationsFilters> {
   switch (tab) {
     case "unassigned":
-      return { assigned_to: "unassigned", status: "open" };
+      // Os DOIS estados de espera, não só `open`. A conversa que o automático
+      // escalou é `pending` e não aparecia em aba nenhuma que o atendente vê —
+      // "Fila" pedia `open`, "Minhas" exige dono, "IA" filtra `ai_handling` e
+      // "Todas" é escondida do papel `agent` fora do modo `all`. A conversa que
+      // mais precisa de uma pessoa era a única invisível.
+      return { assigned_to: "unassigned", status: [...CONVERSATION_QUEUE_STATUSES] };
     case "mine":
       // Sem `exclude_finished` a aba mostra tudo que o atendente JÁ atendeu —
       // `Fechar` muda o status mas não solta o dono (de propósito: quem atendeu

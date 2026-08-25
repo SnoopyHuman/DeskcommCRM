@@ -90,7 +90,19 @@ export const DICIONARIO: Traducoes = {
   Fechada: { es: "Cerrada" },
   "Em atendimento": { es: "En atención" },
   "Aguardando atendente": { es: "Esperando agente" },
+  "Automático atendendo": { es: "Automático atendiendo" },
   "Automático pausado": { es: "Automático pausado" },
+  // Os motivos do silêncio (lib/inbox/comando-da-conversa.ts). "Automático
+  // pausado" sozinho respondia a três situações que pedem ações diferentes:
+  // alguém assumiu, o cliente inteiro está travado, ou foi pausa explícita.
+  "Automático pausado — alguém assumiu": {
+    es: "Automático pausado — alguien la asumió",
+  },
+  "Automático pausado para este cliente": {
+    es: "Automático pausado para este cliente",
+  },
+  "Automático volta em instantes": { es: "El automático vuelve en instantes" },
+  "Pausar o automático": { es: "Pausar el automático" },
   "Ver contato": { es: "Ver contacto" },
 
   // ─── Inbox: composer ───

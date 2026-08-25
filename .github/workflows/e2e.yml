@@ -201,7 +201,7 @@ jobs:
         escopo-de-funil-do-agente.spec.ts
         followup-dossie.spec.ts followup-tempo-adaptativo.spec.ts
         gatilho-de-etapa.spec.ts gatilho-de-caso.spec.ts
-        marca-logo.spec.ts inbox-tempo-real.spec.ts
+        marca-logo.spec.ts inbox-tempo-real.spec.ts inbox-quem-manda.spec.ts
       # Cada item aqui tem o motivo MEDIDO, não presumido — e o gate cobra que a
       # lista exista e some com as outras duas.
       #

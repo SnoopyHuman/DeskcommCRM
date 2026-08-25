@@ -23,11 +23,21 @@ export function OwnerBadge({
   ownerKind,
   ownerName,
   agentVersion,
+  compacto = false,
 }: {
   ownerKind: OwnerKind;
   ownerName: string | null;
   /** Versão publicada do agente no momento da exibição (nunca congelada no lead). */
   agentVersion?: number | null;
+  /**
+   * Variante de 16px, para a linha do inbox — onde os selos vizinhos têm 16px e
+   * um disco de 24px empurraria a altura da linha inteira.
+   *
+   * É uma PROP e não um componente novo de propósito: a geometria (disco cheio =
+   * pessoa, anel vazado = automático) é a mesma afirmação, e duplicá-la num
+   * segundo arquivo é como duas telas passam a dizer a mesma coisa de dois jeitos.
+   */
+  compacto?: boolean;
 }) {
   if (!ownerKind) {
     // Mesma geometria dos outros dois estados (disco de 24px + rótulo), para o
@@ -35,10 +45,12 @@ export function OwnerBadge({
     return (
       <div className="flex items-center gap-1.5" aria-label="Sem responsável">
         <span
-          className="h-6 w-6 shrink-0 rounded-full border border-dashed border-border-strong"
+          className={`${compacto ? "h-4 w-4" : "h-6 w-6"} shrink-0 rounded-full border border-dashed border-border-strong`}
           aria-hidden
         />
-        <span className="truncate text-xs text-text-muted">Sem responsável</span>
+        <span className={`truncate text-text-muted ${compacto ? "text-[10px]" : "text-xs"}`}>
+          Sem responsável
+        </span>
       </div>
     );
   }
@@ -58,17 +70,21 @@ export function OwnerBadge({
         className={
           isAgent
             ? // Vazado com anel: o fundo do card atravessa o disco.
-              "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-accent bg-surface font-mono text-[10px] font-semibold text-accent ring-1 ring-inset ring-accent/40"
+              `flex ${compacto ? "h-4 w-4 text-[8px]" : "h-6 w-6 text-[10px]"} shrink-0 items-center justify-center rounded-full border border-accent bg-surface font-mono font-semibold text-accent ring-1 ring-inset ring-accent/40`
             : // Preenchido SÓLIDO: a um metro, o humano é uma mancha escura e o
               // agente é um anel claro. Contraste que não depende da borda —
               // fundo suave fazia os dois lerem como "círculo claro".
-              "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-[10px] font-semibold text-accent-foreground"
+              `flex ${compacto ? "h-4 w-4 text-[8px]" : "h-6 w-6 text-[10px]"} shrink-0 items-center justify-center rounded-full bg-accent font-semibold text-accent-foreground`
         }
         aria-hidden
       >
         {ownerName ? ownerInitials(ownerName) : "?"}
       </span>
-      <span className="max-w-[9rem] truncate text-xs text-text-muted">{label}</span>
+      <span
+        className={`truncate text-text-muted ${compacto ? "max-w-[7rem] text-[10px]" : "max-w-[9rem] text-xs"}`}
+      >
+        {label}
+      </span>
     </div>
   );
 }

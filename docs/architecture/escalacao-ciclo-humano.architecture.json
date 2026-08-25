@@ -64,7 +64,7 @@
       "col": 3,
       "type": "frontend",
       "label": "ConversationHeader",
-      "sublabel": "aviso 'Automático pausado' + Devolver ao automático"
+      "sublabel": "quem manda + motivo do silêncio + Pausar/Devolver o automático"
     },
     {
       "id": "timeline",
@@ -281,6 +281,46 @@
       "type": "service",
       "label": "chamada do modelo (turno)",
       "sublabel": "lê a abertura e responde ao cliente"
+    },
+    {
+      "id": "comando",
+      "lane": "regra",
+      "col": 1,
+      "type": "service",
+      "label": "lib/inbox/comando-da-conversa.ts",
+      "sublabel": "função pura: quem manda + o automático está ativo? (espelha os gates do motor)"
+    },
+    {
+      "id": "pausar",
+      "lane": "borda",
+      "col": 3,
+      "type": "api",
+      "label": "POST /conversations/:id/pause-ai",
+      "sublabel": "o lado que faltava do interruptor — assume se não houver dono"
+    },
+    {
+      "id": "atribuir",
+      "lane": "dados",
+      "col": 2,
+      "type": "db",
+      "label": "fn_conversation_assign (0173)",
+      "sublabel": "claim/transfer calam o automático; release limpa; routing NÃO mexe"
+    },
+    {
+      "id": "comandoAtividade",
+      "lane": "regra",
+      "col": 3,
+      "type": "service",
+      "label": "lib/inbox/atividade-de-comando.ts",
+      "sublabel": "a troca de dono vira linha na timeline que JÁ existe"
+    },
+    {
+      "id": "fila",
+      "lane": "regra",
+      "col": 2,
+      "type": "service",
+      "label": "CONVERSATION_QUEUE_STATUSES",
+      "sublabel": "quem está esperando uma pessoa — uma definição, quatro consumidores"
     }
   ],
   "edges": [
@@ -511,6 +551,72 @@
       "from": "modelo",
       "to": "cabecalho",
       "label": "a resposta ao cliente volta a sair pela conversa"
+    },
+    {
+      "id": "e39",
+      "from": "cabecalho",
+      "to": "comando",
+      "label": "pergunta quem manda (uma verdade, três telas)"
+    },
+    {
+      "id": "e40",
+      "from": "comando",
+      "to": "cabecalho",
+      "label": "estado + motivo do silêncio + rótulo"
+    },
+    {
+      "id": "e41",
+      "from": "cabecalho",
+      "to": "pausar",
+      "label": "'Pausar o automático'"
+    },
+    {
+      "id": "e42",
+      "from": "pausar",
+      "to": "atribuir",
+      "label": "claim quando não há dono"
+    },
+    {
+      "id": "e43",
+      "from": "pausar",
+      "to": "comandoAtividade",
+      "label": "'Pausou o automático'"
+    },
+    {
+      "id": "e44",
+      "from": "atribuir",
+      "to": "conversas",
+      "label": "grava bot_silenced_until — o gate que o motor já lê"
+    },
+    {
+      "id": "e45",
+      "from": "comandoAtividade",
+      "to": "timeline",
+      "label": "Assumiu · Transferiu · Liberou · Pausou"
+    },
+    {
+      "id": "e46",
+      "from": "comando",
+      "to": "atribuir",
+      "label": "lê os MESMOS fatos que a função escreve"
+    },
+    {
+      "id": "e47",
+      "from": "fila",
+      "to": "conversas",
+      "label": "open+pending: o mesmo que o trigger de roteamento enfileira"
+    },
+    {
+      "id": "e48",
+      "from": "cabecalho",
+      "to": "fila",
+      "label": "a aba Fila pede os dois estados de espera"
+    },
+    {
+      "id": "e49",
+      "from": "fila",
+      "to": "comando",
+      "label": "o estado 'aguardando' do selo sai daqui"
     }
   ],
   "cards": [
