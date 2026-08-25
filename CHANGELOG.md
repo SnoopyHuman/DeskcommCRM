@@ -8,12 +8,15 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
-O histórico de quem chega pelos seus formulários agora existe — inclusive de quem **não**
-entrou. As automações passam a poder responder com uma mensagem escrita pela IA a partir do
-que a pessoa preencheu. E a automação parou de marcar "Sucesso" para mensagem que nunca
-chegou ao cliente.
+## [1.5.0] — 2026-08-25
+O Inbox passa a dizer **quem manda em cada conversa** — e o conserto principal não é de tela:
+clicar "Assumir" não parava o atendimento automático, então os dois respondiam o mesmo cliente.
+Junto vão o histórico de quem chega pelos seus formulários (inclusive de quem **não** entrou), a
+opção de a IA escrever a primeira mensagem a partir do que a pessoa preencheu, e o fim de um
+"Sucesso" verde que a automação mostrava para mensagem que nunca chegou ao cliente.
 
 ### Adicionado
+
 
 - **"Leads recebidos", em Webhooks: quem chegou pelo formulário, com o que preencheu.**
   Até aqui, o formulário do seu site entregava o lead e não sobrava registro nenhum de como
@@ -40,39 +43,6 @@ chegou ao cliente.
   entre mensagens valendo igual. A IA escreve o texto; ela não fala com ninguém por conta
   própria.
 
-### ⚠️ Requer atenção
-
-**O horário em que as automações mandam mensagem passa a ser o seu, e não o do servidor.**
-A proteção de horário da automação era medida pelo relógio da máquina, que roda em UTC —
-então a faixa "7h às 22h" era, na prática, **4h às 19h de Brasília**. Duas consequências
-que você talvez tenha visto sem saber a causa: uma automação disparada às 19h30 não saía e
-ficava esperando até as 4h da manhã seguinte; e uma disparada de madrugada saía, mandando
-mensagem para o cliente às 5h. Agora vale o seu fuso, e **vale a faixa que você configurou
-em Conexões › Proteção de envio** — a mesma que a IA já respeitava. Se você apertou ou
-ampliou esse horário achando que só mexia com a IA, confira: agora ele também rege as
-automações. Quem nunca mexeu fica com 7h às 22h, no horário do seu negócio.
-
-**Esta versão mexe no banco de dados, e o `bash update.sh` cuida disso sozinho** — não há
-passo manual. É uma tabela nova (o histórico acima) e um estado novo nas automações.
-
-### Corrigido
-
-- **A automação dizia "Sucesso" para mensagem que não chegou ao cliente.** Era o relato que
-  originou boa parte desta entrega: automação ligada, lead entrando pelo formulário, a aba
-  Atividade mostrando um "Sucesso" verde — e nenhuma mensagem no celular de ninguém. A
-  automação só sabia perguntar se tinha dado erro de programa; ela não olhava se a mensagem
-  de fato saiu. Agora ela olha: quando o envio falha, o resultado aparece como falha, com o
-  motivo em português ("Não conseguimos falar com o serviço de WhatsApp. Confira se ele está
-  no ar."), e um aviso é aberto na Central de Atendimento **nomeando a regra que falhou** —
-  porque um erro que só existe numa aba que ninguém abre é um erro invisível.
-- **A automação que estava só esperando o horário parecia não ter rodado.** Ao adiar um
-  envio, ela não gravava nada: "não apareceu nada na Atividade" e "a automação não funcionou"
-  eram a mesma tela. Agora a espera é um estado visível — **Adiado** —, com o motivo.
-
-## [1.5.0] — 2026-08-25
-
-O Inbox passa a dizer **quem manda em cada conversa** — e o conserto principal não é de tela:
-clicar "Assumir" não parava o atendimento automático, então os dois respondiam o mesmo cliente.
 
 ### ⚠️ Requer atenção
 
@@ -91,7 +61,19 @@ vez.** Não é conversa nova: são as que a IA já tinha passado para uma pessoa
 aba nenhuma. Se o número saltar depois de atualizar, é isso — e vale olhar, porque são pessoas
 esperando resposta há mais tempo do que você imaginava.
 
-Esta versão **mexe no banco de dados**. O `update.sh` aplica sozinho; não há passo manual.
+**O horário em que as automações mandam mensagem passa a ser o seu, e não o do servidor.**
+A proteção de horário da automação era medida pelo relógio da máquina, que roda em UTC —
+então a faixa "7h às 22h" era, na prática, **4h às 19h de Brasília**. Duas consequências
+que você talvez tenha visto sem saber a causa: uma automação disparada às 19h30 não saía e
+ficava esperando até as 4h da manhã seguinte; e uma disparada de madrugada saía, mandando
+mensagem para o cliente às 5h. Agora vale o seu fuso, e **vale a faixa que você configurou
+em Conexões › Proteção de envio** — a mesma que a IA já respeitava. Se você apertou ou
+ampliou esse horário achando que só mexia com a IA, confira: agora ele também rege as
+automações. Quem nunca mexeu fica com 7h às 22h, no horário do seu negócio.
+
+Esta versão **mexe no banco de dados**. O `update.sh` aplica sozinho; não há passo manual — são
+tabelas e estados novos: o histórico de captação, o estado **Adiado** das automações e o registro
+de quem está no comando de cada conversa.
 
 **Se você está vindo da 1.4.0, os dois avisos abaixo são da 1.4.1 e valem para você.** A tela de
 atualização mostra só a seção da versão que você está instalando, então eles vão repetidos aqui
@@ -107,7 +89,9 @@ para não passarem em branco. Se você já atualizou para a 1.4.1, já os leu �
   disse o contrário — se você apagou a conexão SEM o sufixo por causa daquela frase, era a que
   estava funcionando; reconecte o número em Conexões.
 
+
 ### Corrigido
+
 
 - **A promessa da 1.4.0 sobre o limite de gasto agora é verdade.** Aquela versão disse que, quando o
   limite para a IA, "as conversas que estavam sendo atendidas vão para a fila de atendimento
@@ -134,6 +118,17 @@ para não passarem em branco. Se você já atualizou para a 1.4.1, já os leu �
 - **Quem não enxerga uma conversa conseguia ler o histórico de quem a atendeu.** Com a visibilidade
   restrita por atendente, o registro de troca de responsável não respeitava esse limite.
 
+- **A automação dizia "Sucesso" para mensagem que não chegou ao cliente.** Era o relato que
+  originou boa parte desta entrega: automação ligada, lead entrando pelo formulário, a aba
+  Atividade mostrando um "Sucesso" verde — e nenhuma mensagem no celular de ninguém. A
+  automação só sabia perguntar se tinha dado erro de programa; ela não olhava se a mensagem
+  de fato saiu. Agora ela olha: quando o envio falha, o resultado aparece como falha, com o
+  motivo em português ("Não conseguimos falar com o serviço de WhatsApp. Confira se ele está
+  no ar."), e um aviso é aberto na Central de Atendimento **nomeando a regra que falhou** —
+  porque um erro que só existe numa aba que ninguém abre é um erro invisível.
+- **A automação que estava só esperando o horário parecia não ter rodado.** Ao adiar um
+  envio, ela não gravava nada: "não apareceu nada na Atividade" e "a automação não funcionou"
+  eram a mesma tela. Agora a espera é um estado visível — **Adiado** —, com o motivo.
 
 ## [1.4.1] — 2026-08-25
 
