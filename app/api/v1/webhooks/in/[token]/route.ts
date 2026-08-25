@@ -161,7 +161,18 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
   const externalId =
     typeof externalIdRaw === "string" && externalIdRaw.trim()
       ? externalIdRaw.trim().slice(0, 255)
-      : (respondiMapped?.externalId ?? null);
+      // O MESMO corte do ramo acima. A assimetria era de uma linha e o desfecho
+      // não: `uniq_crm_leads_org_source_external` é um btree, e btree recusa
+      // chave que não caiba em ~2.704 bytes. Medido em Postgres 17 real, com
+      // conteúdo INCOMPRESSÍVEL (o pglz comprime `repeat('a')` e mascara o
+      // limite): a partir de ~2.669 bytes o INSERT sai com sqlstate 54000, o
+      // handler devolve 500 e NENHUM lead entra.
+      //
+      // Não é alcançável pelo Respondi real — o `respondent_id` do formulário é
+      // um uuid de 36 chars, ~60× abaixo do limiar. É higiene de simetria: dois
+      // ramos do mesmo `?:` produzindo a mesma coluna com regras diferentes é
+      // o tipo de coisa que só aparece quando alguém manda um corpo fabricado.
+      : (respondiMapped?.externalId?.slice(0, 255) ?? null);
 
   const respondWithLead = (leadId: string): NextResponse => {
     if (isForm && source.redirect_to) {

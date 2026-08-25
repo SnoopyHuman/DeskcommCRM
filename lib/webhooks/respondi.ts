@@ -119,14 +119,42 @@ const CUSTOM_FIELD_KEYS: Exclude<RespondiField, "name" | "phone" | "email" | "co
   "start_timeline",
 ];
 
+/**
+ * O comentário deste módulo promete que pergunta sem alias é "NUNCA descartada".
+ * Um corte cego em 60 caracteres descartava: duas perguntas longas com os mesmos
+ * 60 primeiros caracteres do slug colidem no `Record`, e a última sobrescreve a
+ * primeira — sem erro, sem log, sem nada na tela.
+ *
+ * Medido: divergindo no caractere 60 saem 2 chaves; no 61, sai 1. Hoje é
+ * LATENTE — as 15 perguntas do formulário real têm alias em
+ * `RESPONDI_QUESTION_ALIASES` e nenhuma chega aqui —, mas o dia em que alguém
+ * acrescenta duas perguntas parecidas no Respondi é justamente o dia em que
+ * este caminho passa a valer, e é para ele que a promessa foi escrita.
+ *
+ * O sufixo só aparece quando o título de fato excede o corte, então nenhuma
+ * chave existente muda de nome. São 8 caracteres de um hash não-criptográfico
+ * (FNV-1a) do título COMPLETO: não precisa resistir a adversário, precisa
+ * distinguir dois títulos que compartilham prefixo.
+ */
 function slugifyQuestion(title: string): string {
-  return title
+  const base = title
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 60);
+    .replace(/^_+|_+$/g, "");
+  if (base.length <= 60) return base;
+  return `${base.slice(0, 60)}_${hashCurto(title)}`;
+}
+
+/** FNV-1a de 32 bits, em hex. Distinguir prefixo igual, não resistir a ataque. */
+function hashCurto(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
 }
 
 export type RespondiConsentSource = "legaltext" | "text_label" | "not_found";

@@ -732,4 +732,67 @@ describe("POST /api/v1/webhooks/in/[token] — Respondi (payload aninhado, achad
     expect(contactA.email).toBe(sharedEmail);
     expect(contactB.email).toBe(sharedEmail);
   });
+
+  // O caso 8 acima NÃO alcança o `selectActiveByEmail`: com o mesmo telefone nas
+  // duas orgs, o INSERT da org B passa limpo (`uniq_contacts_org_phone` é POR
+  // organização) e a busca por e-mail nunca roda. Medido sabotando só o
+  // `.eq("organization_id", …)` daquele select: a suíte inteira segue verde.
+  //
+  // Guarda com ponto cego é pior que guarda ausente, porque parece cobertura.
+  // Este caso força o ramo: MESMO e-mail, telefone INÉDITO em cada org — que é
+  // exatamente quando o INSERT colide em `uniq_contacts_org_email` e o código
+  // cai na busca por e-mail para reencontrar o contato.
+  it("9. o reencontro POR E-MAIL respeita a organização — o ramo que o caso 8 não alcança", async () => {
+    const emailCompartilhado = "ramo.email@example.com";
+
+    // Org A: cria o contato com um telefone próprio.
+    const resA = await POST(
+      jsonReq(TOKEN_RESPONDI, respondiPayload("resp-int-email-a", "55 15900000009", emailCompartilhado)),
+      reqCtx(TOKEN_RESPONDI),
+    );
+    expect(resA.status).toBe(200);
+    const leadA = rows(
+      `select * from public.crm_leads where id = '${((await resA.json()) as { data: { lead_id: string } }).data.lead_id}'`,
+    )[0]!;
+
+    // Org B: MESMO e-mail, telefone DIFERENTE — o INSERT colide em
+    // uniq_contacts_org_email da PRÓPRIA org B só se já houver contato lá; aqui
+    // não há, então ele entra. O que este caso prende é que o select por e-mail
+    // não pode enxergar o contato da org A em nenhum momento.
+    const resB = await POST(
+      jsonReq(TOKEN_RESPONDI_B, respondiPayload("resp-int-email-b", "55 15900000010", emailCompartilhado)),
+      reqCtx(TOKEN_RESPONDI_B),
+    );
+    expect(resB.status).toBe(200);
+    const leadB = rows(
+      `select * from public.crm_leads where id = '${((await resB.json()) as { data: { lead_id: string } }).data.lead_id}'`,
+    )[0]!;
+
+    expect(leadA.organization_id).toBe(GOV_ORG);
+    expect(leadB.organization_id).toBe(WHIN_ORG_B);
+    expect(leadA.contact_id).not.toBe(leadB.contact_id);
+
+    const contatoB = rows(`select * from public.contacts where id = '${leadB.contact_id}'`)[0]!;
+    expect(contatoB.organization_id, "o contato da org B nasceu na org errada").toBe(WHIN_ORG_B);
+
+    // A prova de que o ramo foi exercitado: um SEGUNDO envio na org B, com o
+    // mesmo e-mail e outro telefone, tem de REENCONTRAR o contato de B — e não
+    // criar um terceiro nem colidir com o da org A.
+    const resB2 = await POST(
+      jsonReq(TOKEN_RESPONDI_B, respondiPayload("resp-int-email-b2", "55 15900000011", emailCompartilhado)),
+      reqCtx(TOKEN_RESPONDI_B),
+    );
+    expect(resB2.status).toBe(200);
+    const leadB2 = rows(
+      `select * from public.crm_leads where id = '${((await resB2.json()) as { data: { lead_id: string } }).data.lead_id}'`,
+    )[0]!;
+    expect(leadB2.contact_id, "o reencontro por e-mail não achou o contato da própria org").toBe(
+      leadB.contact_id,
+    );
+
+    const contatosComEsseEmail = rows(
+      `select organization_id from public.contacts where email_normalized = '${emailCompartilhado}' and is_merged_into is null order by organization_id`,
+    );
+    expect(contatosComEsseEmail, "deveria haver exatamente um contato por organização").toHaveLength(2);
+  });
 });
