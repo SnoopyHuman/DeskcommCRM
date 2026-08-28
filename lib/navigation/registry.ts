@@ -23,6 +23,7 @@ import {
   ListChecks,
   Lock,
   Palette,
+  Phone,
   Plugs,
   PlugsConnected,
   PuzzlePiece,
@@ -188,6 +189,15 @@ export const NAV_DESTINATIONS: NavDestination[] = [
     description: "As pessoas do outro lado da conversa e seu histórico.",
     icon: Users,
     group: "crm",
+    sidebar: true,
+  },
+  {
+    href: "/app/calls",
+    label: "Chamadas",
+    description: "Histórico de ligações (voz por IA) com transcrição.",
+    icon: Phone,
+    group: "crm",
+    minRole: "manager",
     sidebar: true,
   },
   {

@@ -17,12 +17,50 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { ApiError } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
-import { createCallSchema } from "@/lib/schemas/calls";
+import { createCallSchema, listCallsQuerySchema } from "@/lib/schemas/calls";
 import { validateRequest } from "@/lib/schemas/_validate";
 import { createClient } from "@/lib/supabase/server";
 import { originateCall } from "@/lib/voip/ariClient";
 
 export const dynamic = "force-dynamic";
+
+const LIST_COLS =
+  "id, direction, status, from_number, to_number, handled_by, started_at, answered_at, ended_at, duration_seconds, transcript";
+
+/**
+ * GET /api/v1/calls — lista chamadas da org ativa, mais recente primeiro.
+ * Inclui `transcript` direto na listagem (sem rota de detalhe separada —
+ * volume de chamadas não justifica ainda, e o transcript não é grande).
+ */
+export async function GET(req: NextRequest): Promise<Response> {
+  const requestId = randomUUID();
+  const authz = await requireRole("manager", { requestId, resource: "crm_calls" });
+  if (!authz.ok) return authz.response;
+  const { org: activeOrg } = authz;
+
+  const params = Object.fromEntries(new URL(req.url).searchParams.entries());
+  const parsed = listCallsQuerySchema.safeParse(params);
+  if (!parsed.success) {
+    return fail("validation_failed", "Query inválida.", 422, { requestId, details: parsed.error.flatten() });
+  }
+  const q = parsed.data;
+
+  const supabase = await createClient();
+  let query = supabase
+    .from("crm_calls")
+    .select(LIST_COLS)
+    .eq("organization_id", activeOrg.orgId)
+    .order("started_at", { ascending: false })
+    .limit(q.limit);
+
+  if (q.direction) query = query.eq("direction", q.direction);
+  if (q.status) query = query.eq("status", q.status);
+
+  const { data, error } = await query;
+  if (error) return fail("internal_error", error.message, 500, { requestId });
+
+  return ok(data ?? [], { requestId });
+}
 
 export async function POST(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
