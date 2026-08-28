@@ -280,4 +280,8 @@ export type AuditAction =
   // trilha responde é diferente: "quem repintou a marca desta empresa?" contra
   // "quem mexeu no cadastro dela?". Fundir as duas obrigaria a ler o metadata
   // para saber qual das duas coisas aconteceu.
-  | "org.branding_updated";
+  | "org.branding_updated"
+  // Chamada originada via /api/v1/calls (módulo VoIP, migration 0158).
+  // Só o CREATE é auditado aqui — status/transcript são atualizados pelo
+  // worker via admin client, fora do caminho de sessão que este audit cobre.
+  | "call.created";
