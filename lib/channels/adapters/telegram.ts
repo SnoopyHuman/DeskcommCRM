@@ -20,6 +20,15 @@
  *    em `send()`.
  * 3. Ao contrário do zernio, o Telegram tem suporte NATIVO a cartão de
  *    contato (`sendContact`) — não precisa lançar "not supported".
+ * 4. **Endereça por THREAD, não por atributo do contato** — mesmo padrão de
+ *    `lib/channels/social/adapter.ts` (zernio_social), diferente do zernio
+ *    (que resolve telefone/id opaco a partir de `wa_identity`). O `chat_id`
+ *    de verdade é `conversations.provider_conversation_id`, gravado pela
+ *    ingestão (Fase 4) na PRIMEIRA mensagem que o cliente manda — um bot do
+ *    Telegram nunca inicia conversa, então não existe cenário de "endereçar
+ *    um contato que ainda não tem thread". `resolveRecipient` devolve só uma
+ *    SENTINELA (existe conversa conhecida ou não); `send()` lê o endereço
+ *    real de `envelope.providerConversationId`, nunca de `envelope.to`.
  */
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { FetchedMedia } from "@/lib/messaging/media/types";
@@ -76,15 +85,23 @@ export const telegramAdapter: ChannelAdapter = {
   provider: "telegram",
 
   /**
-   * `chat_id` é o MESMO parâmetro para chat privado e para grupo — diferente
-   * do WhatsApp/zernio, que endereçam grupo por outro recurso/formato. Por
-   * isso não há aqui um ramo separado para `isGroup`: é característica real
-   * da API do Telegram (um `chat_id` numérico só, negativo quando é grupo),
-   * não simplificação por preguiça.
+   * NÃO devolve o `chat_id` de verdade — devolve uma SENTINELA. Mesma decisão
+   * de `lib/channels/social/adapter.ts` (zernio_social): canal que endereça
+   * por THREAD do provider (`conversations.provider_conversation_id`), não
+   * por atributo do contato, não tem endereço para calcular aqui — só tem
+   * "existe conversa conhecida ou não", que é o que o handler/UI perguntam
+   * com esta função (fila, estado de "sem destinatário"). O endereço real
+   * chega em `send()` via `envelope.providerConversationId`.
+   *
+   * Grupo continua endereçado pelo próprio `chat_id` (o Telegram usa o MESMO
+   * parâmetro para privado e grupo — diferente do WhatsApp/zernio, que
+   * endereçam grupo por outro recurso). Grupos ainda não são ingeridos
+   * (Fase 4 é só chat privado), então este ramo fica pronto para quando
+   * existir, sem quebrar nada hoje.
    */
   resolveRecipient(input: RecipientInput): string | null {
     if (input.isGroup) return input.groupChatId ?? null;
-    return input.telegramChatId ?? null;
+    return "provider-thread";
   },
 
   /**
@@ -117,6 +134,20 @@ export const telegramAdapter: ChannelAdapter = {
       );
     }
 
+    // Sem thread conhecida não há envio possível — e não é caso raro de
+    // borda: é a REGRA. Um bot do Telegram nunca inicia conversa (o usuário
+    // sempre dá o primeiro passo), então `providerConversationId` SEMPRE
+    // existe antes do primeiro envio nosso — ele nasce na ingestão (Fase 4),
+    // na primeira mensagem que o cliente manda. Ausência aqui é bug de outra
+    // camada (conversa criada fora do fluxo de webhook), não do cliente.
+    const chatId = envelope.providerConversationId;
+    if (!chatId) {
+      throw new Error(
+        "telegram_no_conversation: envio exige a thread do provider (chat_id); " +
+          "ela só existe depois da primeira mensagem do cliente — bots não iniciam conversa no Telegram.",
+      );
+    }
+
     let method: string;
     let body: Record<string, unknown>;
 
@@ -127,7 +158,7 @@ export const telegramAdapter: ChannelAdapter = {
       const [firstName, ...resto] = envelope.contact.fullName.trim().split(/\s+/);
       method = "sendContact";
       body = {
-        chat_id: envelope.to,
+        chat_id: chatId,
         phone_number: envelope.contact.phoneNumber,
         first_name: firstName || envelope.contact.fullName,
         ...(resto.length ? { last_name: resto.join(" ") } : {}),
@@ -135,14 +166,14 @@ export const telegramAdapter: ChannelAdapter = {
     } else if (envelope.kind === "image") {
       method = "sendPhoto";
       body = {
-        chat_id: envelope.to,
+        chat_id: chatId,
         photo: envelope.media?.url,
         ...(envelope.media?.caption ? { caption: envelope.media.caption } : {}),
       };
     } else if (envelope.kind === "video") {
       method = "sendVideo";
       body = {
-        chat_id: envelope.to,
+        chat_id: chatId,
         video: envelope.media?.url,
         ...(envelope.media?.caption ? { caption: envelope.media.caption } : {}),
       };
@@ -154,7 +185,7 @@ export const telegramAdapter: ChannelAdapter = {
       // envelope chegar aqui, não deste adapter.
       method = "sendVoice";
       body = {
-        chat_id: envelope.to,
+        chat_id: chatId,
         voice: envelope.media?.url,
         ...(envelope.media?.caption ? { caption: envelope.media.caption } : {}),
       };
@@ -164,7 +195,7 @@ export const telegramAdapter: ChannelAdapter = {
       method = "sendMessage";
       const replyTo = envelope.replyToExternalId ? parseExternalId(envelope.replyToExternalId) : null;
       body = {
-        chat_id: envelope.to,
+        chat_id: chatId,
         text: envelope.body ?? "",
         ...(replyTo ? { reply_to_message_id: replyTo.messageId } : {}),
       };
@@ -179,7 +210,7 @@ export const telegramAdapter: ChannelAdapter = {
       }
       method = "sendDocument";
       body = {
-        chat_id: envelope.to,
+        chat_id: chatId,
         document: envelope.media.url,
         ...(envelope.media.caption ? { caption: envelope.media.caption } : {}),
       };
@@ -286,35 +317,19 @@ export const telegramAdapter: ChannelAdapter = {
     return { reachable: false, status: null, detail: "resposta_sem_ok" };
   },
 
-  /**
-   * Acende o "digitando…" na conversa do cliente.
-   *
-   * LANÇA quando a credencial falta ou a chamada falha — engolir aqui
-   * esconderia do chamador que a chamada nem saiu (a interface documenta essa
-   * exigência: o indicador é decoração, a mensagem é o produto).
-   */
-  async signalTyping(input: ChannelTenantScope & {
-    sessionRef: string;
-    recipient: string;
-  }): Promise<void> {
-    const admin = createAdminClient();
-    const creds = await resolveTelegramCreds(admin, {
-      organizationId: input.organizationId,
-      botId: input.sessionRef,
-    });
-    if (!creds) {
-      throw new Error("telegram_not_configured: nenhuma credencial para este bot (nem na sessão, nem no ambiente).");
-    }
-
-    const res = await chamarBotApi(creds.baseUrl, creds.token, "sendChatAction", {
-      chat_id: input.recipient,
-      action: "typing",
-    });
-    const json = (await res.json().catch(() => null)) as { ok?: boolean } | null;
-    if (!res.ok || !json?.ok) {
-      throw new Error(`telegram_typing_failed: ${res.status} ${res.statusText}`.trim());
-    }
-  },
+  // Sem `signalTyping`: mesma decisão de `lib/channels/social/adapter.ts`
+  // (zernio_social), e pelo MESMO motivo estrutural. O único "endereço" que
+  // `presenca.ts` tem disponível para passar aqui é o que `resolveRecipient`
+  // devolveu — e para este adapter isso é a sentinela `"provider-thread"`,
+  // não um `chat_id` de verdade (ver comentário em `resolveRecipient`).
+  // Implementar `sendChatAction` contra a sentinela mandaria "digitando" para
+  // um chat que não existe. A interface trata isto como OPCIONAL de
+  // propósito — `presenca.ts:91` já guarda com `if (!adapter.signalTyping)
+  // return;` —, então omitir aqui é silencioso e seguro: o cliente ainda
+  // ganha a espera proporcional ao texto, só não vê o indicador visual.
+  // Destravar isto exige `presenca.ts` aprender a ler
+  // `conversations.provider_conversation_id` para canais que endereçam por
+  // thread — mudança de escopo maior que esta fase, e fora dela.
 
   codes: {
     notConfigured: "telegram_not_configured",

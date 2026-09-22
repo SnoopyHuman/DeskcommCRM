@@ -80,19 +80,13 @@ describe("resolveRecipient", () => {
     ).toBeNull();
   });
 
-  it("não-grupo com telegramChatId devolve ele", () => {
-    expect(
-      telegramAdapter.resolveRecipient({
-        isGroup: false,
-        groupChatId: null,
-        phoneNumber: null,
-        waIdentity: null,
-        telegramChatId: "987654321",
-      }),
-    ).toBe("987654321");
-  });
-
-  it("não-grupo sem telegramChatId devolve null", () => {
+  // Chat privado endereça por THREAD (`conversations.provider_conversation_id`,
+  // lido em `send()` via `envelope.providerConversationId`), não por atributo
+  // do contato — mesmo padrão de `lib/channels/social/adapter.ts`
+  // (zernio_social). `resolveRecipient` devolve só a sentinela
+  // `"provider-thread"`: não é um endereço de verdade, é o sinal de "canal
+  // aplicável" que o handler usa para decidir fila/erro de destinatário.
+  it("não-grupo devolve a sentinela 'provider-thread', não um chat_id", () => {
     expect(
       telegramAdapter.resolveRecipient({
         isGroup: false,
@@ -100,7 +94,7 @@ describe("resolveRecipient", () => {
         phoneNumber: null,
         waIdentity: null,
       }),
-    ).toBeNull();
+    ).toBe("provider-thread");
   });
 });
 
@@ -119,7 +113,8 @@ describe("send", () => {
     const res = await telegramAdapter.send({
       organizationId: ORG,
       sessionRef: "123456",
-      to: "123",
+      to: "provider-thread",
+      providerConversationId: "123",
       kind: "text",
       body: "oi",
     });
@@ -129,6 +124,22 @@ describe("send", () => {
     expect(corpo()).toEqual({ chat_id: "123", text: "oi" });
   });
 
+  // O `chat_id` de verdade vem de `providerConversationId`, nunca de `to` — a
+  // ausência dele NÃO é caso raro: é o estado normal antes da primeira
+  // mensagem do cliente (bots não iniciam conversa no Telegram).
+  it("sem providerConversationId, lança telegram_no_conversation e nada sai pela rede", async () => {
+    await expect(
+      telegramAdapter.send({
+        organizationId: ORG,
+        sessionRef: "123456",
+        to: "provider-thread",
+        kind: "text",
+        body: "oi",
+      }),
+    ).rejects.toThrow("telegram_no_conversation");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("falha do provedor lança contendo telegram_send_failed", async () => {
     respondeErro(400, 400, "Bad Request");
 
@@ -136,7 +147,8 @@ describe("send", () => {
       telegramAdapter.send({
         organizationId: ORG,
         sessionRef: "123456",
-        to: "123",
+        to: "provider-thread",
+        providerConversationId: "123",
         kind: "text",
         body: "oi",
       }),
@@ -154,7 +166,8 @@ describe("send", () => {
       telegramAdapter.send({
         organizationId: ORG,
         sessionRef: "123456",
-        to: "123",
+        to: "provider-thread",
+        providerConversationId: "123",
         kind: "text",
         body: "oi",
       }),
