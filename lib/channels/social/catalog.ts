@@ -11,7 +11,14 @@ export const SOCIAL_NETWORKS = [
   { id: "pinterest", label: "Pinterest", inbox: false },
   { id: "bluesky", label: "Bluesky", inbox: false },
   { id: "googlebusiness", label: "Google Business", inbox: false },
-  { id: "telegram", label: "Telegram", inbox: false },
+  // "telegram" NÃO entra aqui: era uma entrada `inbox: false` nunca
+  // conectada a nada (nenhum outro arquivo a referenciava) — e o Telegram
+  // ganhou canal NATIVO próprio (Bot API, não intermediado pelo Zernio),
+  // com `telegram` já ocupando o vocabulário de `ChannelProvider`. Manter os
+  // dois — o id morto aqui e o provider vivo em `lib/channels/types.ts` —
+  // seria a mesma string significando duas coisas diferentes, e é
+  // exatamente essa ambiguidade que `rede-social-sem-canal-no-banco-nao-
+  // vira-500.test.ts` acusou ao testar `CANAIS_DE_CONVERSA`.
   { id: "snapchat", label: "Snapchat", inbox: false },
   { id: "discord", label: "Discord", inbox: false },
   { id: "slack", label: "Slack", inbox: false },

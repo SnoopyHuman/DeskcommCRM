@@ -209,6 +209,11 @@ describe("a sétima cópia não nasce", () => {
       motivo: "nome do CANAL conectado",
     },
     {
+      arquivo: "components/connections/CanalTelegramClient.tsx",
+      trecho: 'estado?.display_name ?? estado?.bot_username ?? t("Bot conectado")',
+      motivo: "nome do BOT conectado (channel_sessions), mesmo caso do canal parceiro",
+    },
+    {
       arquivo: "components/inbox/ConversationListItem.tsx",
       trecho: "canal?.phone_number ?? canal?.display_name ?? null",
       motivo: "número da EMPRESA por onde a conversa chegou, não o do cliente",
