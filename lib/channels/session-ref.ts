@@ -14,7 +14,8 @@
 export type ChannelSessionRef =
   | { provider: "waha"; waha_session_name: string }
   | { provider: "meta_cloud"; meta_phone_number_id: string }
-  | { provider: "zernio" | "zernio_social"; zernio_account_id: string };
+  | { provider: "zernio" | "zernio_social"; zernio_account_id: string }
+  | { provider: "telegram"; telegram_bot_id: string };
 
 /**
  * Colunas que um `select` do PostgREST precisa trazer para `resolveSessionRef`
@@ -22,7 +23,7 @@ export type ChannelSessionRef =
  * nomeia coluna de provider, e ela some da feature junto com a decisão.
  */
 export const CHANNEL_SESSION_REF_COLUMNS =
-  "provider, waha_session_name, meta_phone_number_id, zernio_account_id";
+  "provider, waha_session_name, meta_phone_number_id, zernio_account_id, telegram_bot_id";
 
 export function resolveSessionRef(session: ChannelSessionRef): string {
   switch (session.provider) {
@@ -36,5 +37,10 @@ export function resolveSessionRef(session: ChannelSessionRef): string {
     case "zernio_social":
     case "zernio":
       return session.zernio_account_id;
+    // O id do próprio BOT (o que `getMe` devolve), não de conta de
+    // intermediário nenhum — aqui não existe intermediário, o bot fala direto
+    // com a Bot API oficial.
+    case "telegram":
+      return session.telegram_bot_id;
   }
 }

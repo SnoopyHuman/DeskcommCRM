@@ -3,6 +3,7 @@
  * pede o adapter do provider da conversa e o descritor de capabilities.
  */
 import { metaCloudAdapter } from "./adapters/meta-cloud";
+import { telegramAdapter } from "./adapters/telegram";
 import { wahaAdapter } from "./adapters/waha";
 import { socialAdapter } from "./social/adapter";
 import { zernioAdapter } from "./adapters/zernio";
@@ -17,12 +18,7 @@ const ADAPTERS: Record<ProviderDeMensagem, ChannelAdapter | null> = {
   meta_cloud: metaCloudAdapter,
   zernio: zernioAdapter,
   zernio_social: socialAdapter,
-  // Placeholder: o vocabulário (Fase 1) e as capabilities (Fase 2) já
-  // existem, mas o adapter de verdade — quem fala HTTP com a Bot API —
-  // ainda não foi escrito. Até lá, toda tentativa de usar `telegram` aqui
-  // cai no `unknown_channel_provider` de `getAdapter`, que é o desfecho
-  // certo: uma sessão não pode nascer para este provider sem quem envie.
-  telegram: null,
+  telegram: telegramAdapter,
 };
 
 /**

@@ -78,6 +78,15 @@ export interface RecipientInput {
    * `waIdentity.startsWith("lid:")` — justo o caso que a regra protege.
    */
   waLid?: string | null | undefined;
+  /**
+   * `contacts.social_identity` (migration 0368), quando o formato é
+   * `telegram:<bot_id>:<chat_id>` — o `chat_id` isolado, já extraído de quem
+   * monta o envelope. Não é telefone nem `wa_identity` (que só fala o
+   * vocabulário `phone:`/`lid:`): canais cuja identidade é nativa do próprio
+   * canal usam campo próprio em vez de mentir com um prefixo que não existe.
+   * `null`/`undefined`: contato sem identidade conhecida deste canal.
+   */
+  telegramChatId?: string | null | undefined;
 }
 
 /** Contato compartilhado (vcard) — só `kind: "contact"`. */
