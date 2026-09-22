@@ -34,7 +34,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logger } from "@/lib/logger";
 
 /** Cabeçalhos que NUNCA entram no arquivo, por menor que seja a chance. */
-const PROIBIDOS = ["authorization", "cookie", "x-api-key"];
+const PROIBIDOS = ["authorization", "cookie", "x-api-key", "x-telegram-bot-api-secret-token"];
 
 /**
  * Cabeçalhos sanitizados.
@@ -42,6 +42,13 @@ const PROIBIDOS = ["authorization", "cookie", "x-api-key"];
  * A assinatura FICA: ela é o que permite reconferir depois se um payload
  * recusado tinha mesmo assinatura errada, ou se o segredo é que estava errado —
  * e é assinatura, não credencial: não abre nada sozinha.
+ *
+ * `x-telegram-bot-api-secret-token` é o ÚNICO caso, até aqui, em que o header
+ * NÃO é assinatura — é o próprio segredo do `setWebhook` voltando em texto
+ * puro (`lib/channels/telegram/webhook.ts`). Arquivar cru gravaria, em TODA
+ * chamada bem-sucedida do Telegram, o segredo válido dentro de
+ * `webhook_events_log` — o mesmo defeito que a regra acima existe para evitar,
+ * só que por um canal novo que fala outro protocolo de autenticação.
  */
 function cabecalhosSeguros(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
