@@ -174,10 +174,15 @@ async function resolverMidia(
 
   // Prioridade defensiva: não deveria haver mais de um campo de mídia no
   // mesmo update, mas se houver, esta é a ordem.
-  if (message.photo && message.photo.length > 0) {
+  // `.at(-1)`, não índice por `.length - 1`: `noUncheckedIndexedAccess` não
+  // consegue provar que a posição existe só pela checagem de tamanho — o
+  // resultado do acesso por índice continua `T | undefined` no tipo, mesmo
+  // sabendo (em runtime) que o array não está vazio.
+  const ultimaFoto = message.photo?.at(-1);
+  if (ultimaFoto) {
     tipo = "image";
     // A Bot API lista do menor para o maior tamanho — o último é a maior resolução.
-    fileId = message.photo[message.photo.length - 1].file_id;
+    fileId = ultimaFoto.file_id;
     mimeDoCampo = "image/jpeg";
   } else if (message.voice) {
     tipo = "audio";
