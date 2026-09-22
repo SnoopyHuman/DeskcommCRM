@@ -86,6 +86,37 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     groups: "limited",
     costPerMessage: true,
   },
+  // Canal NATIVO via Bot API oficial — não há WABA nem BSP por trás, e a
+  // única restrição real é técnica, não comercial: o Telegram não bane conta
+  // de bot por mensageria dentro dos termos de uso (ao contrário do WAHA, que
+  // simula um cliente WhatsApp não-oficial).
+  telegram: {
+    // A Bot API não fecha janela de 24h: uma vez que o usuário deu /start (ou
+    // chegou por deep link), o bot pode mandar texto livre A QUALQUER momento
+    // depois — sem prazo de expiração, sem reabrir nada. A restrição real do
+    // Telegram é OUTRA (quem pode dar o primeiro passo), e capability não
+    // modela isso — modela o que o canal permite DEPOIS que a conversa existe.
+    freeformOutsideWindow: true,
+    requiresTemplates: false,
+    // Não há WABA nem definição aprovada por plataforma nenhuma para gerir.
+    canManageTemplates: false,
+    banRisk: false,
+    // core.telegram.org/bots/faq: ~1 mensagem/segundo por chat é o limite
+    // documentado pela própria Telegram para evitar throttling.
+    minIntervalMs: 1000,
+    // sendVoice exige OGG/Opus explicitamente e não converte — mesma
+    // armadilha do canal oficial e do parceiro: mandar mp3 aqui entrega
+    // anexo de música, não nota de voz reproduzível inline.
+    voiceNote: "opus-only",
+    // O bot pode ser adicionado a grupos, mas nasce em "privacy mode": só
+    // enxerga comandos e menções dirigidas a ele, não o fluxo inteiro da
+    // conversa, a menos que o dono do bot desligue isso no BotFather — e o
+    // limite de 20 mensagens/minuto em grupo (core.telegram.org/bots/faq) é
+    // mais apertado que o WhatsApp. "limited", não "full".
+    groups: "limited",
+    // Bot API é gratuita — não há cobrança por mensagem enviada.
+    costPerMessage: false,
+  },
 };
 
 /**
@@ -108,6 +139,7 @@ export const CHANNEL_PROVIDER_WAHA: ChannelProvider = "waha";
 export const CHANNEL_PROVIDER_META: ChannelProvider = "meta_cloud";
 export const CHANNEL_PROVIDER_SOCIAL: ChannelProvider = "zernio_social";
 export const CHANNEL_PROVIDER_ZERNIO: ChannelProvider = "zernio";
+export const CHANNEL_PROVIDER_TELEGRAM: ChannelProvider = "telegram";
 /** Chamada de voz WhatsApp (spec 18). Não transporta mensagem — ver abaixo. */
 export const CHANNEL_PROVIDER_WACALLS: ChannelProvider = "wacalls";
 
@@ -131,6 +163,7 @@ export const PROVIDERS_DE_MENSAGEM = [
   "meta_cloud",
   "zernio",
   "zernio_social",
+  "telegram",
 ] as const satisfies readonly ProviderDeMensagem[];
 
 /**

@@ -44,6 +44,11 @@ const FONTE: Record<ProviderDeMensagem, FonteDeTemplates | null> = {
   meta_cloud: "oficial",
   zernio: "parceiro",
   zernio_social: null,
+  // Mesmo motivo do WAHA, por caminho diferente: a Bot API manda texto livre
+  // a qualquer hora (`freeformOutsideWindow: true` na matriz de capabilities),
+  // não existe definição aprovada por conta para listar, e um seletor de
+  // templates aqui ofereceria solução para um problema que este canal não tem.
+  telegram: null,
 };
 
 /** `null` quando este canal não trabalha com definições aprovadas. */
