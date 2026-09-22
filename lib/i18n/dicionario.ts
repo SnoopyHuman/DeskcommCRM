@@ -10842,6 +10842,26 @@ export const DICIONARIO: Traducoes = {
   "Crie uma conexão separada por QR no outro sistema.": {
     es: "Crea una conexión separada por QR en el otro sistema.",
   },
+
+  // Canal Telegram — components/connections/CanalTelegramClient.tsx
+  "Um bot do Telegram conectado a este CRM. As mensagens do bot entram e saem pelo Inbox.": {
+    es: "Un bot de Telegram conectado a este CRM. Los mensajes del bot entran y salen por el Inbox.",
+  },
+  "Bot conectado": { es: "Bot conectado" },
+  "sem usuário informado": { es: "sin usuario informado" },
+  "Token do bot": { es: "Token del bot" },
+  "gravado — preencha para trocar": { es: "guardado — completa para cambiarlo" },
+  "Crie um bot com @BotFather no Telegram e cole o token aqui.": {
+    es: "Crea un bot con @BotFather en Telegram y pega el token aquí.",
+  },
+  "O token é testado contra o Telegram antes de ser gravado.": {
+    es: "El token se prueba contra Telegram antes de guardarse.",
+  },
+  "O Telegram já está mandando mensagens para o CRM. Não é preciso configurar mais nada.": {
+    es: "Telegram ya está enviando mensajes al CRM. No hace falta configurar nada más.",
+  },
+  "URL do webhook registrada": { es: "URL del webhook registrada" },
+  "Bot conectado.": { es: "Bot conectado." },
 };
 
 /**

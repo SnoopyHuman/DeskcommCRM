@@ -12,6 +12,8 @@ export function channelBrand(
       if (session.social_platform === "instagram") return "instagram";
       if (session.social_platform === "facebook") return "messenger";
       return "unknown";
+    case "telegram":
+      return "telegram";
     default:
       return "unknown";
   }

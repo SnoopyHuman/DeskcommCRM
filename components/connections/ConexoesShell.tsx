@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RedesSociaisClient } from "./RedesSociaisClient";
 import { CanalOficialClient } from "./CanalOficialClient";
 import { CanalParceiroClient } from "./CanalParceiroClient";
+import { CanalTelegramClient } from "./CanalTelegramClient";
 import { CanalVozClient } from "./CanalVozClient";
 import { ConnectionsClient } from "./ConnectionsClient";
 import { TemplatesClient } from "./TemplatesClient";
@@ -58,7 +59,9 @@ export function ConexoesShell({
           ? "telefonia"
           : abaParam === "voz"
             ? "voz"
-            : "numeros";
+            : abaParam === "telegram"
+              ? "telegram"
+              : "numeros";
   const sub = params.get("sub") === "templates" ? "templates" : "conexao";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
@@ -94,6 +97,9 @@ export function ConexoesShell({
         <TabsTrigger value="telefonia">{t("Telefone")}</TabsTrigger>
         <TabsTrigger value="sociais">{t("Redes sociais")}</TabsTrigger>
         <TabsTrigger value="voz">{t("Chamada de voz")}</TabsTrigger>
+        {/* "Telegram", sem t(): é nome próprio de marca, não prosa — mesmo padrão de
+            "WhatsApp"/"Messenger" em components/inbox/ChannelLogo.tsx. */}
+        <TabsTrigger value="telegram">Telegram</TabsTrigger>
       </TabsList>
 
       <TabsContent value="numeros" className="mt-0">
@@ -107,6 +113,10 @@ export function ConexoesShell({
 
       <TabsContent value="voz" className="mt-0">
         <CanalVozClient wacallsConfigured={wacallsConfigured} />
+      </TabsContent>
+
+      <TabsContent value="telegram" className="mt-0">
+        <CanalTelegramClient />
       </TabsContent>
 
       <TabsContent value="parceiro" className="mt-0">

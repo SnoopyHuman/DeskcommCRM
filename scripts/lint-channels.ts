@@ -56,6 +56,54 @@ const ALLOWED = [
   /^lib\/waha\//,
   // Saída de `supabase gen types`: os nomes são COLUNAS. Editar à mão é o defeito.
   /^lib\/database\.types\.ts$/,
+  // TERCEIRA FRONTEIRA, pelo MESMO motivo estrutural da segunda: o invariante
+  // proíbe FEATURE decidindo por identidade de provider, não vocabulário de UI
+  // inevitável. Para waha/meta_cloud/zernio a marca pública nunca é igual ao
+  // identificador interno — "WhatsApp" não contém "waha", "Parceiro" não
+  // contém "zernio" — e por isso `components/inbox/ChannelLogo.tsx` já convive
+  // com o lint sem exceção nenhuma para eles. O Telegram quebra essa premissa:
+  // a marca pública QUE O OPERADOR PRECISA VER *é* o próprio nome do provider,
+  // sem nenhuma palavra substituta possível (não existe um "Parceiro" para
+  // Telegram). Um scanner de texto não distingue "código decidindo por
+  // provider" de "rótulo de aba dizendo o nome de um app" — os quatro arquivos
+  // abaixo são exatamente os pontos onde ESTE canal precisa do segundo, nunca
+  // do primeiro (nenhuma lógica condicional por provider mora neles; conferido
+  // manualmente, não pelo lint). `lib/ui/icons.ts`: nome de export de
+  // `@phosphor-icons/react`, mesma categoria de `lib/database.types.ts` — o
+  // nome é da biblioteca, não nosso. `ChannelLogo.tsx`: continuação em UI de
+  // `lib/channels/presentation.ts` (mapa ícone+rótulo+cor por marca, nenhuma
+  // outra lógica). `ConexoesShell.tsx`/`CanalTelegramClient.tsx`: aba e tela
+  // de conexão — o rótulo de negócio (`TELEGRAM_CHANNEL_LABEL`) já vem de
+  // dentro de `lib/channels/telegram/connect.ts` via API, e o que resta aqui é
+  // só texto de navegação/instrução ("a aba chamada Telegram", "cole o token
+  // do bot do Telegram"). `lib/i18n/dicionario.ts` soma pelo MESMO motivo:
+  // dicionário de TODA string visível do app, então qualquer marca cujo nome
+  // colida com o provider gera entrada de tradução ali — não é o dicionário
+  // decidindo por provider, é ele guardando o texto que outro arquivo (já
+  // isento) escreveu. Provider FUTURO com a mesma marca==nome soma aqui, não
+  // vira dívida — é a mesma decisão, de novo.
+  /^lib\/ui\/icons\.ts$/,
+  /^lib\/i18n\/dicionario\.ts$/,
+  /^components\/inbox\/ChannelLogo\.tsx$/,
+  /^components\/connections\/ConexoesShell\.tsx$/,
+  /^components\/connections\/CanalTelegramClient\.tsx$/,
+  // QUARTA FRONTEIRA — categoria diferente da terceira: não é vocabulário de
+  // UI, é a MESMA razão que já isenta `lib/waha/` ("não são features
+  // perguntando identidade, são o próprio canal"), só que sem prazo de
+  // validade. As duas rotas abaixo são DEDICADAS ao Telegram — como
+  // `app/api/v1/webhooks/waha/[token]/route.ts` é dedicada ao WAHA — porque o
+  // mecanismo de autenticação de cada uma (HMAC do WAHA, `secret_token` do
+  // Telegram) é do CANAL, não generalizável pela rota agnóstica
+  // `channel/[token]`. A diferença para o WAHA: aquela família é dívida com
+  // prazo ("sai quando `lib/waha/` for absorvido"); esta é permanente, porque
+  // NÃO EXISTE fusão possível — o `secret_token` nunca vai virar HMAC.
+  // Nenhuma delas contém lógica condicional por provider (conferido
+  // manualmente): cada uma importa de `lib/channels/telegram/*` (ALLOWED) e
+  // delega. O que dispara o lint é o PRÓPRIO CAMINHO do import
+  // (`"@/lib/channels/telegram/connect"`) — texto que não tem como não conter
+  // a palavra, mesmo com todo nome de função reescrito para ser genérico.
+  /^app\/api\/v1\/channels\/telegram\/route\.ts$/,
+  /^app\/api\/v1\/webhooks\/telegram\/\[token\]\/route\.ts$/,
 ];
 
 /**

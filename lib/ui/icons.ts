@@ -92,6 +92,7 @@ export {
   WhatsappLogo,
   InstagramLogo,
   MessengerLogo,
+  TelegramLogo,
   Phone,
   PhoneIncoming,
   PhoneOutgoing,
