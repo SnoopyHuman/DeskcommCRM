@@ -76,14 +76,12 @@ const ALLOWED = [
   // de conexão — o rótulo de negócio (`TELEGRAM_CHANNEL_LABEL`) já vem de
   // dentro de `lib/channels/telegram/connect.ts` via API, e o que resta aqui é
   // só texto de navegação/instrução ("a aba chamada Telegram", "cole o token
-  // do bot do Telegram"). `lib/i18n/dicionario.ts` soma pelo MESMO motivo:
-  // dicionário de TODA string visível do app, então qualquer marca cujo nome
-  // colida com o provider gera entrada de tradução ali — não é o dicionário
-  // decidindo por provider, é ele guardando o texto que outro arquivo (já
-  // isento) escreveu. Provider FUTURO com a mesma marca==nome soma aqui, não
-  // vira dívida — é a mesma decisão, de novo.
+  // do bot do Telegram"). `lib/i18n/dicionario.ts` NÃO entra aqui: já está em
+  // KNOWN_DEBT, abaixo, por um motivo espelhado ("dicionário guarda cópia de
+  // tela como chave") — somar ele aqui TAMBÉM duplicaria cobertura, e a
+  // própria varredura de dívida obsoleta reprova isso. Provider FUTURO com a
+  // mesma marca==nome soma aqui, não vira dívida — é a mesma decisão, de novo.
   /^lib\/ui\/icons\.ts$/,
-  /^lib\/i18n\/dicionario\.ts$/,
   /^components\/inbox\/ChannelLogo\.tsx$/,
   /^components\/connections\/ConexoesShell\.tsx$/,
   /^components\/connections\/CanalTelegramClient\.tsx$/,
