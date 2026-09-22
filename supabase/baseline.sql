@@ -9269,15 +9269,25 @@ alter table public.channel_sessions
   add column if not exists wacalls_jid text,
   add column if not exists wacalls_paired_at timestamptz;
 
+-- telegram (migration 0381, Bot API nativa) — colunas do sexto provider,
+-- precisam existir antes das constraints abaixo referenciá-las. Canal NATIVO,
+-- não intermediário: o bot fala direto com a Bot API do Telegram, por isso
+-- entra neste bloco compartilhado (como waha/meta_cloud) e não pelo caminho
+-- zernio_social — aquele serve só o intermediário Zernio.
+alter table public.channel_sessions
+  add column if not exists telegram_bot_id text,
+  add column if not exists telegram_bot_token_encrypted bytea;
+
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_check;
 
 alter table public.channel_sessions
   add constraint channel_sessions_provider_check
-  -- 'wacalls' (migration 0233, chamada de voz) e 'zernio_social' (migration
-  -- 0368, redes sociais nativas) somados AQUI — UM bloco só por constraint,
-  -- doutrina de baseline (não duplicar drop+add por migration).
-  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'wacalls'::text, 'zernio_social'::text]));
+  -- 'wacalls' (migration 0233, chamada de voz), 'zernio_social' (migration
+  -- 0368, redes sociais nativas) e 'telegram' (migration 0381, Bot API nativa)
+  -- somados AQUI — UM bloco só por constraint, doutrina de baseline (não
+  -- duplicar drop+add por migration).
+  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'wacalls'::text, 'zernio_social'::text, 'telegram'::text]));
 
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_ref_check;
@@ -9289,11 +9299,15 @@ alter table public.channel_sessions
     -- 'zernio_social' (migration 0368) endereça pelo MESMO `zernio_account_id`:
     -- é o mesmo intermediário, com outra superfície de canal.
     (provider in ('zernio', 'zernio_social') and zernio_account_id is not null) or
-    (provider = 'wacalls'    and wacalls_session_id    is not null)
+    (provider = 'wacalls'    and wacalls_session_id    is not null) or
+    (provider = 'telegram'   and telegram_bot_id       is not null)
   );
 
 comment on column public.channel_sessions.zernio_account_id is
   'Identificador da conta conectada NO INTERMEDIÁRIO (accountId), não o phone_number_id da Meta. É o que endereça envio e webhook. Espelhado em lib/channels/session-ref.ts.';
+
+comment on column public.channel_sessions.telegram_bot_id is
+  'Id numérico do bot conectado, devolvido por getMe — identifica QUAL bot está conectado, não o cliente que escreve. É o que endereça envio e webhook. Espelhado em lib/channels/session-ref.ts.';
 
 -- ---- o que falta para o terceiro canal ENVIAR (migration 0132) ----
 -- Espelho idempotente da 0117. Racional completo no arquivo da migration.
@@ -34595,7 +34609,11 @@ comment on column public.contacts.social_identity is
 -- primeira conexão de rede social.
 alter table public.conversations drop constraint if exists conversations_channel_check;
 alter table public.conversations add constraint conversations_channel_check
-  check (channel in ('whatsapp', 'instagram', 'facebook'));
+  -- 'telegram' (migration 0381) somado AQUI — não vem de `SOCIAL_NETWORKS[].inbox`
+  -- (esse catálogo cataloga só o caminho Zernio); é canal nativo, escrito à mão
+  -- em `CANAIS_DE_CONVERSA` junto de 'whatsapp'. Mesma doutrina "uma constraint,
+  -- um bloco" das duas de channel_sessions logo acima.
+  check (channel in ('whatsapp', 'instagram', 'facebook', 'telegram'));
 
 
 -- APÊNDICE 20260921030100_0369_prospeccao_nativa.sql
@@ -35424,6 +35442,47 @@ drop trigger if exists trg_ad_hierarchy_cache_updated_at on public.ad_hierarchy_
 create trigger trg_ad_hierarchy_cache_updated_at
   before update on public.ad_hierarchy_cache
   for each row execute function public.fn_set_updated_at();
+
+-- ---- vocabulário do canal Telegram (migration 0381) ----
+--
+-- NÃO HÁ BLOCO DE CHECK AQUI: `telegram` foi somado ao bloco ÚNICO de
+-- `channel_sessions_provider_check`/`channel_sessions_provider_ref_check` (procure
+-- por esse nome, mais acima) e ao bloco único de `conversations_channel_check`
+-- (idem, mais acima). Doutrina "uma constraint, um bloco"
+-- (`tests/unit/baseline-constraint-reconstruida.test.ts`) — ver o comentário da
+-- 0368 (zernio_social) sobre o mesmo assunto, logo antes deste.
+-- Quem vier somar o sétimo provider de channel_sessions: some no bloco de cima,
+-- não aqui.
+--
+-- O que ESTE apêndice contém, de fato: as duas colunas do provider (já
+-- adicionadas no bloco de cima, mas repetidas aqui por ALTER idempotente — é
+-- assim que cada apêndice de migration se auto-descreve, mesmo quando a coluna
+-- física mora fisicamente noutro bloco) e a trava de identificador único entre
+-- canais ATIVOS, mesmo desenho da issue #236 (0165) para
+-- `meta_phone_number_id`/`zernio_account_id`: dois bots diferentes não podem
+-- resolver para a mesma organização por engano, e `archived_at is null` libera
+-- o identificador quando o canal é desconectado e reconectado.
+alter table public.channel_sessions
+  add column if not exists telegram_bot_id text,
+  add column if not exists telegram_bot_token_encrypted bytea;
+
+with dup as (
+  select id, row_number() over (
+           partition by telegram_bot_id
+           order by created_at
+         ) as rn
+    from public.channel_sessions
+   where archived_at is null
+     and telegram_bot_id is not null
+)
+update public.channel_sessions s
+   set telegram_bot_id = s.telegram_bot_id || '-conflito-' || s.id::text
+  from dup
+ where dup.id = s.id and dup.rn > 1;
+
+create unique index if not exists channel_sessions_telegram_bot_id_ativo_unique
+  on public.channel_sessions (telegram_bot_id)
+  where archived_at is null and telegram_bot_id is not null;
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

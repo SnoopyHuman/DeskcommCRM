@@ -33,14 +33,22 @@ import { SOCIAL_NETWORKS } from "./social/catalog";
  * Ou seja: a divergência deixa de ser possível em silêncio. Ou as duas listas
  * andam juntas, ou o CI reprova.
  *
- * ## `whatsapp` é o membro que não vem do catálogo
+ * ## `whatsapp` e `telegram` são os membros que não vêm do catálogo
  *
- * Ele precede as redes sociais e não tem entrada em `SOCIAL_NETWORKS` — o canal
- * dele é o WAHA/Meta, não o intermediário social. Fica explícito aqui, e é a
- * única parte escrita à mão.
+ * `whatsapp` precede as redes sociais e não tem entrada em `SOCIAL_NETWORKS` —
+ * o canal dele é o WAHA/Meta, não o intermediário social.
+ *
+ * `telegram` entra pela mesma razão categórica, com provider diferente: é
+ * canal NATIVO, que fala direto com a Bot API própria do Telegram — não passa
+ * pelo intermediário Zernio, que é o que `SOCIAL_NETWORKS[].inbox` cataloga
+ * (hoje, Instagram e Facebook). Marcá-lo `inbox: true` ali estaria errado: não
+ * há rede social nem conta Zernio nenhuma por trás dele.
+ *
+ * Ficam explícitos aqui, e são as únicas partes escritas à mão.
  */
 export const CANAIS_DE_CONVERSA = [
   "whatsapp",
+  "telegram",
   ...SOCIAL_NETWORKS.filter((rede) => rede.inbox).map((rede) => rede.id),
 ] as const satisfies readonly string[];
 
