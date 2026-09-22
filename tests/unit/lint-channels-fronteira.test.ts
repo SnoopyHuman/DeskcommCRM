@@ -51,6 +51,13 @@ describe("fronteira do padrão de nome de provider", () => {
     ["import { x } from '@/lib/waha/client'", "caminho de import"],
     ["meta_cloud", "outro provider do vocabulário"],
     ["graph.facebook.com", "host de provider"],
+    // Fase 0 do canal Telegram: o nome entra na catraca antes do canal
+    // existir, para que nenhuma das grafias abaixo consiga vazar depois.
+    ["telegram", "menção nua do provider novo"],
+    ["TELEGRAM_BOT_TOKEN", "env var do provider novo"],
+    ["telegram_bot_id", "coluna de banco do provider novo"],
+    ["TelegramClient", "identificador PascalCase"],
+    ["createTelegramSession", "segmento PascalCase no meio do identificador"],
   ])("reconhece %s (%s)", (texto) => {
     expect(nomeiaProvider(texto)).toBe(true);
   });
@@ -62,6 +69,8 @@ describe("fronteira do padrão de nome de provider", () => {
     ["Wahalla", "idem, em PascalCase — `Waha` seguido de minúscula não é segmento"],
     ["metacloud", "sem o separador, não é o termo do vocabulário"],
     ["graphxfacebookxcom", "o ponto do host é literal, não coringa"],
+    ["Telegrama", "palavra portuguesa que apenas começa igual — `Telegram` seguido de minúscula não é segmento"],
+    ["telegrama", "idem, em caixa baixa: a fronteira do SEPARADO exige não-alfanumérico depois"],
   ])("NÃO reconhece %s (%s)", (texto) => {
     expect(nomeiaProvider(texto)).toBe(false);
   });
@@ -71,6 +80,7 @@ describe("fronteira do padrão de nome de provider", () => {
     // deixaria a outra virar código morto sem ninguém notar — e o dia em que
     // ela fosse apagada por "simplificação" o teste seguiria verde.
     expect(PADROES.SEPARADO.test("WahaClient")).toBe(false);
+    expect(PADROES.SEPARADO.test("TelegramClient")).toBe(false);
     expect(PADROES.PASCAL.test("waha_session_name")).toBe(false);
     // E nenhuma delas pode voltar a usar `\b`, que é o defeito da #118.
     expect(PADROES.SEPARADO.source).not.toContain("\\b");

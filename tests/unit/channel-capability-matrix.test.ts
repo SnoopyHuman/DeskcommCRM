@@ -59,7 +59,13 @@ describe("matriz capability × provider é exaustiva", () => {
   });
 
   it("resolução é fail-closed — provider desconhecido lança", () => {
-    expect(() => capabilitiesOf("telegram" as ChannelProvider)).toThrow(/unknown_channel_provider/);
+    // A sentinela de "provider que não existe" precisa ser um nome que NUNCA
+    // vai virar provider de verdade. `telegram` servia até o dia em que virou
+    // canal do produto — a partir daí o teste passaria a afirmar o contrário
+    // do que quer dizer (que ele lança). "pombo_correio" não tem esse risco.
+    // Quem for "consertar" isto no futuro deve trocar por outro nome impossível,
+    // nunca por um provider real.
+    expect(() => capabilitiesOf("pombo_correio" as ChannelProvider)).toThrow(/unknown_channel_provider/);
   });
 
   it("chamada de voz não responde a pergunta de canal de mensagem", () => {
@@ -72,8 +78,10 @@ describe("matriz capability × provider é exaustiva", () => {
     expect(transportaMensagem("wacalls")).toBe(false);
     for (const p of PROVIDERS) expect(transportaMensagem(p)).toBe(true);
     // Provider mais novo que este código (clone que atualizou o schema antes da
-    // imagem) também não serve para mandar recado.
-    expect(transportaMensagem("telegram")).toBe(false);
+    // imagem) também não serve para mandar recado. Usamos "pombo_correio" como
+    // sentinela em vez de "telegram" porque telegram virou canal real do produto
+    // — a sentinela precisa continuar sendo um nome que jamais será um provider.
+    expect(transportaMensagem("pombo_correio")).toBe(false);
     expect(transportaMensagem(null)).toBe(false);
   });
 

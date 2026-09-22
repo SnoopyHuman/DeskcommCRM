@@ -46,18 +46,29 @@
  * fica verde afirmando que a doutrina é respeitada enquanto o nome se espalha
  * por rota, componente e cópia de tela. Provider novo = uma linha aqui, no
  * mesmo commit.
+ *
+ * `telegram` é o caso oposto: entrou ANTES de existir canal nenhum para
+ * nomear, de propósito. É a Fase 0 do plano do canal Telegram — a fase troca
+ * as sentinelas de teste e abre caminho para o provider, mas ainda não cria
+ * `lib/channels/telegram/` nem nenhuma rota. Registrar o nome na catraca
+ * neste commit, antes da primeira linha de implementação, é o que impede a
+ * palavra de vazar para rota, componente e cópia de tela enquanto o canal é
+ * construído nos commits seguintes — sem essa linha aqui primeiro, a catraca
+ * ficaria cega justamente na janela em que o provider está nascendo.
  */
-const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|graph\.facebook\.com)(?![a-zA-Z0-9])/i;
+const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|telegram|graph\.facebook\.com)(?![a-zA-Z0-9])/i;
 
 /**
  * Grafia PascalCase dentro de identificador: `WahaClient`,
- * `WahaChannelAdapter`, `createWahaSession`.
+ * `WahaChannelAdapter`, `createWahaSession`, e — desde a Fase 0 do canal
+ * Telegram — `TelegramClient`, `createTelegramSession`.
  *
  * Case-SENSITIVE de propósito: é a transição de caixa que marca a fronteira do
- * segmento. Não seguido de minúscula/dígito exclui `Wahalla` — onde `Waha` é
- * começo de outra palavra, não segmento próprio.
+ * segmento. Não seguido de minúscula/dígito exclui `Wahalla` e, pelo mesmo
+ * motivo, `Telegrama` — onde `Waha`/`Telegram` é começo de outra palavra, não
+ * segmento próprio.
  */
-const PASCAL = /(Waha|Zernio)(?![a-z0-9])/;
+const PASCAL = /(Waha|Zernio|Telegram)(?![a-z0-9])/;
 
 /** Um trecho de código/prosa nomeia um provider de canal? */
 export function nomeiaProvider(texto: string): boolean {

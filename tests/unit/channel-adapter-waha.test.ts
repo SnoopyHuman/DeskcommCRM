@@ -70,8 +70,9 @@ describe('adapter WAHA', () => {
   });
 
   it('resolução de adapter é fail-closed', () => {
-    // @ts-expect-error provider inexistente é erro de tipo E de runtime
-    expect(() => getAdapter('telegram')).toThrow(/unknown_channel_provider/);
+    // @ts-expect-error provider inexistente é erro de tipo E de runtime — "pombo_correio"
+    // é sentinela deliberadamente impossível; trocar por um provider real apaga este teste sem ninguém notar
+    expect(() => getAdapter('pombo_correio')).toThrow(/unknown_channel_provider/);
   });
 
   // `isConfigured` existe porque `send` devolvendo `{externalId:null}` colapsa

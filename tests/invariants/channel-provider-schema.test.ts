@@ -108,10 +108,16 @@ describe("0087 · o canal da sessão chega ao clone", () => {
     expect(msg).toMatch(/channel_sessions_provider_ref_check/);
   });
 
+  // O valor aqui precisa ser um nome que NUNCA vai entrar no
+  // `channel_sessions_provider_check` — só assim o INSERT segue sendo recusado
+  // pelo motivo certo. `telegram` cumpria esse papel até o canal entrar no
+  // roteiro do produto; a partir daí ele deixa de servir de sentinela. Trocar
+  // por um provider real faz o teste passar a afirmar o oposto do que existe
+  // para guardar, e o CHECK fica sem nenhuma cobertura aqui.
   it("provider fora do vocabulário é RECUSADO", () => {
     const org = novaOrg(`inv-0087-c-${Date.now()}`);
     const msg = erroDe(() =>
-      insertSession(org, { provider: `'telegram'`, waha_session_name: `'s-c'` }),
+      insertSession(org, { provider: `'pombo_correio'`, waha_session_name: `'s-c'` }),
     );
     expect(msg).toMatch(/channel_sessions_provider_check/);
   });
